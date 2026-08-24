@@ -1,0 +1,549 @@
+# name: test/sql/ducknng_socket_protocols.test
+# group: [ducknng]
+
+require ducknng
+
+query I
+SELECT (ducknng_open_socket('pair')).socket_id
+----
+1
+
+query I
+SELECT (ducknng_listen_socket(1, 'ipc:///tmp/ducknng_socket_protocols_pair.ipc', 134217728, 0::UBIGINT)).ok
+----
+1
+
+query I
+SELECT (ducknng_open_socket('pair')).socket_id
+----
+2
+
+query I
+SELECT (ducknng_dial_socket(2, 'ipc:///tmp/ducknng_socket_protocols_pair.ipc', 1000, 0::UBIGINT)).ok
+----
+1
+
+query ITTIII
+SELECT socket_id, protocol, url, open, connected, listening
+FROM ducknng_list_sockets()
+ORDER BY socket_id
+----
+1	pair	ipc:///tmp/ducknng_socket_protocols_pair.ipc	true	false	true
+2	pair	ipc:///tmp/ducknng_socket_protocols_pair.ipc	true	true	false
+
+statement ok
+CREATE TEMP TABLE recv_launch AS
+SELECT ducknng_recv_socket_raw_aio(1::UBIGINT, 1000) AS recv_aio
+
+statement ok
+CREATE TEMP TABLE send_launch AS
+SELECT ducknng_send_socket_raw_aio(2::UBIGINT, from_hex('6173796e632072657175657374'), 1000) AS send_aio
+
+query I
+SELECT recv_aio > 0 FROM recv_launch
+----
+1
+
+query I
+SELECT send_aio > 0 FROM send_launch
+----
+1
+
+query III
+SELECT aio_id = (SELECT send_aio FROM send_launch), ok, frame IS NULL
+FROM ducknng_aio_collect((SELECT list_value(send_aio) FROM send_launch), 1000)
+----
+1	1	1
+
+query III
+SELECT aio_id = (SELECT recv_aio FROM recv_launch), ok, hex(frame) = '6173796E632072657175657374'
+FROM ducknng_aio_collect((SELECT list_value(recv_aio) FROM recv_launch), 1000)
+----
+1	1	1
+
+query IIIIIIII
+SELECT kind = 'send', state = 'collected', phase = 'send', send_done, send_ok, recv_done = false, recv_ok IS NULL, has_reply_frame = false
+FROM ducknng_aio_status((SELECT send_aio FROM send_launch))
+----
+1	1	1	1	1	1	1	1
+
+query IIIIIIII
+SELECT kind = 'recv', state = 'collected', phase = 'recv', send_done = false, send_ok IS NULL, recv_done, recv_ok, has_reply_frame
+FROM ducknng_aio_status((SELECT recv_aio FROM recv_launch))
+----
+1	1	1	1	1	1	1	0
+
+query III
+SELECT exists, terminal, state IS NULL
+FROM ducknng_aio_status(999::UBIGINT)
+----
+0	0	1
+
+statement ok
+DROP TABLE send_launch
+
+statement ok
+DROP TABLE recv_launch
+
+query I
+SELECT (ducknng_close_socket(2)).ok
+----
+1
+
+query I
+SELECT (ducknng_close_socket(1)).ok
+----
+1
+
+query I
+SELECT (ducknng_open_socket('pull')).socket_id
+----
+3
+
+query I
+SELECT (ducknng_listen_socket(3, 'ipc:///tmp/ducknng_socket_protocols_pushpull.ipc', 134217728, 0::UBIGINT)).ok
+----
+1
+
+query I
+SELECT (ducknng_open_socket('push')).socket_id
+----
+4
+
+query I
+SELECT (ducknng_dial_socket(4, 'ipc:///tmp/ducknng_socket_protocols_pushpull.ipc', 1000, 0::UBIGINT)).ok
+----
+1
+
+statement ok
+CREATE TEMP TABLE pushpull_recv AS
+SELECT ducknng_recv_socket_raw_aio(3::UBIGINT, 1000) AS recv_aio
+
+query I
+SELECT (ducknng_send_socket_raw(4::UBIGINT, from_hex('707573682d70756c6c'), 1000)).ok
+----
+1
+
+query II
+SELECT ok, hex(frame) = '707573682D70756C6C'
+FROM ducknng_aio_collect((SELECT list_value(recv_aio) FROM pushpull_recv), 1000)
+----
+1	1
+
+query I
+SELECT ducknng_aio_drop((SELECT recv_aio FROM pushpull_recv))
+----
+1
+
+statement ok
+DROP TABLE pushpull_recv
+
+query I
+SELECT (ducknng_close_socket(4)).ok
+----
+1
+
+query I
+SELECT (ducknng_close_socket(3)).ok
+----
+1
+
+query I
+SELECT (ducknng_open_socket('pub')).socket_id
+----
+5
+
+query I
+SELECT (ducknng_listen_socket(5, 'ipc:///tmp/ducknng_socket_protocols_pubsub.ipc', 134217728, 0::UBIGINT)).ok
+----
+1
+
+query I
+SELECT (ducknng_open_socket('sub')).socket_id
+----
+6
+
+query I
+SELECT (ducknng_subscribe_socket(6::UBIGINT, from_hex(''))).ok
+----
+1
+
+query I
+SELECT (ducknng_dial_socket(6, 'ipc:///tmp/ducknng_socket_protocols_pubsub.ipc', 1000, 0::UBIGINT)).ok
+----
+1
+
+statement ok
+CREATE TEMP TABLE pubsub_recv AS
+SELECT ducknng_recv_socket_raw_aio(6::UBIGINT, 1000) AS recv_aio
+
+query I
+SELECT (ducknng_send_socket_raw(5::UBIGINT, from_hex('7075622d737562'), 1000)).ok
+----
+1
+
+query II
+SELECT ok, hex(frame) = '7075622D737562'
+FROM ducknng_aio_collect((SELECT list_value(recv_aio) FROM pubsub_recv), 1000)
+----
+1	1
+
+query II
+SELECT
+  (ducknng_subscribe_socket(6::UBIGINT, from_hex(''))).ok,
+  (ducknng_unsubscribe_socket(6::UBIGINT, from_hex(''))).ok
+----
+1	1
+
+query I
+SELECT ducknng_aio_drop((SELECT recv_aio FROM pubsub_recv))
+----
+1
+
+statement ok
+DROP TABLE pubsub_recv
+
+query I
+SELECT (ducknng_close_socket(6)).ok
+----
+1
+
+query I
+SELECT (ducknng_close_socket(5)).ok
+----
+1
+
+query I
+SELECT (ducknng_open_socket('respondent')).socket_id
+----
+7
+
+query I
+SELECT (ducknng_listen_socket(7, 'ipc:///tmp/ducknng_socket_protocols_survey.ipc', 134217728, 0::UBIGINT)).ok
+----
+1
+
+query I
+SELECT (ducknng_open_socket('surveyor')).socket_id
+----
+8
+
+query I
+SELECT (ducknng_dial_socket(8, 'ipc:///tmp/ducknng_socket_protocols_survey.ipc', 1000, 0::UBIGINT)).ok
+----
+1
+
+statement ok
+CREATE TEMP TABLE respondent_recv AS
+SELECT ducknng_recv_socket_raw_aio(7::UBIGINT, 1000) AS recv_aio
+
+query I
+SELECT (ducknng_send_socket_raw(8::UBIGINT, from_hex('737572766579'), 1000)).ok
+----
+1
+
+query II
+SELECT ok, hex(frame) = '737572766579'
+FROM ducknng_aio_collect((SELECT list_value(recv_aio) FROM respondent_recv), 1000)
+----
+1	1
+
+statement ok
+CREATE TEMP TABLE surveyor_recv AS
+SELECT ducknng_recv_socket_raw_aio(8::UBIGINT, 1000) AS recv_aio
+
+query I
+SELECT (ducknng_send_socket_raw(7::UBIGINT, from_hex('726573706f6e7365'), 1000)).ok
+----
+1
+
+query II
+SELECT ok, hex(frame) = '726573706F6E7365'
+FROM ducknng_aio_collect((SELECT list_value(recv_aio) FROM surveyor_recv), 1000)
+----
+1	1
+
+query I
+SELECT ducknng_aio_drop((SELECT recv_aio FROM respondent_recv))
+----
+1
+
+query I
+SELECT ducknng_aio_drop((SELECT recv_aio FROM surveyor_recv))
+----
+1
+
+statement ok
+DROP TABLE respondent_recv
+
+statement ok
+DROP TABLE surveyor_recv
+
+query I
+SELECT (ducknng_close_socket(8)).ok
+----
+1
+
+query I
+SELECT (ducknng_close_socket(7)).ok
+----
+1
+
+query I
+SELECT (ducknng_open_socket('bus')).socket_id
+----
+9
+
+query I
+SELECT (ducknng_open_socket('poly')).socket_id
+----
+10
+
+query I
+SELECT (ducknng_open_socket('pub')).socket_id
+----
+11
+
+query I
+SELECT (ducknng_open_socket('sub')).socket_id
+----
+12
+
+query I
+SELECT (ducknng_open_socket('push')).socket_id
+----
+13
+
+query I
+SELECT (ducknng_open_socket('pull')).socket_id
+----
+14
+
+query I
+SELECT (ducknng_open_socket('req')).socket_id
+----
+15
+
+query ITI
+SELECT CASE WHEN r.ok THEN 1 ELSE 0 END, r.error, CASE WHEN r.nng_error IS NULL THEN 1 ELSE 0 END
+FROM (SELECT ducknng_dial_socket(15, 'https://127.0.0.1:45447', 1000, 0::UBIGINT) AS r)
+----
+0	ducknng: http:// and https:// are supported by the HTTP carrier, not the NNG socket/service layer	1
+
+query I
+SELECT (ducknng_open_socket('rep')).socket_id
+----
+16
+
+query I
+SELECT (ducknng_open_socket('surveyor')).socket_id
+----
+17
+
+query I
+SELECT (ducknng_open_socket('respondent')).socket_id
+----
+18
+
+query T
+SELECT protocol
+FROM ducknng_list_sockets()
+ORDER BY socket_id
+----
+bus
+poly
+pub
+sub
+push
+pull
+req
+rep
+surveyor
+respondent
+
+query II
+SELECT
+  (ducknng_subscribe_socket(12::UBIGINT, from_hex(''))).ok,
+  (ducknng_unsubscribe_socket(12::UBIGINT, from_hex(''))).ok
+----
+1	1
+
+query I
+SELECT (ducknng_close_socket(18)).ok
+----
+1
+
+query I
+SELECT (ducknng_close_socket(17)).ok
+----
+1
+
+query I
+SELECT (ducknng_close_socket(16)).ok
+----
+1
+
+query I
+SELECT (ducknng_close_socket(15)).ok
+----
+1
+
+query I
+SELECT (ducknng_close_socket(14)).ok
+----
+1
+
+query I
+SELECT (ducknng_close_socket(13)).ok
+----
+1
+
+query I
+SELECT (ducknng_close_socket(12)).ok
+----
+1
+
+query I
+SELECT (ducknng_close_socket(11)).ok
+----
+1
+
+query I
+SELECT (ducknng_close_socket(10)).ok
+----
+1
+
+query I
+SELECT (ducknng_close_socket(9)).ok
+----
+1
+
+query I
+SELECT (ducknng_open_socket('pull')).socket_id
+----
+19
+
+query I
+SELECT (ducknng_listen_socket(19::UBIGINT, 'inproc://ducknng_socket_protocols_pending_close', 0::UBIGINT, 0::UBIGINT)).ok
+----
+1
+
+statement ok
+CREATE TEMP TABLE pending_close_recv AS
+SELECT ducknng_recv_socket_raw_aio(19::UBIGINT, 5000) AS recv_aio
+
+query I
+SELECT recv_aio > 0
+FROM pending_close_recv
+----
+1
+
+query I
+SELECT (ducknng_close_socket(19::UBIGINT)).ok
+----
+1
+
+query IIIII
+SELECT exists, terminal, state = 'error', phase = 'recv', error IS NOT NULL
+FROM ducknng_aio_status((SELECT recv_aio FROM pending_close_recv))
+----
+1	1	1	1	1
+
+query III
+SELECT ok, error IS NOT NULL, frame IS NULL
+FROM ducknng_aio_collect((SELECT list_value(recv_aio) FROM pending_close_recv), 1000)
+----
+0	1	1
+
+query I
+SELECT ducknng_aio_drop(recv_aio)
+FROM pending_close_recv
+----
+1
+
+statement ok
+DROP TABLE pending_close_recv
+
+# end-to-end three-peer bus broadcast: A listens, B and C dial A, and one
+# raw send from A is delivered to both B and C.
+query I
+SELECT (ducknng_open_socket('bus')).socket_id
+----
+20
+
+query I
+SELECT (ducknng_open_socket('bus')).socket_id
+----
+21
+
+query I
+SELECT (ducknng_open_socket('bus')).socket_id
+----
+22
+
+query I
+SELECT (ducknng_listen_socket(20::UBIGINT, 'inproc://ducknng_socket_protocols_bus_broadcast', 134217728, 0::UBIGINT)).ok
+----
+1
+
+query I
+SELECT (ducknng_dial_socket(21::UBIGINT, 'inproc://ducknng_socket_protocols_bus_broadcast', 1000, 0::UBIGINT)).ok
+----
+1
+
+query I
+SELECT (ducknng_dial_socket(22::UBIGINT, 'inproc://ducknng_socket_protocols_bus_broadcast', 1000, 0::UBIGINT)).ok
+----
+1
+
+statement ok
+CREATE TEMP TABLE bus_recv_b AS
+SELECT ducknng_recv_socket_raw_aio(21::UBIGINT, 1000) AS recv_aio
+
+statement ok
+CREATE TEMP TABLE bus_recv_c AS
+SELECT ducknng_recv_socket_raw_aio(22::UBIGINT, 1000) AS recv_aio
+
+query I
+SELECT (ducknng_send_socket_raw(20::UBIGINT, from_hex('6275732d62726f616463617374'), 1000)).ok
+----
+1
+
+query II
+SELECT ok, hex(frame) = '6275732D62726F616463617374'
+FROM ducknng_aio_collect((SELECT list_value(recv_aio) FROM bus_recv_b), 1000)
+----
+1	1
+
+query II
+SELECT ok, hex(frame) = '6275732D62726F616463617374'
+FROM ducknng_aio_collect((SELECT list_value(recv_aio) FROM bus_recv_c), 1000)
+----
+1	1
+
+statement ok
+SELECT ducknng_aio_drop(recv_aio) FROM bus_recv_b
+
+statement ok
+SELECT ducknng_aio_drop(recv_aio) FROM bus_recv_c
+
+statement ok
+DROP TABLE bus_recv_b
+
+statement ok
+DROP TABLE bus_recv_c
+
+query I
+SELECT (ducknng_close_socket(22::UBIGINT)).ok
+----
+1
+
+query I
+SELECT (ducknng_close_socket(21::UBIGINT)).ok
+----
+1
+
+query I
+SELECT (ducknng_close_socket(20::UBIGINT)).ok
+----
+1

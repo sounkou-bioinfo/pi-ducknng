@@ -1,0 +1,95 @@
+# name: test/sql/ducknng_upload_registry.test
+# group: [ducknng]
+
+require ducknng
+
+# The upload lane is opt-in: nothing in the "upload" family until registered.
+query I
+SELECT count(*) FROM ducknng_list_methods() WHERE family = 'upload'
+----
+0
+
+# Register it without an auth requirement.
+query I
+SELECT ducknng_register_upload_methods()
+----
+1
+
+# All four methods are advertised and do not require auth.
+query TI
+SELECT name, requires_auth FROM ducknng_list_methods() WHERE family = 'upload' ORDER BY name
+----
+upload_abort	false
+upload_append	false
+upload_commit	false
+upload_open	false
+
+# Idempotent re-registration: calling again succeeds (previously failed with
+# "duplicate method name in bulk registration").
+query I
+SELECT ducknng_register_upload_methods()
+----
+1
+
+# Still exactly four methods, no duplicates.
+query I
+SELECT count(*) FROM ducknng_list_methods() WHERE family = 'upload'
+----
+4
+
+# Partial-family recovery: individually unregister one method, then re-register
+# restores it. (Previously the "already registered?" check keyed off upload_open
+# alone, so a partial family skipped registration and errored on the missing one.)
+query I
+SELECT ducknng_unregister_method('upload_append')
+----
+1
+
+query I
+SELECT count(*) FROM ducknng_list_methods() WHERE family = 'upload'
+----
+3
+
+query I
+SELECT ducknng_register_upload_methods()
+----
+1
+
+query TI
+SELECT name, requires_auth FROM ducknng_list_methods() WHERE family = 'upload' ORDER BY name
+----
+upload_abort	false
+upload_append	false
+upload_commit	false
+upload_open	false
+
+# Re-register flipping auth ON: the four methods now require auth, in place.
+query I
+SELECT ducknng_register_upload_methods(true)
+----
+1
+
+query TI
+SELECT name, requires_auth FROM ducknng_list_methods() WHERE family = 'upload' ORDER BY name
+----
+upload_abort	true
+upload_append	true
+upload_commit	true
+upload_open	true
+
+# Still exactly four (re-registration updated in place, did not duplicate).
+query I
+SELECT count(*) FROM ducknng_list_methods() WHERE family = 'upload'
+----
+4
+
+# Flipping auth back OFF is idempotent too.
+query I
+SELECT ducknng_register_upload_methods(false)
+----
+1
+
+query I
+SELECT count(*) FROM ducknng_list_methods() WHERE family = 'upload' AND requires_auth
+----
+0

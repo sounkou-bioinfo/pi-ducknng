@@ -1,0 +1,100 @@
+---
+title: "ducknng upload lane vs text INSERT benchmark"
+output:
+  github_document:
+    toc: true
+    toc_depth: 2
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "", echo = FALSE)
+options(scipen = 999)
+source(normalizePath("rpc_bulk_compare_support.R"))
+source(normalizePath("rpc_upload_compare_support.R"))
+knitr::opts_knit$set(root.dir = normalizePath(".."))
+
+writer_counts <- ducknng_bench_parse_int_csv(
+  Sys.getenv("DUCKNNG_UPLOAD_WRITERS", unset = ""),
+  c(1L, 2L, 4L, 8L)
+)
+rows_per_writer <- as.integer(Sys.getenv("DUCKNNG_UPLOAD_ROWS", unset = "20000"))
+repetitions <- as.integer(Sys.getenv("DUCKNNG_UPLOAD_REPETITIONS", unset = "3"))
+transport <- Sys.getenv("DUCKNNG_UPLOAD_TRANSPORT", unset = "tcp")
+ext_path <- Sys.getenv("DUCKNNG_BENCH_EXT_PATH", unset = ducknng_bench_default_upload_ext_path())
+```
+
+This report is rendered directly with `R -e "rmarkdown::render('bench/rpc_upload_compare.Rmd')"` (there is no Makefile target for it). The default workload is a quick smoke run: `DUCKNNG_UPLOAD_WRITERS=1,2,4,8`, `DUCKNNG_UPLOAD_ROWS=20000`, `DUCKNNG_UPLOAD_REPETITIONS=3`, `DUCKNNG_UPLOAD_TRANSPORT=tcp`. Scale up by raising `DUCKNNG_UPLOAD_ROWS` (rows written per writer per repetition) and/or `DUCKNNG_UPLOAD_REPETITIONS`.
+
+## What is compared
+
+Four client-to-server write paths. The first two ship rows already materialized on the client — this is the point of the comparison, not "tell the server to make rows"; the last two are calibration arms that bound the comparison from either side:
+
+1. **text_insert** (baseline) — the client runs the row-generating query locally, formats every row as a SQL literal tuple, and sends one `INSERT INTO t VALUES (v1), (v2), ...` statement, with every row inlined as SQL text, through the existing `ducknng_run_rpc(...)` path.
+2. **quack_upload** (treatment) — the client hands the *same* row-generating query to `ducknng_upload_table(url, source_query, target_table)`, which runs it locally and streams the result rows to the server over the quack upload lane (`upload_open` / `upload_append` / `upload_commit`, abort-and-rollback on error).
+3. **pure_bytes** (internal calibration — the raw-transport ceiling) — ships a payload of the *same total byte size* `quack_upload` would ship for this cell (measured with a one-off untimed probe upload) over raw `ducknng_request_raw(...)`, to a payload that is deliberately not a valid ducknng wire frame. The server's frame decode rejects it immediately (an O(1) header check) and replies with a tiny error — no SQL, appender, or transaction work happens on the server. The gap between this arm's MB/s and `quack_upload`'s MB/s is the lane's protocol+DB cost, not transport cost. No correctness gate: no rows land anywhere for this arm.
+4. **quack_official** (external calibration) — DuckDB's own Quack extension (`INSTALL quack FROM core_nightly; LOAD quack;`), driven the same client-materializes-rows way as `text_insert`: fetch rows locally, build one inlined `VALUES` INSERT, and execute it directly against a table reached via `ATTACH 'quack:host:port' AS remote` (auth via `CREATE SECRET (TYPE quack, TOKEN ...)`). Skipped gracefully, with a clear message, if the quack extension cannot be installed/loaded in this sandbox — the other arms still run.
+
+All four paths generate the identical deterministic dataset (`id INTEGER, seq BIGINT, value DOUBLE, label VARCHAR`) from the same seeded `range()`-based query, so row counts and checksums must agree wherever rows actually land.
+
+## Concurrency and correctness
+
+For each writer count N in `writer_counts`, N concurrent writer processes (PSOCK cluster, one process per writer) each write to their **own** target table (`dst_w1`, `dst_w2`, ...), so single-table insert contention does not swamp the protocol comparison. Each (writer_mode x N) cell is repeated `repetitions` times; reported latency is the per-writer median and p95 across those repetitions.
+
+After every single write, the benchmark re-reads the target table (over the wire via `ducknng_query_rpc` for `text_insert`/`quack_upload`, or directly through the `ATTACH`ed catalog for `quack_official`) and checks its row count, a full-row `md5`, and `count(DISTINCT id)` against a value computed independently in R (closed-form integer arithmetic, no DuckDB involved) for the expected dataset. Any mismatch raises an R error immediately and aborts the whole run — a fast-but-wrong upload is never reported as a clean result. `pure_bytes` has no correctness gate: it lands no rows anywhere by design.
+
+```{r run-benchmark, include=FALSE}
+message(sprintf(
+  "running upload benchmark: writers=%s rows_per_writer=%d repetitions=%d transport=%s",
+  paste(writer_counts, collapse = ","), rows_per_writer, repetitions, transport
+))
+results_all <- ducknng_bench_run_upload_compare(
+  writer_counts = writer_counts,
+  writer_modes = c("text_insert", "quack_upload", "pure_bytes", "quack_official"),
+  rows_per_writer = rows_per_writer,
+  repetitions = repetitions,
+  transport = transport,
+  ext_path = ext_path
+)
+
+metadata_long <- data.frame(
+  field = names(results_all$metadata),
+  value = vapply(results_all$metadata[1, ], function(x) as.character(x[[1]]), character(1)),
+  stringsAsFactors = FALSE
+)
+results <- results_all$results[order(results_all$results$writers, results_all$results$writer_mode), ]
+size_ratio <- results_all$size_ratio
+```
+
+## Machine and software details
+
+```{r machine-details}
+knitr::kable(metadata_long, col.names = c("Field", "Value"), row.names = FALSE)
+```
+
+## Upload lane vs text INSERT vs calibration arms results
+
+`aggregate_rows_per_second` and `aggregate_mb_per_second` divide totals across all writers in the cell by `operation_seconds` (the slowest writer's total time), so cluster startup overhead does not dilute throughput. `total_bytes_shipped` is the actual client payload: total inlined-VALUES text bytes for `text_insert` and `quack_official`, total `bytes_uploaded` for `quack_upload`, and the matched raw-transport payload size for `pure_bytes`. `rows_written`/`aggregate_rows_per_second` are 0/NA for `pure_bytes` since no rows land anywhere in that arm — only `aggregate_mb_per_second` is meaningful there. `median_latency_seconds` / `p95_latency_seconds` are per-writer, taken across `repetitions` repeats of a single write of `rows_per_writer` rows. If `quack_official` was unavailable in this sandbox, it is simply absent from the table below (see `quack_official_status` in the machine/software details above for why).
+
+```{r upload-results}
+knitr::kable(results, row.names = FALSE)
+```
+
+## Payload-size ratio
+
+Ratio columns compare each arm's total client-shipped bytes against `quack_upload`'s for the same writer count, wherever both arms ran. `pure_bytes_over_quack_ratio` should sit at (or very near) 1.0 by construction, since `pure_bytes` deliberately ships the same byte count `quack_upload` measured for that cell — it is a sanity check that the size-matching probe worked, not a finding.
+
+```{r size-ratio}
+knitr::kable(size_ratio, row.names = FALSE)
+```
+
+## Correctness gate
+
+Every cell above (other than `pure_bytes`, which lands no rows anywhere by design) reports `correctness_gate = PASS`. That is not a formality: each individual write in every cell is independently re-read (over the wire for `text_insert`/`quack_upload`, directly through the `ATTACH`ed catalog for `quack_official`) and checked against an analytically computed row count, distinct-id count, and full-row md5 before the next repetition runs, and the benchmark function throws (halting the whole render) on the first mismatch it finds.
+
+## Notes
+
+- Dataset: each writer generates `rows_per_writer` deterministic rows (`id INTEGER, seq BIGINT, value DOUBLE, label VARCHAR`) from a seeded `range()` query; see `ducknng_bench_upload_row_sql()` / `ducknng_bench_upload_expected_checksum()` in `rpc_upload_compare_support.R`.
+- Each writer targets its own table (`dst_w<N>`) so single-table insert contention does not swamp the protocol comparison.
+- `pure_bytes` measures the raw ducknng transport ceiling: it ships the same number of bytes `quack_upload` ships (learned via an untimed probe upload per writer) to a payload that fails ducknng's wire-frame decode immediately, so no method dispatch, SQL, appender, or transaction work happens on the server side. The gap between `pure_bytes` MB/s and `quack_upload` MB/s is the upload lane's own protocol+DB overhead, not transport overhead.
+- `quack_official` uses DuckDB's own Quack extension (`INSTALL quack FROM core_nightly`, falling back to `INSTALL quack` from `core` if `core_nightly` is unreachable) via `ATTACH 'quack:host:port' AS remote` + `CREATE SECRET (TYPE quack, TOKEN ...)`, with rows client-materialized and shipped as one inlined `VALUES` INSERT, same as `text_insert`. Its `bytes_shipped` is that inlined SQL text's length (the same proxy `text_insert` uses), not an independently instrumented wire byte count -- official Quack does not expose one via SQL.
+- Scale up with `DUCKNNG_UPLOAD_WRITERS`, `DUCKNNG_UPLOAD_ROWS`, `DUCKNNG_UPLOAD_REPETITIONS`, `DUCKNNG_UPLOAD_TRANSPORT` environment variables.

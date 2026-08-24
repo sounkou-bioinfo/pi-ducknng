@@ -1,0 +1,543 @@
+name: ducknng release binaries
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ducknng-release-binaries-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build ${{ matrix.platform }} extension binary
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux_amd64
+            runner: ubuntu-24.04
+            kind: native
+            raw_ext: so
+            smoke: true
+          - platform: linux_arm64
+            runner: ubuntu-24.04-arm
+            kind: native
+            raw_ext: so
+            smoke: true
+          - platform: osx_amd64
+            runner: macos-latest
+            kind: native
+            raw_ext: dylib
+            osx_arch: x86_64
+            smoke: false
+          - platform: osx_arm64
+            runner: macos-latest
+            kind: native
+            raw_ext: dylib
+            osx_arch: arm64
+            smoke: false
+          - platform: windows_amd64_mingw
+            runner: windows-latest
+            kind: native
+            raw_ext: dll
+            smoke: false
+          - platform: wasm_eh
+            runner: ubuntu-24.04
+            kind: wasm
+            raw_ext: no_metadata.wasm
+            smoke: false
+    env:
+      DUCKDB_PLATFORM: ${{ matrix.platform }}
+      GEN: ninja
+      PYTHON_BIN: python
+    steps:
+      - name: Keep LF line endings on Windows
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          git config --global core.autocrlf false
+          git config --global core.eol lf
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Linux build tools
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y ninja-build rsync
+
+      - name: Install macOS build tools
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          brew install ninja
+
+      - name: Set up Windows Rtools MinGW
+        if: matrix.platform == 'windows_amd64_mingw'
+        uses: r-lib/actions/setup-r@v2
+        with:
+          r-version: '4.5.3'
+          update-rtools: true
+          rtools-version: '42'
+
+      - name: Install Windows build tools
+        if: matrix.platform == 'windows_amd64_mingw'
+        shell: powershell
+        run: |
+          choco install ninja -y
+          echo "C:\rtools42\usr\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          echo "C:\rtools42\x86_64-w64-mingw32.static.posix\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          Copy-Item C:\rtools42\x86_64-w64-mingw32.static.posix\bin\gcc.exe C:\rtools42\x86_64-w64-mingw32.static.posix\bin\x86_64-w64-mingw32-gcc.exe -Force
+          Copy-Item C:\rtools42\x86_64-w64-mingw32.static.posix\bin\g++.exe C:\rtools42\x86_64-w64-mingw32.static.posix\bin\x86_64-w64-mingw32-g++.exe -Force
+          Copy-Item C:\rtools42\x86_64-w64-mingw32.static.posix\bin\gfortran.exe C:\rtools42\x86_64-w64-mingw32.static.posix\bin\x86_64-w64-mingw32-gfortran.exe -Force
+
+      - name: Set up Emscripten
+        if: matrix.kind == 'wasm'
+        uses: mymindstorm/setup-emsdk@v13
+        with:
+          version: 3.1.71
+
+      - name: Configure release build
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ matrix.platform }}" = "windows_amd64_mingw" ]; then
+            export CC=gcc
+            export CXX=g++
+          fi
+          if [ -n "${{ matrix.osx_arch }}" ]; then
+            export CMAKE_EXTRA_BUILD_FLAGS="${CMAKE_EXTRA_BUILD_FLAGS:-} -DCMAKE_OSX_ARCHITECTURES=${{ matrix.osx_arch }} -DOSX_BUILD_ARCH=${{ matrix.osx_arch }}"
+          fi
+          make configure
+          if [ "${GITHUB_REF_TYPE:-}" = "tag" ]; then
+            printf '%s\n' "${GITHUB_REF_NAME}" > configure/extension_version.txt
+          fi
+          printf 'configured platform: '
+          cat configure/platform.txt
+          printf 'extension version: '
+          cat configure/extension_version.txt
+
+      - name: Build release extension
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ matrix.platform }}" = "windows_amd64_mingw" ]; then
+            export CC=gcc
+            export CXX=g++
+          fi
+          if [ -n "${{ matrix.osx_arch }}" ]; then
+            export CMAKE_EXTRA_BUILD_FLAGS="${CMAKE_EXTRA_BUILD_FLAGS:-} -DCMAKE_OSX_ARCHITECTURES=${{ matrix.osx_arch }} -DOSX_BUILD_ARCH=${{ matrix.osx_arch }}"
+          fi
+          if [ "${{ matrix.kind }}" = "wasm" ]; then
+            duckdb_version=$(awk -F= '/^TARGET_DUCKDB_VERSION=/{print $2}' Makefile)
+            wasm_extension_version=""
+            if [ "${GITHUB_REF_TYPE:-}" = "tag" ]; then
+              wasm_extension_version="${GITHUB_REF_NAME}"
+            fi
+            DUCKDB_WASM_PLATFORM=${{ matrix.platform }} \
+              DUCKDB_WASM_DUCKDB_VERSION="${duckdb_version}" \
+              DUCKNNG_WASM_EXTENSION_VERSION="${wasm_extension_version}" \
+              DUCKNNG_WASM_BUILD_ONLY=1 \
+              DUCKNNG_WASM_SERVE=0 \
+              scripts/start_duckdb_wasm_local_test.sh
+          else
+            if [ "${GITHUB_REF_TYPE:-}" = "tag" ]; then
+              export EXTENSION_VERSION="${GITHUB_REF_NAME}"
+            fi
+            make release -j2
+          fi
+
+      - name: Audit native dynamic exports
+        if: matrix.kind == 'native' && runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ runner.os }}" = "Linux" ]; then
+            actual=$(nm -D --defined-only build/release/libducknng.so | awk '{print $3}')
+            expected=ducknng_init_c_api
+          else
+            actual=$(nm -gU build/release/libducknng.dylib | awk '{print $NF}')
+            expected=_ducknng_init_c_api
+          fi
+          if [ "$actual" != "$expected" ]; then
+            printf 'unexpected dynamic exports:\n%s\n' "$actual" >&2
+            exit 1
+          fi
+          printf 'dynamic exports: %s\n' "$actual"
+
+      - name: Smoke test matching DuckDB runtime
+        if: matrix.smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          py=configure/venv/bin/python3
+          "$py" test/http_smoke.py build/release/ducknng.duckdb_extension
+          "$py" - <<'PY'
+          import duckdb
+          from urllib.parse import urlparse
+
+          con = duckdb.connect(':memory:', config={'allow_unsigned_extensions': 'true'})
+          con.execute("LOAD 'build/release/ducknng.duckdb_extension'")
+          expected = {
+              'ducknng__ncurl_row',
+              'ducknng_start_server',
+              'ducknng_stop_server',
+              'ducknng_set_service_peer_allowlist',
+              'ducknng_set_service_ip_allowlist',
+              'ducknng_register_http_profile',
+              'ducknng_drop_http_profile',
+              'ducknng_run_rpc_raw',
+              'ducknng_get_rpc_manifest_raw',
+              'ducknng_open_query_raw',
+              'ducknng_fetch_query_raw',
+              'ducknng_close_query_raw',
+              'ducknng_cancel_query_raw',
+              'ducknng_request_raw',
+              'ducknng_request_socket_raw',
+          }
+          names_sql = ','.join("'" + name + "'" for name in sorted(expected))
+          rows = con.execute(f"""
+          SELECT function_name, stability
+          FROM duckdb_functions()
+          WHERE function_type = 'scalar'
+            AND function_name IN ({names_sql})
+          """).fetchall()
+          bad = [(name, stability) for name, stability in rows if stability != 'VOLATILE']
+          missing = sorted(expected - {name for name, _ in rows})
+          if bad or missing:
+              raise SystemExit(f'volatile scalar check failed: bad={bad!r} missing={missing!r}')
+          arities = {
+              name: sorted(count for (count,) in con.execute(f"""
+                  SELECT len(parameter_types)
+                  FROM duckdb_functions()
+                  WHERE function_type = 'scalar'
+                    AND function_name = '{name}'
+              """).fetchall())
+              for name in ('ducknng__ncurl_row', 'ducknng_register_http_profile')
+          }
+          if arities['ducknng__ncurl_row'] != [6, 7]:
+              raise SystemExit(f'ducknng__ncurl_row arities changed: {arities["ducknng__ncurl_row"]!r}')
+          if arities['ducknng_register_http_profile'] != [9, 10, 11]:
+              raise SystemExit(f'ducknng_register_http_profile arities changed: {arities["ducknng_register_http_profile"]!r}')
+          print('volatile scalar check:', sorted(expected))
+
+          header_row = con.execute("""
+              SELECT ok, status IS NULL, error
+              FROM ducknng_ncurl('http://127.0.0.1:1/', 'GET', ?, NULL, 100, 0::UBIGINT)
+          """, ['[{"name":"X-Test","value":"bad\\r\\nX-Evil: y"}]']).fetchone()
+          if header_row[0] is not False or header_row[1] is not True or 'control characters' not in (header_row[2] or ''):
+              raise SystemExit(f'HTTP header control-character check failed: {header_row!r}')
+          quack_hex = '01000164000effff0200010178040001012c016400808080808080808020660001640000660000ffffffffffffffff'
+          try:
+              con.execute("""
+                  SELECT *
+                  FROM ducknng_parse_body(from_hex(?), 'application/vnd.ducknng.quack-batch')
+              """, [quack_hex]).fetchall()
+          except duckdb.Error as exc:
+              if 'invalid fixed-size quack vector payload' not in str(exc):
+                  raise
+          else:
+              raise SystemExit('malformed quack batch was accepted')
+          huge_ncols_hex = '0100818004'
+          try:
+              con.execute("""
+                  SELECT *
+                  FROM ducknng_parse_body(from_hex(?), 'application/vnd.ducknng.quack-batch')
+              """, [huge_ncols_hex]).fetchall()
+          except duckdb.Error as exc:
+              if 'quack column count exceeds supported limit' not in str(exc):
+                  raise
+          else:
+              raise SystemExit('huge-column-count quack batch was accepted')
+          print('security regression smoke: header and quack checks ok')
+
+          tls_server_cfg = con.execute("""
+              SELECT ducknng_tls_config_from_files('test/certs/mtls/server-cert-key.pem', NULL, NULL, 0)
+          """).fetchone()[0]
+          tls_wrong_client_cfg = con.execute("""
+              SELECT ducknng_tls_config_from_files(NULL, 'test/certs/loopback-ca.pem', NULL, 0)
+          """).fetchone()[0]
+          tls_service = 'release_tls_verify'
+          try:
+              ok = con.execute(f"""
+                  SELECT ducknng_start_server('{tls_service}', 'tls+tcp://127.0.0.1:0',
+                                             1, 134217728, 300000, ?::UBIGINT)
+              """, [tls_server_cfg]).fetchone()[0]
+              if ok is not True:
+                  raise SystemExit('failed to start TLS verification smoke server')
+              tls_listen = con.execute(
+                  "SELECT listen FROM ducknng_list_servers() WHERE name = ?",
+                  [tls_service],
+              ).fetchone()[0]
+              tls_row = con.execute("""
+                  SELECT ok, error IS NOT NULL
+                  FROM ducknng_get_rpc_manifest(?, ?::UBIGINT)
+              """, [tls_listen, tls_wrong_client_cfg]).fetchone()
+              if tls_row != (False, True):
+                  raise SystemExit(f'TLS client verification smoke failed: {tls_row!r}')
+              print('security regression smoke: TLS client verification ok')
+          finally:
+              con.execute(f"SELECT ducknng_stop_server('{tls_service}')")
+              con.execute("SELECT ducknng_drop_tls_config(?::UBIGINT)", [tls_wrong_client_cfg])
+              con.execute("SELECT ducknng_drop_tls_config(?::UBIGINT)", [tls_server_cfg])
+
+          service = 'release_http_profile'
+          try:
+              ok = con.execute(f"""
+                  SELECT ducknng_start_server('{service}', 'http://127.0.0.1:0/_ducknng',
+                                             1, 134217728, 300000, 0::UBIGINT)
+              """).fetchone()[0]
+              if ok is not True:
+                  raise SystemExit('failed to start HTTP profile smoke server')
+              listen = con.execute(
+                  "SELECT listen FROM ducknng_list_servers() WHERE name = ?",
+                  [service],
+              ).fetchone()[0]
+              base = listen[:-len('/_ducknng')]
+              port = urlparse(base).port
+              if port is None:
+                  raise SystemExit(f'HTTP profile smoke could not parse listen port from {listen!r}')
+              route_ok = con.execute(f"""
+                  SELECT ducknng_register_http_route(
+                    '{service}', 'GET', '/profile-smoke',
+                    'SELECT * FROM ducknng_http_text(200, CASE WHEN ducknng_http_header(''Authorization'') = ''Bearer release-secret'' THEN ''authorized'' ELSE ''denied'' END)'
+                  )
+              """).fetchone()[0]
+              if route_ok is not True:
+                  raise SystemExit('HTTP profile smoke route registration returned false')
+              profile_ok = con.execute("""
+                  SELECT ducknng_register_http_profile(
+                    'release-profile', 'http', '127.0.0.1', ?,
+                    '/profile-smoke', 'GET', false,
+                    'Authorization', 'Bearer release-secret'
+                  )
+              """, [port]).fetchone()[0]
+              if profile_ok is not True:
+                  raise SystemExit('HTTP profile smoke profile registration returned false')
+              row = con.execute("""
+                  SELECT ok, status, body_text
+                  FROM ducknng_ncurl(?, 'GET', NULL, NULL, 2000, 0::UBIGINT,
+                                     'release-profile')
+              """, [base + '/profile-smoke']).fetchone()
+              if row != (True, 200, 'authorized'):
+                  raise SystemExit(f'HTTP profile smoke failed: {row!r}')
+              redacted = con.execute("""
+                  SELECT count(*) = 1
+                  FROM ducknng_list_http_profiles()
+                  WHERE profile_id = 'release-profile'
+                    AND position('release-secret' IN auth_header_names_json) = 0
+              """).fetchone()[0]
+              if redacted is not True:
+                  raise SystemExit('HTTP profile introspection leaked a secret or profile was missing')
+              print('HTTP profile smoke: ok')
+          finally:
+              con.execute("SELECT ducknng_drop_http_profile('release-profile')")
+              con.execute(f"SELECT ducknng_stop_server('{service}')")
+          PY
+
+      - name: Smoke test Windows MinGW artifact in R
+        if: matrix.platform == 'windows_amd64_mingw'
+        shell: bash
+        env:
+          GITHUB_PAT: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          duckdb_version=$(awk -F= '/^DUCKDB_TEST_VERSION=/{print $2}' Makefile)
+          Rscript - "$duckdb_version" <<'RSCRIPT'
+          args <- commandArgs(trailingOnly = TRUE)
+          duckdb_version <- args[[1]]
+          options(repos = c(CRAN = "https://cloud.r-project.org"))
+          install.packages(c("DBI", "remotes"))
+          install_duckdb <- function(version) {
+            tryCatch(
+              remotes::install_version(
+                "duckdb",
+                version = version,
+                repos = "https://cloud.r-project.org",
+                dependencies = NA,
+                upgrade = "never",
+                quiet = FALSE
+              ),
+              error = function(e) {
+                message("CRAN install_version failed for duckdb ", version, ": ", conditionMessage(e))
+                remotes::install_github(
+                  paste0("duckdb/duckdb-r@v", version),
+                  dependencies = NA,
+                  upgrade = "never",
+                  quiet = FALSE
+                )
+              }
+            )
+          }
+          install_duckdb(duckdb_version)
+          if (as.character(utils::packageVersion("duckdb")) != duckdb_version) {
+            stop("installed duckdb R package does not match target: ",
+                 as.character(utils::packageVersion("duckdb")), " != ", duckdb_version)
+          }
+          library(DBI)
+          library(duckdb)
+          ext <- normalizePath("build/release/ducknng.duckdb_extension", winslash = "/", mustWork = TRUE)
+          drv <- duckdb::duckdb(config = list(allow_unsigned_extensions = "true"))
+          con <- dbConnect(drv, dbdir = ":memory:")
+          on.exit({ dbDisconnect(con, shutdown = TRUE) }, add = TRUE)
+          dbExecute(con, paste("LOAD", dbQuoteString(con, ext)))
+          expected <- c(
+            "ducknng__ncurl_row",
+            "ducknng_start_server",
+            "ducknng_stop_server",
+            "ducknng_set_service_peer_allowlist",
+            "ducknng_set_service_ip_allowlist",
+            "ducknng_register_http_profile",
+            "ducknng_drop_http_profile",
+            "ducknng_run_rpc_raw",
+            "ducknng_get_rpc_manifest_raw",
+            "ducknng_open_query_raw",
+            "ducknng_fetch_query_raw",
+            "ducknng_close_query_raw",
+            "ducknng_cancel_query_raw",
+            "ducknng_request_raw",
+            "ducknng_request_socket_raw"
+          )
+          names_sql <- paste(dbQuoteString(con, expected), collapse = ",")
+          rows <- dbGetQuery(con, paste0(
+            "SELECT function_name, stability FROM duckdb_functions() ",
+            "WHERE function_type = 'scalar' AND function_name IN (", names_sql, ")"
+          ))
+          bad <- rows[rows$stability != "VOLATILE", , drop = FALSE]
+          missing <- setdiff(expected, rows$function_name)
+          if (nrow(bad) || length(missing)) {
+            stop("volatile scalar check failed: bad=", paste(capture.output(print(bad)), collapse = " "),
+                 " missing=", paste(missing, collapse = ","))
+          }
+          print(rows[order(rows$function_name), , drop = FALSE])
+          arities <- dbGetQuery(con, paste0(
+            "SELECT function_name, len(parameter_types) AS arity FROM duckdb_functions() ",
+            "WHERE function_type = 'scalar' AND function_name IN ",
+            "('ducknng__ncurl_row', 'ducknng_register_http_profile')"
+          ))
+          ncurl_row_arities <- sort(arities$arity[arities$function_name == "ducknng__ncurl_row"])
+          register_profile_arities <- sort(arities$arity[arities$function_name == "ducknng_register_http_profile"])
+          if (length(ncurl_row_arities) != 2L || any(ncurl_row_arities != c(6, 7))) {
+            stop("ducknng__ncurl_row arities changed: ", paste(ncurl_row_arities, collapse = ","))
+          }
+          if (length(register_profile_arities) != 3L || any(register_profile_arities != c(9, 10, 11))) {
+            stop("ducknng_register_http_profile arities changed: ", paste(register_profile_arities, collapse = ","))
+          }
+          RSCRIPT
+
+      - name: Package release assets
+        id: package
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          tag="${GITHUB_REF_NAME:-manual}"
+          tag="${tag//\//-}"
+          duckdb_version=$(awk -F= '/^TARGET_DUCKDB_VERSION=/{print $2}' Makefile)
+          platform=$(cat configure/platform.txt)
+          asset_base="ducknng-${tag}-${platform}"
+          if [ "${{ matrix.kind }}" = "wasm" ]; then
+            cp ".duckdb-wasm-local-artifacts/build/${platform}/extension/ducknng/ducknng.duckdb_extension.wasm" \
+              "dist/${asset_base}.duckdb_extension.wasm"
+            raw_wasm=".duckdb_wasm_docker_work/build/${platform}/release/ducknng.no_metadata.wasm"
+            if [ -f "${raw_wasm}" ]; then
+              cp "${raw_wasm}" "dist/${asset_base}.no_metadata.wasm"
+            fi
+          else
+            cp build/release/ducknng.duckdb_extension \
+              "dist/${asset_base}.duckdb_extension"
+            cp "build/release/libducknng.${{ matrix.raw_ext }}" \
+              "dist/${asset_base}.${{ matrix.raw_ext }}"
+          fi
+          cat > "dist/${asset_base}.txt" <<EOF
+          ducknng self-published extension binary
+          tag: ${tag}
+          commit: ${GITHUB_SHA}
+          duckdb_version: ${duckdb_version}
+          platform: ${platform}
+
+          These binaries are unsigned and are not DuckDB community-signed extension builds.
+          Native DuckDB hosts must be opened with allow_unsigned_extensions = true before LOAD.
+          The wasm_eh asset is a duckdb-wasm side module for the wasm_eh runtime, not a native LOAD target.
+          EOF
+          echo "asset_base=${asset_base}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload platform release artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.package.outputs.asset_base }}
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub Release assets
+    runs-on: ubuntu-24.04
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download platform artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: downloaded-artifacts
+
+      - name: Assemble release directory
+        id: release
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          find downloaded-artifacts -maxdepth 3 -type f -print -exec cp {} dist/ \;
+          (cd dist && sha256sum * > SHA256SUMS)
+          duckdb_version=$(awk -F= '/^TARGET_DUCKDB_VERSION=/{print $2}' Makefile)
+          echo "duckdb_version=${duckdb_version}" >> "$GITHUB_OUTPUT"
+          {
+            echo 'assets<<EOF'
+            find dist -maxdepth 1 -type f | sort
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Publish GitHub Release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ducknng ${{ github.ref_name }}
+          overwrite_files: true
+          files: dist/*
+          body: |
+            Self-published ducknng extension binaries built from `${{ github.sha }}`.
+
+            DuckDB target: `${{ steps.release.outputs.duckdb_version }}`
+
+            Included platforms:
+            - `linux_amd64`
+            - `linux_arm64`
+            - `osx_amd64`
+            - `osx_arm64`
+            - `windows_amd64_mingw` built with Rtools/MinGW and smoke-loaded through R
+            - `wasm_eh`
+
+            These assets are unsigned and are not DuckDB community-signed extension builds. Open native DuckDB connections with `allow_unsigned_extensions = true`, then `LOAD` the downloaded `.duckdb_extension` file. Linux and Windows artifacts are smoke-loaded in the workflow; macOS artifacts are target-architecture build artifacts. The `wasm_eh` asset is a duckdb-wasm side module for the `wasm_eh` runtime rather than a native shared library.

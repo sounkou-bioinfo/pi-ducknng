@@ -1,0 +1,335 @@
+# name: test/sql/ducknng_http_server_routing.test
+# group: [ducknng]
+
+require ducknng
+
+query I
+SELECT CASE
+  WHEN ducknng_start_server('http_rpc', 'http://127.0.0.1:45458/_ducknng', 1, 134217728, 300000, 0::UBIGINT)
+  THEN 1 ELSE 0 END
+----
+1
+
+query T
+SELECT listen
+FROM ducknng_list_servers()
+WHERE name = 'http_rpc'
+----
+http://127.0.0.1:45458/_ducknng
+
+query III
+SELECT ok, status = 405, error IS NULL
+FROM ducknng_ncurl('http://127.0.0.1:45458/_ducknng', 'GET', NULL, NULL, 2000, 0::UBIGINT)
+----
+1	1	1
+
+statement ok
+CREATE TEMP TABLE http_ncurl_aio AS
+SELECT ducknng_ncurl_aio('http://127.0.0.1:45458/_ducknng', 'GET', NULL, NULL, 2000, 0::UBIGINT) AS aio_id
+
+query II
+SELECT http_ncurl_aio.aio_id > 0, kind = 'ncurl'
+FROM http_ncurl_aio, ducknng_aio_status(http_ncurl_aio.aio_id)
+----
+1	1
+
+query IIII
+SELECT aio_id IN (SELECT aio_id FROM http_ncurl_aio), ok, status = 405, error IS NULL
+FROM ducknng_ncurl_aio_collect((SELECT list_value(aio_id) FROM http_ncurl_aio), 2000)
+----
+1	1	1	1
+
+query III
+SELECT state = 'collected', terminal, has_reply_frame = false
+FROM http_ncurl_aio, ducknng_aio_status(http_ncurl_aio.aio_id)
+----
+1	1	1
+
+query I
+SELECT count(*)
+FROM ducknng_aio_collect((SELECT list_value(aio_id) FROM http_ncurl_aio), 0)
+----
+0
+
+query I
+SELECT count(*)
+FROM ducknng_ncurl_aio_collect((SELECT list_value(aio_id) FROM http_ncurl_aio), 0)
+----
+0
+
+query I
+SELECT ducknng_aio_cancel(aio_id)
+FROM http_ncurl_aio
+----
+0
+
+query I
+SELECT ducknng_aio_drop(aio_id)
+FROM http_ncurl_aio
+----
+1
+
+query II
+SELECT exists, state IS NULL
+FROM http_ncurl_aio, ducknng_aio_status(http_ncurl_aio.aio_id)
+----
+0	1
+
+statement ok
+DROP TABLE http_ncurl_aio
+
+statement ok
+CREATE TEMP TABLE http_ncurl_drop_aio AS
+SELECT ducknng_ncurl_aio('http://127.0.0.1:45458/_ducknng', 'GET', NULL, NULL, 2000, 0::UBIGINT) AS aio_id
+
+query I
+SELECT ducknng_aio_wait((SELECT list_value(aio_id) FROM http_ncurl_drop_aio), 2000)
+----
+1
+
+query I
+SELECT ducknng_aio_drop(aio_id)
+FROM http_ncurl_drop_aio
+----
+1
+
+query I
+SELECT count(*)
+FROM ducknng_ncurl_aio_collect((SELECT list_value(aio_id) FROM http_ncurl_drop_aio), 0)
+----
+0
+
+statement ok
+DROP TABLE http_ncurl_drop_aio
+
+query III
+SELECT ok, status = 415, error IS NULL
+FROM ducknng_ncurl(
+  'http://127.0.0.1:45458/_ducknng',
+  'POST',
+  '[{"name":"Content-Type","value":"text/plain"}]',
+  from_hex('01000000000000000000000000000000000000000000'),
+  2000,
+  0::UBIGINT
+)
+----
+1	1	1
+
+query III
+SELECT ok, status = 400, error IS NULL
+FROM ducknng_ncurl(
+  'http://127.0.0.1:45458/_ducknng',
+  'POST',
+  '[{"name":"Content-Type","value":"application/vnd.ducknng.frame"}]',
+  from_hex('00'),
+  2000,
+  0::UBIGINT
+)
+----
+1	1	1
+
+statement ok
+SET VARIABLE http_manifest_frame = (
+  SELECT body
+  FROM ducknng_ncurl(
+    'http://127.0.0.1:45458/_ducknng',
+    'POST',
+    '[{"name":"Content-Type","value":"application/vnd.ducknng.frame"}]',
+    from_hex('01000000000000000000000000000000000000000000'),
+    2000,
+    0::UBIGINT
+  )
+)
+
+query IIII
+SELECT ok, type_name, name, position('"name":"manifest"' IN payload_text) > 0
+FROM ducknng_decode_frame(getvariable('http_manifest_frame'))
+----
+1	result	manifest	1
+
+query I
+SELECT ducknng_register_exec_method()
+----
+1
+
+query II
+SELECT ok, position('"name":"exec"' IN manifest) > 0
+FROM ducknng_get_rpc_manifest('http://127.0.0.1:45458/_ducknng', 0::UBIGINT)
+----
+1	1
+
+statement ok
+CREATE TEMP TABLE http_rpc_aio_launch AS
+SELECT
+  ducknng_request_raw_aio(
+    'http://127.0.0.1:45458/_ducknng',
+    from_hex('01000000000000000000000000000000000000000000'),
+    2000,
+    0::UBIGINT
+  ) AS raw_aio,
+  ducknng_get_rpc_manifest_raw_aio(
+    'http://127.0.0.1:45458/_ducknng',
+    2000,
+    0::UBIGINT
+  ) AS manifest_aio,
+  ducknng_run_rpc_raw_aio(
+    'http://127.0.0.1:45458/_ducknng',
+    'CREATE TABLE IF NOT EXISTS http_rpc_aio_exec(i INTEGER)',
+    2000,
+    0::UBIGINT
+  ) AS exec_aio
+
+query II
+SELECT kind = 'request', phase = 'http'
+FROM http_rpc_aio_launch, ducknng_aio_status(raw_aio)
+----
+1	1
+
+statement ok
+CREATE TEMP TABLE http_rpc_aio_collect AS
+SELECT *
+FROM ducknng_aio_collect((SELECT list_value(raw_aio, manifest_aio, exec_aio) FROM http_rpc_aio_launch), 2000)
+
+query I
+SELECT COUNT(*)
+FROM http_rpc_aio_collect
+----
+3
+
+query II
+SELECT ok, hex(frame) = hex(ducknng_get_rpc_manifest_raw('http://127.0.0.1:45458/_ducknng', 0::UBIGINT))
+FROM http_rpc_aio_collect
+WHERE aio_id = (SELECT raw_aio FROM http_rpc_aio_launch)
+----
+1	1
+
+query II
+SELECT ok, hex(frame) = hex(ducknng_get_rpc_manifest_raw('http://127.0.0.1:45458/_ducknng', 0::UBIGINT))
+FROM http_rpc_aio_collect
+WHERE aio_id = (SELECT manifest_aio FROM http_rpc_aio_launch)
+----
+1	1
+
+query II
+SELECT ok,
+       hex(frame) = hex(ducknng_run_rpc_raw(
+         'http://127.0.0.1:45458/_ducknng',
+         'CREATE TABLE IF NOT EXISTS http_rpc_aio_exec(i INTEGER)',
+         0::UBIGINT
+       ))
+FROM http_rpc_aio_collect
+WHERE aio_id = (SELECT exec_aio FROM http_rpc_aio_launch)
+----
+1	1
+
+query I
+SELECT ducknng_aio_drop(raw_aio) AND ducknng_aio_drop(manifest_aio) AND ducknng_aio_drop(exec_aio)
+FROM http_rpc_aio_launch
+----
+1
+
+statement ok
+DROP TABLE http_rpc_aio_collect
+
+statement ok
+DROP TABLE http_rpc_aio_launch
+
+query I
+SELECT *
+FROM ducknng_query_rpc(
+  'http://127.0.0.1:45458/_ducknng',
+  'SELECT sessions FROM ducknng_list_servers() WHERE name = ''http_rpc''',
+  0::UBIGINT
+)
+----
+0
+
+query I
+SELECT ok
+FROM ducknng_run_rpc(
+  'http://127.0.0.1:45458/_ducknng',
+  'SELECT ducknng_stop_server(''http_rpc'')',
+  0::UBIGINT
+)
+----
+0
+
+query I
+SELECT running::INTEGER
+FROM ducknng_list_servers()
+WHERE name = 'http_rpc'
+----
+1
+
+query IIII
+SELECT ok, rows_changed, statement_type, result_type
+FROM ducknng_run_rpc('http://127.0.0.1:45458/_ducknng', 'CREATE TABLE IF NOT EXISTS http_remote_t(i INTEGER)', 0::UBIGINT)
+----
+1	0	7	2
+
+query IIII
+SELECT ok, rows_changed, statement_type, result_type
+FROM ducknng_run_rpc('http://127.0.0.1:45458/_ducknng', 'DELETE FROM http_remote_t', 0::UBIGINT)
+----
+1	0	5	1
+
+query IIII
+SELECT ok, rows_changed, statement_type, result_type
+FROM ducknng_run_rpc('http://127.0.0.1:45458/_ducknng', 'INSERT INTO http_remote_t VALUES (3), (4)', 0::UBIGINT)
+----
+1	2	2	1
+
+query II
+SELECT DISTINCT *
+FROM ducknng_query_rpc('http://127.0.0.1:45458/_ducknng', 'SELECT i, i > 3 AS gt_3 FROM http_remote_t ORDER BY i', 0::UBIGINT)
+ORDER BY i
+----
+3	false
+4	true
+
+statement ok
+CREATE TEMP TABLE http_open AS
+SELECT *
+FROM ducknng_open_query('http://127.0.0.1:45458/_ducknng', 'SELECT i FROM http_remote_t ORDER BY i', 0::UBIGINT, 0::UBIGINT, 0::UBIGINT)
+
+statement ok
+SET VARIABLE http_session_id = (
+  SELECT session_id FROM http_open
+)
+
+statement ok
+SET VARIABLE http_session_token = (
+  SELECT session_token FROM http_open
+)
+
+query IIIITT
+SELECT ok, session_id = getvariable('http_session_id')::UBIGINT, length(session_token) = 32, idle_timeout_ms, state, next_method
+FROM http_open
+----
+1	1	1	300000	open	fetch
+
+query IIIII
+SELECT ok, session_id = getvariable('http_session_id')::UBIGINT, state IS NULL, octet_length(payload) > 0, end_of_stream
+FROM ducknng_fetch_query('http://127.0.0.1:45458/_ducknng', getvariable('http_session_id')::UBIGINT, getvariable('http_session_token')::VARCHAR, 0::UBIGINT, 0::UBIGINT, 0::UBIGINT)
+----
+1	1	1	1	0
+
+query IITII
+SELECT ok, session_id = getvariable('http_session_id')::UBIGINT, state, payload IS NULL, end_of_stream
+FROM ducknng_fetch_query('http://127.0.0.1:45458/_ducknng', getvariable('http_session_id')::UBIGINT, getvariable('http_session_token')::VARCHAR, 0::UBIGINT, 0::UBIGINT, 0::UBIGINT)
+----
+1	1	exhausted	1	1
+
+query IIT
+SELECT ok, session_id = getvariable('http_session_id')::UBIGINT, state
+FROM ducknng_close_query('http://127.0.0.1:45458/_ducknng', getvariable('http_session_id')::UBIGINT, getvariable('http_session_token')::VARCHAR, 0::UBIGINT)
+----
+1	1	closed
+
+statement ok
+DROP TABLE http_open
+
+query I
+SELECT CASE WHEN ducknng_stop_server('http_rpc') THEN 1 ELSE 0 END
+----
+1

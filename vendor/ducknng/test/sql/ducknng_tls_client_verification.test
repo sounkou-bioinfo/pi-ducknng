@@ -1,0 +1,104 @@
+# name: test/sql/ducknng_tls_client_verification.test
+# group: [ducknng]
+
+require ducknng
+
+query I
+SELECT ducknng_tls_config_from_files('test/certs/mtls/server-cert-key.pem', NULL, NULL, 0) > 0
+----
+1
+
+statement ok
+SET VARIABLE tls_verify_server_config_id = (
+  SELECT max(tls_config_id) FROM ducknng_list_tls_configs()
+)
+
+query I
+SELECT ducknng_tls_config_from_files(NULL, 'test/certs/loopback-ca.pem', NULL, 0) > 0
+----
+1
+
+statement ok
+SET VARIABLE tls_verify_wrong_client_config_id = (
+  SELECT max(tls_config_id) FROM ducknng_list_tls_configs()
+)
+
+query I
+SELECT CASE
+  WHEN ducknng_start_server(
+    'tls_verify_rpc',
+    'tls+tcp://127.0.0.1:0',
+    1,
+    134217728,
+    300000,
+    getvariable('tls_verify_server_config_id')::UBIGINT
+  )
+  THEN 1 ELSE 0 END
+----
+1
+
+statement ok
+SET VARIABLE tls_verify_rpc_url = (
+  SELECT listen FROM ducknng_list_servers() WHERE name = 'tls_verify_rpc'
+)
+
+query II
+SELECT ok, error IS NOT NULL
+FROM ducknng_get_rpc_manifest(
+  getvariable('tls_verify_rpc_url')::VARCHAR,
+  getvariable('tls_verify_wrong_client_config_id')::UBIGINT
+)
+----
+0	1
+
+query I
+SELECT CASE WHEN ducknng_stop_server('tls_verify_rpc') THEN 1 ELSE 0 END
+----
+1
+
+query I
+SELECT CASE
+  WHEN ducknng_start_server(
+    'tls_verify_http',
+    'https://127.0.0.1:0/_ducknng',
+    1,
+    134217728,
+    300000,
+    getvariable('tls_verify_server_config_id')::UBIGINT
+  )
+  THEN 1 ELSE 0 END
+----
+1
+
+statement ok
+SET VARIABLE tls_verify_http_url = (
+  SELECT listen FROM ducknng_list_servers() WHERE name = 'tls_verify_http'
+)
+
+query III
+SELECT ok, status IS NULL, error IS NOT NULL
+FROM ducknng_ncurl(
+  getvariable('tls_verify_http_url')::VARCHAR,
+  'POST',
+  '[{"name":"Content-Type","value":"application/vnd.ducknng.frame"}]',
+  from_hex('01000000000000000000000000000000000000000000'),
+  5000,
+  getvariable('tls_verify_wrong_client_config_id')::UBIGINT
+)
+----
+0	1	1
+
+query I
+SELECT CASE WHEN ducknng_stop_server('tls_verify_http') THEN 1 ELSE 0 END
+----
+1
+
+query I
+SELECT ducknng_drop_tls_config(getvariable('tls_verify_wrong_client_config_id')::UBIGINT)
+----
+1
+
+query I
+SELECT ducknng_drop_tls_config(getvariable('tls_verify_server_config_id')::UBIGINT)
+----
+1

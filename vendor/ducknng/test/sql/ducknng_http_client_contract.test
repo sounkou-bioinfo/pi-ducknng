@@ -1,0 +1,69 @@
+# name: test/sql/ducknng_http_client_contract.test
+# group: [ducknng]
+
+require ducknng
+
+query III
+SELECT ok, status IS NULL, error = 'ducknng: http:// or https:// URL is required'
+FROM ducknng_ncurl('ipc:///tmp/nope', NULL, NULL, NULL, 1000, 0::UBIGINT)
+----
+0	1	1
+
+# Downstream code uses the private row scalar directly; keep the original
+# six-argument overload registered while the public macro gains profile_id.
+query III
+SELECT struct_extract(r, 'ok'),
+       struct_extract(r, 'status') IS NULL,
+       struct_extract(r, 'error') = 'ducknng: http:// or https:// URL is required'
+FROM (SELECT ducknng__ncurl_row('ipc:///tmp/nope', NULL, NULL, NULL, 1000, 0::UBIGINT) AS r)
+----
+0	1	1
+
+query III
+SELECT ok, status IS NULL, error = 'ducknng: headers_json must be a JSON array of {name,value} objects'
+FROM ducknng_ncurl('http://127.0.0.1:1/', 'GET', '{}', NULL, 1000, 0::UBIGINT)
+----
+0	1	1
+
+query III
+SELECT ok, status IS NULL, error = 'ducknng: trailing characters after headers_json'
+FROM ducknng_ncurl('http://127.0.0.1:1/', 'GET', '[] trailing', NULL, 1000, 0::UBIGINT)
+----
+0	1	1
+
+query III
+SELECT ok, status IS NULL, error = 'ducknng: HTTP header name must be an HTTP token'
+FROM ducknng_ncurl('http://127.0.0.1:1/', 'GET', '[{"name":"Bad Header","value":"x"}]', NULL, 1000, 0::UBIGINT)
+----
+0	1	1
+
+query III
+SELECT ok, status IS NULL, error = 'ducknng: control characters are not allowed in headers_json strings'
+FROM ducknng_ncurl('http://127.0.0.1:1/', 'GET', '[{"name":"X-Test","value":"bad\r\nX-Evil: y"}]', NULL, 1000, 0::UBIGINT)
+----
+0	1	1
+
+statement ok
+CREATE TEMP TABLE ncurl_bad_aio AS
+SELECT ducknng_ncurl_aio('http://127.0.0.1:1/', 'GET', NULL, NULL, 100, 0::UBIGINT) AS aio
+
+query I
+SELECT aio > 0
+FROM ncurl_bad_aio
+----
+1
+
+query I
+SELECT COUNT(*)
+FROM ducknng_aio_collect((SELECT list_value(aio) FROM ncurl_bad_aio), 0)
+----
+0
+
+query I
+SELECT ducknng_aio_drop(aio)
+FROM ncurl_bad_aio
+----
+1
+
+statement ok
+DROP TABLE ncurl_bad_aio

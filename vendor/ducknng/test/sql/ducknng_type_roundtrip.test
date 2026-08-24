@@ -1,0 +1,392 @@
+# name: test/sql/ducknng_type_roundtrip.test
+# group: [ducknng]
+#
+# End-to-end type round-trip matrix. Each query sends typed literals to the
+# server, which serializes the result through a row payload codec, ships it
+# back, and decodes it on the client. The client then compares every decoded
+# value to the same literal, so a wrong byte in encode or decode fails the
+# test. Every scalar type is exercised on BOTH advertised serialization modes
+# (arrow_ipc_stream and ducknng_quack_batch); nested types, nested nulls, and
+# recursive nesting are exercised on BOTH paths, since the quack codec now
+# carries recursive LIST/STRUCT/MAP/UNION/ARRAY types whole-chunk.
+
+require ducknng
+
+statement ok
+SELECT ducknng_start_server('typ_rt', 'ipc:///tmp/ducknng_type_roundtrip.ipc', 1, 134217728, 300000, 0::UBIGINT);
+
+statement ok
+SELECT ducknng_register_exec_method();
+
+statement ok
+SET VARIABLE u = 'ipc:///tmp/ducknng_type_roundtrip.ipc';
+
+# --------------------------------------------------------------------------
+# Signed integers + boolean
+# --------------------------------------------------------------------------
+
+query IIIIII
+SELECT (b)::INTEGER, (i8 = (-128)::TINYINT)::INTEGER, (i16 = (-32768)::SMALLINT)::INTEGER,
+       (i32 = (-2147483648)::INTEGER)::INTEGER, (i64 = (-9223372036854775808)::BIGINT)::INTEGER,
+       (i128 = (12345678901234567890123456789012345678)::HUGEINT)::INTEGER
+FROM ducknng_query_rpc_mode(getvariable('u'),
+  'SELECT true AS b, (-128)::TINYINT AS i8, (-32768)::SMALLINT AS i16,
+          (-2147483648)::INTEGER AS i32, (-9223372036854775808)::BIGINT AS i64,
+          (12345678901234567890123456789012345678)::HUGEINT AS i128',
+  0::UBIGINT, 'arrow_ipc_stream')
+----
+1	1	1	1	1	1
+
+query IIIIII
+SELECT (b)::INTEGER, (i8 = (-128)::TINYINT)::INTEGER, (i16 = (-32768)::SMALLINT)::INTEGER,
+       (i32 = (-2147483648)::INTEGER)::INTEGER, (i64 = (-9223372036854775808)::BIGINT)::INTEGER,
+       (i128 = (12345678901234567890123456789012345678)::HUGEINT)::INTEGER
+FROM ducknng_query_rpc_mode(getvariable('u'),
+  'SELECT true AS b, (-128)::TINYINT AS i8, (-32768)::SMALLINT AS i16,
+          (-2147483648)::INTEGER AS i32, (-9223372036854775808)::BIGINT AS i64,
+          (12345678901234567890123456789012345678)::HUGEINT AS i128',
+  0::UBIGINT, 'ducknng_quack_batch')
+----
+1	1	1	1	1	1
+
+# --------------------------------------------------------------------------
+# Unsigned integers
+# --------------------------------------------------------------------------
+
+query IIIII
+SELECT (u8 = (255)::UTINYINT)::INTEGER, (u16 = (65535)::USMALLINT)::INTEGER,
+       (u32 = (4294967295)::UINTEGER)::INTEGER, (u64 = (18446744073709551615)::UBIGINT)::INTEGER,
+       (u128 = (98765432109876543210987654321098765432)::UHUGEINT)::INTEGER
+FROM ducknng_query_rpc_mode(getvariable('u'),
+  'SELECT (255)::UTINYINT AS u8, (65535)::USMALLINT AS u16, (4294967295)::UINTEGER AS u32,
+          (18446744073709551615)::UBIGINT AS u64,
+          (98765432109876543210987654321098765432)::UHUGEINT AS u128',
+  0::UBIGINT, 'arrow_ipc_stream')
+----
+1	1	1	1	1
+
+query IIIII
+SELECT (u8 = (255)::UTINYINT)::INTEGER, (u16 = (65535)::USMALLINT)::INTEGER,
+       (u32 = (4294967295)::UINTEGER)::INTEGER, (u64 = (18446744073709551615)::UBIGINT)::INTEGER,
+       (u128 = (98765432109876543210987654321098765432)::UHUGEINT)::INTEGER
+FROM ducknng_query_rpc_mode(getvariable('u'),
+  'SELECT (255)::UTINYINT AS u8, (65535)::USMALLINT AS u16, (4294967295)::UINTEGER AS u32,
+          (18446744073709551615)::UBIGINT AS u64,
+          (98765432109876543210987654321098765432)::UHUGEINT AS u128',
+  0::UBIGINT, 'ducknng_quack_batch')
+----
+1	1	1	1	1
+
+# --------------------------------------------------------------------------
+# Floating point + the four DECIMAL internal widths (16/32/64/128-bit)
+# --------------------------------------------------------------------------
+
+query IIIIII
+SELECT (f = (1.5)::FLOAT)::INTEGER, (d = (2.25)::DOUBLE)::INTEGER,
+       (dec16 = (12.34)::DECIMAL(4,2))::INTEGER, (dec32 = (1234.56)::DECIMAL(9,2))::INTEGER,
+       (dec64 = (12345678.9012)::DECIMAL(18,4))::INTEGER,
+       (dec128 = (1234567890123456.7890)::DECIMAL(38,10))::INTEGER
+FROM ducknng_query_rpc_mode(getvariable('u'),
+  'SELECT (1.5)::FLOAT AS f, (2.25)::DOUBLE AS d, (12.34)::DECIMAL(4,2) AS dec16,
+          (1234.56)::DECIMAL(9,2) AS dec32, (12345678.9012)::DECIMAL(18,4) AS dec64,
+          (1234567890123456.7890)::DECIMAL(38,10) AS dec128',
+  0::UBIGINT, 'arrow_ipc_stream')
+----
+1	1	1	1	1	1
+
+query IIIIII
+SELECT (f = (1.5)::FLOAT)::INTEGER, (d = (2.25)::DOUBLE)::INTEGER,
+       (dec16 = (12.34)::DECIMAL(4,2))::INTEGER, (dec32 = (1234.56)::DECIMAL(9,2))::INTEGER,
+       (dec64 = (12345678.9012)::DECIMAL(18,4))::INTEGER,
+       (dec128 = (1234567890123456.7890)::DECIMAL(38,10))::INTEGER
+FROM ducknng_query_rpc_mode(getvariable('u'),
+  'SELECT (1.5)::FLOAT AS f, (2.25)::DOUBLE AS d, (12.34)::DECIMAL(4,2) AS dec16,
+          (1234.56)::DECIMAL(9,2) AS dec32, (12345678.9012)::DECIMAL(18,4) AS dec64,
+          (1234567890123456.7890)::DECIMAL(38,10) AS dec128',
+  0::UBIGINT, 'ducknng_quack_batch')
+----
+1	1	1	1	1	1
+
+# --------------------------------------------------------------------------
+# VARCHAR (incl. multibyte UTF-8), BLOB, UUID
+# --------------------------------------------------------------------------
+
+query III
+SELECT (s = 'héllo → world')::INTEGER, (bl = '\xDE\xAD\xBE\xEF'::BLOB)::INTEGER,
+       (uu = '12345678-1234-5678-1234-567812345678'::UUID)::INTEGER
+FROM ducknng_query_rpc_mode(getvariable('u'),
+  'SELECT ''héllo → world'' AS s, ''\xDE\xAD\xBE\xEF''::BLOB AS bl,
+          ''12345678-1234-5678-1234-567812345678''::UUID AS uu',
+  0::UBIGINT, 'arrow_ipc_stream')
+----
+1	1	1
+
+query III
+SELECT (s = 'héllo → world')::INTEGER, (bl = '\xDE\xAD\xBE\xEF'::BLOB)::INTEGER,
+       (uu = '12345678-1234-5678-1234-567812345678'::UUID)::INTEGER
+FROM ducknng_query_rpc_mode(getvariable('u'),
+  'SELECT ''héllo → world'' AS s, ''\xDE\xAD\xBE\xEF''::BLOB AS bl,
+          ''12345678-1234-5678-1234-567812345678''::UUID AS uu',
+  0::UBIGINT, 'ducknng_quack_batch')
+----
+1	1	1
+
+# --------------------------------------------------------------------------
+# Temporal family + INTERVAL: date, time, time_ns, time_tz, timestamp and the
+# s/ms/ns/tz variants. typeof() is asserted so a unit/precision drift fails too.
+# --------------------------------------------------------------------------
+
+query IIIIIIIIII
+SELECT (dt = DATE '2024-01-02')::INTEGER,
+       (tm = TIME '03:04:05.123456')::INTEGER,
+       (tmns = '03:04:05.123456789'::TIME_NS AND typeof(tmns) = 'TIME_NS')::INTEGER,
+       (tmtz = '03:04:05+02'::TIMETZ)::INTEGER,
+       (ts = TIMESTAMP '2024-01-02 03:04:05.123456')::INTEGER,
+       (tss = '2024-01-02 03:04:05'::TIMESTAMP_S AND typeof(tss) = 'TIMESTAMP_S')::INTEGER,
+       (tsms = '2024-01-02 03:04:05.123'::TIMESTAMP_MS AND typeof(tsms) = 'TIMESTAMP_MS')::INTEGER,
+       (tsns = '2024-01-02 03:04:05.123456789'::TIMESTAMP_NS AND typeof(tsns) = 'TIMESTAMP_NS')::INTEGER,
+       (tstz = '2024-01-02 03:04:05.123456+00'::TIMESTAMPTZ)::INTEGER,
+       (iv = INTERVAL '1 year 2 months 3 days 04:05:06')::INTEGER
+FROM ducknng_query_rpc_mode(getvariable('u'),
+  'SELECT DATE ''2024-01-02'' AS dt, TIME ''03:04:05.123456'' AS tm,
+          ''03:04:05.123456789''::TIME_NS AS tmns, ''03:04:05+02''::TIMETZ AS tmtz,
+          TIMESTAMP ''2024-01-02 03:04:05.123456'' AS ts,
+          ''2024-01-02 03:04:05''::TIMESTAMP_S AS tss,
+          ''2024-01-02 03:04:05.123''::TIMESTAMP_MS AS tsms,
+          ''2024-01-02 03:04:05.123456789''::TIMESTAMP_NS AS tsns,
+          ''2024-01-02 03:04:05.123456+00''::TIMESTAMPTZ AS tstz,
+          INTERVAL ''1 year 2 months 3 days 04:05:06'' AS iv',
+  0::UBIGINT, 'arrow_ipc_stream')
+----
+1	1	1	1	1	1	1	1	1	1
+
+query IIIIIIIIII
+SELECT (dt = DATE '2024-01-02')::INTEGER,
+       (tm = TIME '03:04:05.123456')::INTEGER,
+       (tmns = '03:04:05.123456789'::TIME_NS AND typeof(tmns) = 'TIME_NS')::INTEGER,
+       (tmtz = '03:04:05+02'::TIMETZ)::INTEGER,
+       (ts = TIMESTAMP '2024-01-02 03:04:05.123456')::INTEGER,
+       (tss = '2024-01-02 03:04:05'::TIMESTAMP_S AND typeof(tss) = 'TIMESTAMP_S')::INTEGER,
+       (tsms = '2024-01-02 03:04:05.123'::TIMESTAMP_MS AND typeof(tsms) = 'TIMESTAMP_MS')::INTEGER,
+       (tsns = '2024-01-02 03:04:05.123456789'::TIMESTAMP_NS AND typeof(tsns) = 'TIMESTAMP_NS')::INTEGER,
+       (tstz = '2024-01-02 03:04:05.123456+00'::TIMESTAMPTZ)::INTEGER,
+       (iv = INTERVAL '1 year 2 months 3 days 04:05:06')::INTEGER
+FROM ducknng_query_rpc_mode(getvariable('u'),
+  'SELECT DATE ''2024-01-02'' AS dt, TIME ''03:04:05.123456'' AS tm,
+          ''03:04:05.123456789''::TIME_NS AS tmns, ''03:04:05+02''::TIMETZ AS tmtz,
+          TIMESTAMP ''2024-01-02 03:04:05.123456'' AS ts,
+          ''2024-01-02 03:04:05''::TIMESTAMP_S AS tss,
+          ''2024-01-02 03:04:05.123''::TIMESTAMP_MS AS tsms,
+          ''2024-01-02 03:04:05.123456789''::TIMESTAMP_NS AS tsns,
+          ''2024-01-02 03:04:05.123456+00''::TIMESTAMPTZ AS tstz,
+          INTERVAL ''1 year 2 months 3 days 04:05:06'' AS iv',
+  0::UBIGINT, 'ducknng_quack_batch')
+----
+1	1	1	1	1	1	1	1	1	1
+
+# --------------------------------------------------------------------------
+# NULL values across a representative spread of types (both modes).
+# --------------------------------------------------------------------------
+
+query IIIIIII
+SELECT (i IS NULL)::INTEGER, (s IS NULL)::INTEGER, (d IS NULL)::INTEGER,
+       (ts IS NULL)::INTEGER, (bl IS NULL)::INTEGER, (uu IS NULL)::INTEGER, (dec IS NULL)::INTEGER
+FROM ducknng_query_rpc_mode(getvariable('u'),
+  'SELECT NULL::INTEGER AS i, NULL::VARCHAR AS s, NULL::DOUBLE AS d, NULL::TIMESTAMP AS ts,
+          NULL::BLOB AS bl, NULL::UUID AS uu, NULL::DECIMAL(18,4) AS dec',
+  0::UBIGINT, 'arrow_ipc_stream')
+----
+1	1	1	1	1	1	1
+
+query IIIIIII
+SELECT (i IS NULL)::INTEGER, (s IS NULL)::INTEGER, (d IS NULL)::INTEGER,
+       (ts IS NULL)::INTEGER, (bl IS NULL)::INTEGER, (uu IS NULL)::INTEGER, (dec IS NULL)::INTEGER
+FROM ducknng_query_rpc_mode(getvariable('u'),
+  'SELECT NULL::INTEGER AS i, NULL::VARCHAR AS s, NULL::DOUBLE AS d, NULL::TIMESTAMP AS ts,
+          NULL::BLOB AS bl, NULL::UUID AS uu, NULL::DECIMAL(18,4) AS dec',
+  0::UBIGINT, 'ducknng_quack_batch')
+----
+1	1	1	1	1	1	1
+
+# Multi-row NULL interleaving: validity masks must track per row, not per chunk.
+query III
+SELECT count(*)::INTEGER, count(i)::INTEGER, (sum(CASE WHEN i IS NULL THEN 1 ELSE 0 END))::INTEGER
+FROM ducknng_query_rpc_mode(getvariable('u'),
+  'SELECT * FROM (VALUES (1),(NULL),(3),(NULL),(5)) AS t(i)',
+  0::UBIGINT, 'ducknng_quack_batch')
+----
+5	3	2
+
+# --------------------------------------------------------------------------
+# Nested / recursive types (Arrow path). Lists, structs, maps, unions, list of
+# struct, struct of list, list of list, and nulls nested inside them.
+# --------------------------------------------------------------------------
+
+# LIST with an interior NULL element.
+query III
+SELECT (xs[1] = 1)::INTEGER, (xs[2] IS NULL)::INTEGER, (xs[3] = 3)::INTEGER
+FROM ducknng_query_rpc_mode(getvariable('u'),
+  'SELECT [1, NULL, 3]::INTEGER[] AS xs', 0::UBIGINT, 'arrow_ipc_stream')
+----
+1	1	1
+
+# STRUCT with mixed fields.
+query II
+SELECT (st.a = 7)::INTEGER, (st.b = 'bee')::INTEGER
+FROM ducknng_query_rpc_mode(getvariable('u'),
+  'SELECT {''a'': 7::INTEGER, ''b'': ''bee''} AS st', 0::UBIGINT, 'arrow_ipc_stream')
+----
+1	1
+
+# A wholly-NULL struct and a struct with a NULL field nested inside a list.
+query IIIII
+SELECT (st IS NULL)::INTEGER, (st.a IS NULL)::INTEGER, (xs[1] IS NULL)::INTEGER,
+       (xs[1].a IS NULL)::INTEGER, (xs[2].b IS NULL)::INTEGER
+FROM ducknng_query_rpc_mode(getvariable('u'),
+  'SELECT NULL::STRUCT(a INTEGER, b VARCHAR) AS st,
+          [NULL::STRUCT(a INTEGER, b VARCHAR), {''a'': 2::INTEGER, ''b'': NULL}] AS xs',
+  0::UBIGINT, 'arrow_ipc_stream')
+----
+1	1	1	1	1
+
+# STRUCT containing a LIST, and recursive LIST of LIST.
+query IIIII
+SELECT (sl.xs = [1,2,3]::INTEGER[])::INTEGER, (sl.name = 'q')::INTEGER,
+       (ll[1] = [1,2]::INTEGER[])::INTEGER, (ll[2] = [3]::INTEGER[])::INTEGER,
+       (len(ll) = 2)::INTEGER
+FROM ducknng_query_rpc_mode(getvariable('u'),
+  'SELECT {''xs'': [1,2,3]::INTEGER[], ''name'': ''q''} AS sl,
+          [[1,2],[3]]::INTEGER[][] AS ll',
+  0::UBIGINT, 'arrow_ipc_stream')
+----
+1	1	1	1	1
+
+# MAP round-trip (keys and values).
+query II
+SELECT (list_sort(map_keys(m)) = ['k1','k2'])::INTEGER,
+       (list_sort(map_values(m)) = [1,2])::INTEGER
+FROM ducknng_query_rpc_mode(getvariable('u'),
+  'SELECT MAP {''k1'': 1, ''k2'': 2}::MAP(VARCHAR, INTEGER) AS m',
+  0::UBIGINT, 'arrow_ipc_stream')
+----
+1	1
+
+# UNION round-trip: active member value and tag.
+query II
+SELECT (union_extract(v, 'num') = 4)::INTEGER, (union_tag(v) = 'num')::INTEGER
+FROM ducknng_query_rpc_mode(getvariable('u'),
+  'SELECT union_value(num := 4::INTEGER)::UNION(num INTEGER, str VARCHAR) AS v',
+  0::UBIGINT, 'arrow_ipc_stream')
+----
+1	1
+
+# --------------------------------------------------------------------------
+# Nested / recursive types (quack_batch path). The quack codec now carries
+# recursive LIST/STRUCT/MAP/UNION/ARRAY types whole-chunk, so each Arrow case
+# above has an identical sibling over the ducknng_quack_batch wire format.
+# --------------------------------------------------------------------------
+
+# LIST with an interior NULL element.
+query III
+SELECT (xs[1] = 1)::INTEGER, (xs[2] IS NULL)::INTEGER, (xs[3] = 3)::INTEGER
+FROM ducknng_query_rpc_mode(getvariable('u'),
+  'SELECT [1, NULL, 3]::INTEGER[] AS xs', 0::UBIGINT, 'ducknng_quack_batch')
+----
+1	1	1
+
+# STRUCT with mixed fields.
+query II
+SELECT (st.a = 7)::INTEGER, (st.b = 'bee')::INTEGER
+FROM ducknng_query_rpc_mode(getvariable('u'),
+  'SELECT {''a'': 7::INTEGER, ''b'': ''bee''} AS st', 0::UBIGINT, 'ducknng_quack_batch')
+----
+1	1
+
+# A wholly-NULL struct and a struct with a NULL field nested inside a list.
+query IIIII
+SELECT (st IS NULL)::INTEGER, (st.a IS NULL)::INTEGER, (xs[1] IS NULL)::INTEGER,
+       (xs[1].a IS NULL)::INTEGER, (xs[2].b IS NULL)::INTEGER
+FROM ducknng_query_rpc_mode(getvariable('u'),
+  'SELECT NULL::STRUCT(a INTEGER, b VARCHAR) AS st,
+          [NULL::STRUCT(a INTEGER, b VARCHAR), {''a'': 2::INTEGER, ''b'': NULL}] AS xs',
+  0::UBIGINT, 'ducknng_quack_batch')
+----
+1	1	1	1	1
+
+# STRUCT containing a LIST, and recursive LIST of LIST.
+query IIIII
+SELECT (sl.xs = [1,2,3]::INTEGER[])::INTEGER, (sl.name = 'q')::INTEGER,
+       (ll[1] = [1,2]::INTEGER[])::INTEGER, (ll[2] = [3]::INTEGER[])::INTEGER,
+       (len(ll) = 2)::INTEGER
+FROM ducknng_query_rpc_mode(getvariable('u'),
+  'SELECT {''xs'': [1,2,3]::INTEGER[], ''name'': ''q''} AS sl,
+          [[1,2],[3]]::INTEGER[][] AS ll',
+  0::UBIGINT, 'ducknng_quack_batch')
+----
+1	1	1	1	1
+
+# MAP round-trip (keys and values).
+query II
+SELECT (list_sort(map_keys(m)) = ['k1','k2'])::INTEGER,
+       (list_sort(map_values(m)) = [1,2])::INTEGER
+FROM ducknng_query_rpc_mode(getvariable('u'),
+  'SELECT MAP {''k1'': 1, ''k2'': 2}::MAP(VARCHAR, INTEGER) AS m',
+  0::UBIGINT, 'ducknng_quack_batch')
+----
+1	1
+
+# UNION round-trip: active member value and tag.
+query II
+SELECT (union_extract(v, 'num') = 4)::INTEGER, (union_tag(v) = 'num')::INTEGER
+FROM ducknng_query_rpc_mode(getvariable('u'),
+  'SELECT union_value(num := 4::INTEGER)::UNION(num INTEGER, str VARCHAR) AS v',
+  0::UBIGINT, 'ducknng_quack_batch')
+----
+1	1
+
+# Fixed-size ARRAY round-trip.
+query III
+SELECT (a[1] = 10)::INTEGER, (a[2] = 20)::INTEGER, (a[3] = 30)::INTEGER
+FROM ducknng_query_rpc_mode(getvariable('u'),
+  'SELECT [10, 20, 30]::INTEGER[3] AS a', 0::UBIGINT, 'ducknng_quack_batch')
+----
+1	1	1
+
+# Multiple DataChunks in one result list prove that each canonical chunk closes
+# its DataChunkWrapper independently before the next nullable list element.
+query II
+SELECT count(*), sum(i)
+FROM ducknng_query_rpc_mode(
+  getvariable('u'),
+  'SELECT i FROM range(5000) t(i)',
+  0::UBIGINT,
+  'ducknng_quack_batch'
+)
+----
+5000	12497500
+
+# --------------------------------------------------------------------------
+# Deep-nesting guard. The Arrow IPC schema is a FlatBuffer whose verifier the
+# consumer runs is exponential in nesting depth, so a sufficiently deep result
+# would stall the peer's decode forever. A moderately deep (12) result must
+# still round-trip; a result past the producer's nesting limit must surface a
+# clean error rather than hang the process.
+# --------------------------------------------------------------------------
+
+query I
+SELECT (xs[1][1][1][1][1][1][1][1][1][1][1][1] = 1)::INTEGER
+FROM ducknng_query_rpc_mode(getvariable('u'),
+  'SELECT [[[[[[[[[[[[1]]]]]]]]]]]]::INTEGER[][][][][][][][][][][][] AS xs',
+  0::UBIGINT, 'arrow_ipc_stream')
+----
+1
+
+statement error
+SELECT * FROM ducknng_query_rpc_mode(getvariable('u'),
+  'SELECT [[[[[[[[[[[[[[[[[[[[1]]]]]]]]]]]]]]]]]]]]::INTEGER[][][][][][][][][][][][][][][][][][][][] AS xs',
+  0::UBIGINT, 'arrow_ipc_stream')
+----
+nesting
+
+statement ok
+SELECT ducknng_stop_server('typ_rt');

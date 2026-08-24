@@ -1,0 +1,71 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+services:
+  verify:
+    image: ${REPO}:${NANOARROW_PLATFORM}-${NANOARROW_ARCH}
+    build:
+      context: .
+      cache_from:
+        - ${REPO}:${NANOARROW_PLATFORM}-${NANOARROW_ARCH}
+      dockerfile: ci/docker/${NANOARROW_PLATFORM}.dockerfile
+      args:
+        NANOARROW_ARCH: ${NANOARROW_ARCH}
+    volumes:
+      - ${NANOARROW_DOCKER_SOURCE_DIR}:/nanoarrow
+    command: "/bin/bash /nanoarrow/dev/release/verify-release-candidate.sh $NANOARROW_VERIFY_ARGS"
+
+  coverage:
+    image: ${REPO}:ubuntu
+    volumes:
+      # Don't mix the "dev tools" and "source" checkouts
+      - ./ci/scripts/coverage.sh:/coverage.sh
+      - ${NANOARROW_DOCKER_SOURCE_DIR}:/nanoarrow
+    command: "/bin/bash /coverage.sh /nanoarrow"
+
+  docs:
+    image: ${REPO}:ubuntu
+    volumes:
+      # Don't mix the "dev tools" and "source" checkouts
+      - ./ci/scripts/build-docs.sh:/build-docs.sh
+      - ${NANOARROW_DOCKER_SOURCE_DIR}:/nanoarrow
+    command: "/bin/bash /build-docs.sh /nanoarrow"
+
+  integration:
+    # Don't cache here (building the image takes about the same amount of time
+    # as downloading on CI)
+    build:
+      context: .
+      dockerfile: ci/docker/integration.dockerfile
+    volumes:
+      - ${NANOARROW_DOCKER_SOURCE_DIR}:/arrow-integration/nanoarrow
+    environment:
+      ARCHERY_INTEGRATION_TARGET_IMPLEMENTATIONS: "nanoarrow"
+      ARCHERY_INTEGRATION_WITH_RUST: "1"
+    # Activate conda environment directly instead of using conda run, which has issues with
+    # environment variables being inherited from base instead of the target environment.
+    # Also add cargo/bin back to PATH since conda activation may not include it.
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        source /opt/conda/etc/profile.d/conda.sh && conda activate arrow && export PATH=/root/.cargo/bin:$$PATH &&
+        echo '::group::Build nanoarrow' &&
+        /arrow-integration/ci/scripts/nanoarrow_build.sh /arrow-integration /build &&
+        echo '::endgroup::' &&
+        echo '::group::Run integration tests' &&
+        /arrow-integration/ci/scripts/integration_arrow.sh /arrow-integration /build &&
+        echo '::endgroup::'

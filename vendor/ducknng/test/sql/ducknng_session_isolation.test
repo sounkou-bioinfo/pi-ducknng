@@ -1,0 +1,81 @@
+# name: test/sql/ducknng_session_isolation.test
+# group: [ducknng]
+#
+# Pooled DuckDB connections are reused across query sessions. This test pins the
+# guarantee that connection-local session state (here a TEMP table) created in
+# one query session does NOT leak into the next session that reuses the same
+# pooled connection. The reset-on-release in
+# ducknng_service_release_execution_connection drops connection-local temporary
+# tables and views before the slot is reused; without it the second session sees
+# iso_t and this test fails.
+#
+# This is also why multi-tenancy is intentionally NOT a substrate concept:
+# because every query session gets an isolated, reset connection, an application
+# can route each tenant's work through its own session without the server
+# leaking one tenant's temp state into another's. Tenancy stays an application
+# concern; the substrate only guarantees the isolation it rests on.
+
+require ducknng
+
+statement ok
+SELECT ducknng_start_server('sess_iso', 'ipc:///tmp/ducknng_session_isolation.ipc', 1, 134217728, 300000, 0::UBIGINT);
+
+statement ok
+SELECT ducknng_register_exec_method();
+
+# Session 1 creates a connection-local TEMP table and reads it back, then closes
+# (releasing its pooled connection). DDL is idempotent because DuckDB may bind
+# the table function more than once.
+query I
+SELECT c FROM ducknng_query_rpc_mode('ipc:///tmp/ducknng_session_isolation.ipc',
+  'CREATE TEMP TABLE IF NOT EXISTS iso_t AS SELECT * FROM (VALUES (1),(2),(3)) s(x);
+   SELECT count(*)::INTEGER AS c FROM iso_t',
+  0::UBIGINT, 'arrow_ipc_stream')
+----
+3
+
+# Subsequent sessions reuse the freed pooled connection. The temp table must be
+# gone: the slot was reset on release. Each check is one top-level remote query
+# (one query session, deterministic slot reuse); repeated so it lands on the
+# recycled slot more than once. Any session seeing iso_t returns non-zero.
+query I
+SELECT n FROM ducknng_query_rpc_mode('ipc:///tmp/ducknng_session_isolation.ipc',
+  'SELECT count(*)::INTEGER AS n FROM duckdb_tables() WHERE table_name = ''iso_t''',
+  0::UBIGINT, 'arrow_ipc_stream')
+----
+0
+
+query I
+SELECT n FROM ducknng_query_rpc_mode('ipc:///tmp/ducknng_session_isolation.ipc',
+  'SELECT count(*)::INTEGER AS n FROM duckdb_tables() WHERE table_name = ''iso_t''',
+  0::UBIGINT, 'arrow_ipc_stream')
+----
+0
+
+query I
+SELECT n FROM ducknng_query_rpc_mode('ipc:///tmp/ducknng_session_isolation.ipc',
+  'SELECT count(*)::INTEGER AS n FROM duckdb_tables() WHERE table_name = ''iso_t''',
+  0::UBIGINT, 'arrow_ipc_stream')
+----
+0
+
+# The exec-path execution model is selectable and reported. Query sessions are
+# isolated regardless of this setting; the model governs the run_rpc exec path.
+statement ok
+SELECT ducknng_set_service_execution_model('sess_iso', 'request_connection');
+
+query T
+SELECT execution_model FROM ducknng_list_servers() WHERE name = 'sess_iso'
+----
+request_connection
+
+statement ok
+SELECT ducknng_set_service_execution_model('sess_iso', 'shared_serialized_connection');
+
+query T
+SELECT execution_model FROM ducknng_list_servers() WHERE name = 'sess_iso'
+----
+shared_serialized_connection
+
+statement ok
+SELECT ducknng_stop_server('sess_iso');
