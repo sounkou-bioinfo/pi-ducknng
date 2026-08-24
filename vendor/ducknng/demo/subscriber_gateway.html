@@ -1,0 +1,1741 @@
+<!DOCTYPE html>
+
+<html xmlns="http://www.w3.org/1999/xhtml">
+
+<head>
+
+<meta charset="utf-8">
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+<meta name="generator" content="pandoc" />
+<meta name="viewport" content="width=device-width, initial-scale=1">
+
+<style type="text/css">
+@font-face {
+font-family: octicons-link;
+src: url(data:font/woff;charset=utf-8;base64,d09GRgABAAAAAAZwABAAAAAACFQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABEU0lHAAAGaAAAAAgAAAAIAAAAAUdTVUIAAAZcAAAACgAAAAoAAQAAT1MvMgAAAyQAAABJAAAAYFYEU3RjbWFwAAADcAAAAEUAAACAAJThvmN2dCAAAATkAAAABAAAAAQAAAAAZnBnbQAAA7gAAACyAAABCUM+8IhnYXNwAAAGTAAAABAAAAAQABoAI2dseWYAAAFsAAABPAAAAZwcEq9taGVhZAAAAsgAAAA0AAAANgh4a91oaGVhAAADCAAAABoAAAAkCA8DRGhtdHgAAAL8AAAADAAAAAwGAACfbG9jYQAAAsAAAAAIAAAACABiATBtYXhwAAACqAAAABgAAAAgAA8ASm5hbWUAAAToAAABQgAAAlXu73sOcG9zdAAABiwAAAAeAAAAME3QpOBwcmVwAAAEbAAAAHYAAAB/aFGpk3jaTY6xa8JAGMW/O62BDi0tJLYQincXEypYIiGJjSgHniQ6umTsUEyLm5BV6NDBP8Tpts6F0v+k/0an2i+itHDw3v2+9+DBKTzsJNnWJNTgHEy4BgG3EMI9DCEDOGEXzDADU5hBKMIgNPZqoD3SilVaXZCER3/I7AtxEJLtzzuZfI+VVkprxTlXShWKb3TBecG11rwoNlmmn1P2WYcJczl32etSpKnziC7lQyWe1smVPy/Lt7Kc+0vWY/gAgIIEqAN9we0pwKXreiMasxvabDQMM4riO+qxM2ogwDGOZTXxwxDiycQIcoYFBLj5K3EIaSctAq2kTYiw+ymhce7vwM9jSqO8JyVd5RH9gyTt2+J/yUmYlIR0s04n6+7Vm1ozezUeLEaUjhaDSuXHwVRgvLJn1tQ7xiuVv/ocTRF42mNgZGBgYGbwZOBiAAFGJBIMAAizAFoAAABiAGIAznjaY2BkYGAA4in8zwXi+W2+MjCzMIDApSwvXzC97Z4Ig8N/BxYGZgcgl52BCSQKAA3jCV8CAABfAAAAAAQAAEB42mNgZGBg4f3vACQZQABIMjKgAmYAKEgBXgAAeNpjYGY6wTiBgZWBg2kmUxoDA4MPhGZMYzBi1AHygVLYQUCaawqDA4PChxhmh/8ODDEsvAwHgMKMIDnGL0x7gJQCAwMAJd4MFwAAAHjaY2BgYGaA4DAGRgYQkAHyGMF8NgYrIM3JIAGVYYDT+AEjAwuDFpBmA9KMDEwMCh9i/v8H8sH0/4dQc1iAmAkALaUKLgAAAHjaTY9LDsIgEIbtgqHUPpDi3gPoBVyRTmTddOmqTXThEXqrob2gQ1FjwpDvfwCBdmdXC5AVKFu3e5MfNFJ29KTQT48Ob9/lqYwOGZxeUelN2U2R6+cArgtCJpauW7UQBqnFkUsjAY/kOU1cP+DAgvxwn1chZDwUbd6CFimGXwzwF6tPbFIcjEl+vvmM/byA48e6tWrKArm4ZJlCbdsrxksL1AwWn/yBSJKpYbq8AXaaTb8AAHja28jAwOC00ZrBeQNDQOWO//sdBBgYGRiYWYAEELEwMTE4uzo5Zzo5b2BxdnFOcALxNjA6b2ByTswC8jYwg0VlNuoCTWAMqNzMzsoK1rEhNqByEyerg5PMJlYuVueETKcd/89uBpnpvIEVomeHLoMsAAe1Id4AAAAAAAB42oWQT07CQBTGv0JBhagk7HQzKxca2sJCE1hDt4QF+9JOS0nbaaYDCQfwCJ7Au3AHj+LO13FMmm6cl7785vven0kBjHCBhfpYuNa5Ph1c0e2Xu3jEvWG7UdPDLZ4N92nOm+EBXuAbHmIMSRMs+4aUEd4Nd3CHD8NdvOLTsA2GL8M9PODbcL+hD7C1xoaHeLJSEao0FEW14ckxC+TU8TxvsY6X0eLPmRhry2WVioLpkrbp84LLQPGI7c6sOiUzpWIWS5GzlSgUzzLBSikOPFTOXqly7rqx0Z1Q5BAIoZBSFihQYQOOBEdkCOgXTOHA07HAGjGWiIjaPZNW13/+lm6S9FT7rLHFJ6fQbkATOG1j2OFMucKJJsxIVfQORl+9Jyda6Sl1dUYhSCm1dyClfoeDve4qMYdLEbfqHf3O/AdDumsjAAB42mNgYoAAZQYjBmyAGYQZmdhL8zLdDEydARfoAqIAAAABAAMABwAKABMAB///AA8AAQAAAAAAAAAAAAAAAAABAAAAAA==) format('woff');
+}
+body {
+-webkit-text-size-adjust: 100%;
+text-size-adjust: 100%;
+color: #333;
+font-family: "Helvetica Neue", Helvetica, "Segoe UI", Arial, freesans, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
+font-size: 16px;
+line-height: 1.6;
+word-wrap: break-word;
+}
+a {
+background-color: transparent;
+}
+a:active,
+a:hover {
+outline: 0;
+}
+strong {
+font-weight: bold;
+}
+h1 {
+font-size: 2em;
+margin: 0.67em 0;
+}
+img {
+border: 0;
+}
+hr {
+box-sizing: content-box;
+height: 0;
+}
+pre {
+overflow: auto;
+}
+code,
+kbd,
+pre {
+font-family: monospace, monospace;
+font-size: 1em;
+}
+input {
+color: inherit;
+font: inherit;
+margin: 0;
+}
+html input[disabled] {
+cursor: default;
+}
+input {
+line-height: normal;
+}
+input[type="checkbox"] {
+box-sizing: border-box;
+padding: 0;
+}
+table {
+border-collapse: collapse;
+border-spacing: 0;
+}
+td,
+th {
+padding: 0;
+}
+* {
+box-sizing: border-box;
+}
+input {
+font: 13px / 1.4 Helvetica, arial, nimbussansl, liberationsans, freesans, clean, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
+}
+a {
+color: #4078c0;
+text-decoration: none;
+}
+a:hover,
+a:active {
+text-decoration: underline;
+}
+hr {
+height: 0;
+margin: 15px 0;
+overflow: hidden;
+background: transparent;
+border: 0;
+border-bottom: 1px solid #ddd;
+}
+hr:before {
+display: table;
+content: "";
+}
+hr:after {
+display: table;
+clear: both;
+content: "";
+}
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+margin-top: 15px;
+margin-bottom: 15px;
+line-height: 1.1;
+}
+h1 {
+font-size: 30px;
+}
+h2 {
+font-size: 21px;
+}
+h3 {
+font-size: 16px;
+}
+h4 {
+font-size: 14px;
+}
+h5 {
+font-size: 12px;
+}
+h6 {
+font-size: 11px;
+}
+blockquote {
+margin: 0;
+}
+ul,
+ol {
+padding: 0;
+margin-top: 0;
+margin-bottom: 0;
+}
+ol ol,
+ul ol {
+list-style-type: lower-roman;
+}
+ul ul ol,
+ul ol ol,
+ol ul ol,
+ol ol ol {
+list-style-type: lower-alpha;
+}
+dd {
+margin-left: 0;
+}
+code {
+font-family: Consolas, "Liberation Mono", Menlo, Courier, monospace;
+font-size: 12px;
+}
+pre {
+margin-top: 0;
+margin-bottom: 0;
+font: 12px Consolas, "Liberation Mono", Menlo, Courier, monospace;
+}
+.select::-ms-expand {
+opacity: 0;
+}
+.octicon {
+font: normal normal normal 16px/1 octicons-link;
+display: inline-block;
+text-decoration: none;
+text-rendering: auto;
+-webkit-font-smoothing: antialiased;
+-moz-osx-font-smoothing: grayscale;
+-webkit-user-select: none;
+-moz-user-select: none;
+-ms-user-select: none;
+user-select: none;
+}
+.octicon-link:before {
+content: '\f05c';
+}
+.markdown-body:before {
+display: table;
+content: "";
+}
+.markdown-body:after {
+display: table;
+clear: both;
+content: "";
+}
+.markdown-body>*:first-child {
+margin-top: 0 !important;
+}
+.markdown-body>*:last-child {
+margin-bottom: 0 !important;
+}
+a:not([href]) {
+color: inherit;
+text-decoration: none;
+}
+.anchor {
+display: inline-block;
+padding-right: 2px;
+margin-left: -18px;
+}
+.anchor:focus {
+outline: none;
+}
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+margin-top: 1em;
+margin-bottom: 16px;
+font-weight: bold;
+line-height: 1.4;
+}
+h1 .octicon-link,
+h2 .octicon-link,
+h3 .octicon-link,
+h4 .octicon-link,
+h5 .octicon-link,
+h6 .octicon-link {
+color: #000;
+vertical-align: middle;
+visibility: hidden;
+}
+h1:hover .anchor,
+h2:hover .anchor,
+h3:hover .anchor,
+h4:hover .anchor,
+h5:hover .anchor,
+h6:hover .anchor {
+text-decoration: none;
+}
+h1:hover .anchor .octicon-link,
+h2:hover .anchor .octicon-link,
+h3:hover .anchor .octicon-link,
+h4:hover .anchor .octicon-link,
+h5:hover .anchor .octicon-link,
+h6:hover .anchor .octicon-link {
+visibility: visible;
+}
+h1 {
+padding-bottom: 0.3em;
+font-size: 2.25em;
+line-height: 1.2;
+border-bottom: 1px solid #eee;
+}
+h1 .anchor {
+line-height: 1;
+}
+h2 {
+padding-bottom: 0.3em;
+font-size: 1.75em;
+line-height: 1.225;
+border-bottom: 1px solid #eee;
+}
+h2 .anchor {
+line-height: 1;
+}
+h3 {
+font-size: 1.5em;
+line-height: 1.43;
+}
+h3 .anchor {
+line-height: 1.2;
+}
+h4 {
+font-size: 1.25em;
+}
+h4 .anchor {
+line-height: 1.2;
+}
+h5 {
+font-size: 1em;
+}
+h5 .anchor {
+line-height: 1.1;
+}
+h6 {
+font-size: 1em;
+color: #777;
+}
+h6 .anchor {
+line-height: 1.1;
+}
+p,
+blockquote,
+ul,
+ol,
+dl,
+table,
+pre {
+margin-top: 0;
+margin-bottom: 16px;
+}
+hr {
+height: 4px;
+padding: 0;
+margin: 16px 0;
+background-color: #e7e7e7;
+border: 0 none;
+}
+ul,
+ol {
+padding-left: 2em;
+}
+ul ul,
+ul ol,
+ol ol,
+ol ul {
+margin-top: 0;
+margin-bottom: 0;
+}
+li>p {
+margin-top: 16px;
+}
+dl {
+padding: 0;
+}
+dl dt {
+padding: 0;
+margin-top: 16px;
+font-size: 1em;
+font-style: italic;
+font-weight: bold;
+}
+dl dd {
+padding: 0 16px;
+margin-bottom: 16px;
+}
+blockquote {
+padding: 0 15px;
+color: #777;
+border-left: 4px solid #ddd;
+}
+blockquote>:first-child {
+margin-top: 0;
+}
+blockquote>:last-child {
+margin-bottom: 0;
+}
+table {
+display: block;
+width: 100%;
+overflow: auto;
+word-break: normal;
+word-break: keep-all;
+}
+table th {
+font-weight: bold;
+}
+table th,
+table td {
+padding: 6px 13px;
+border: 1px solid #ddd;
+}
+table tr {
+background-color: #fff;
+border-top: 1px solid #ccc;
+}
+table tr:nth-child(2n) {
+background-color: #f8f8f8;
+}
+img {
+max-width: 100%;
+box-sizing: content-box;
+background-color: #fff;
+}
+code {
+padding: 0;
+padding-top: 0.2em;
+padding-bottom: 0.2em;
+margin: 0;
+font-size: 85%;
+background-color: rgba(0,0,0,0.04);
+border-radius: 3px;
+}
+code:before,
+code:after {
+letter-spacing: -0.2em;
+content: "\00a0";
+}
+pre>code {
+padding: 0;
+margin: 0;
+font-size: 100%;
+word-break: normal;
+white-space: pre;
+background: transparent;
+border: 0;
+}
+.highlight {
+margin-bottom: 16px;
+}
+.highlight pre,
+pre {
+padding: 16px;
+overflow: auto;
+font-size: 85%;
+line-height: 1.45;
+background-color: #f7f7f7;
+border-radius: 3px;
+}
+.highlight pre {
+margin-bottom: 0;
+word-break: normal;
+}
+pre {
+word-wrap: normal;
+}
+pre code {
+display: inline;
+max-width: initial;
+padding: 0;
+margin: 0;
+overflow: initial;
+line-height: inherit;
+word-wrap: normal;
+background-color: transparent;
+border: 0;
+}
+pre code:before,
+pre code:after {
+content: normal;
+}
+kbd {
+display: inline-block;
+padding: 3px 5px;
+font-size: 11px;
+line-height: 10px;
+color: #555;
+vertical-align: middle;
+background-color: #fcfcfc;
+border: solid 1px #ccc;
+border-bottom-color: #bbb;
+border-radius: 3px;
+box-shadow: inset 0 -1px 0 #bbb;
+}
+.pl-c {
+color: #969896;
+}
+.pl-c1,
+.pl-s .pl-v {
+color: #0086b3;
+}
+.pl-e,
+.pl-en {
+color: #795da3;
+}
+.pl-s .pl-s1,
+.pl-smi {
+color: #333;
+}
+.pl-ent {
+color: #63a35c;
+}
+.pl-k {
+color: #a71d5d;
+}
+.pl-pds,
+.pl-s,
+.pl-s .pl-pse .pl-s1,
+.pl-sr,
+.pl-sr .pl-cce,
+.pl-sr .pl-sra,
+.pl-sr .pl-sre {
+color: #183691;
+}
+.pl-v {
+color: #ed6a43;
+}
+.pl-id {
+color: #b52a1d;
+}
+.pl-ii {
+background-color: #b52a1d;
+color: #f8f8f8;
+}
+.pl-sr .pl-cce {
+color: #63a35c;
+font-weight: bold;
+}
+.pl-ml {
+color: #693a17;
+}
+.pl-mh,
+.pl-mh .pl-en,
+.pl-ms {
+color: #1d3e81;
+font-weight: bold;
+}
+.pl-mq {
+color: #008080;
+}
+.pl-mi {
+color: #333;
+font-style: italic;
+}
+.pl-mb {
+color: #333;
+font-weight: bold;
+}
+.pl-md {
+background-color: #ffecec;
+color: #bd2c00;
+}
+.pl-mi1 {
+background-color: #eaffea;
+color: #55a532;
+}
+.pl-mdr {
+color: #795da3;
+font-weight: bold;
+}
+.pl-mo {
+color: #1d3e81;
+}
+kbd {
+display: inline-block;
+padding: 3px 5px;
+font: 11px Consolas, "Liberation Mono", Menlo, Courier, monospace;
+line-height: 10px;
+color: #555;
+vertical-align: middle;
+background-color: #fcfcfc;
+border: solid 1px #ccc;
+border-bottom-color: #bbb;
+border-radius: 3px;
+box-shadow: inset 0 -1px 0 #bbb;
+}
+.task-list-item {
+list-style-type: none;
+}
+.task-list-item+.task-list-item {
+margin-top: 3px;
+}
+.task-list-item input {
+margin: 0 0.35em 0.25em -1.6em;
+vertical-align: middle;
+}
+:checked+.radio-label {
+z-index: 1;
+position: relative;
+border-color: #4078c0;
+}
+.sourceLine {
+display: inline-block;
+}
+code .kw { color: #000000; }
+code .dt { color: #ed6a43; }
+code .dv { color: #009999; }
+code .bn { color: #009999; }
+code .fl { color: #009999; }
+code .ch { color: #009999; }
+code .st { color: #183691; }
+code .co { color: #969896; }
+code .ot { color: #0086b3; }
+code .al { color: #a61717; }
+code .fu { color: #63a35c; }
+code .er { color: #a61717; background-color: #e3d2d2; }
+code .wa { color: #000000; }
+code .cn { color: #008080; }
+code .sc { color: #008080; }
+code .vs { color: #183691; }
+code .ss { color: #183691; }
+code .im { color: #000000; }
+code .va {color: #008080; }
+code .cf { color: #000000; }
+code .op { color: #000000; }
+code .bu { color: #000000; }
+code .ex { color: #000000; }
+code .pp { color: #999999; }
+code .at { color: #008080; }
+code .do { color: #969896; }
+code .an { color: #008080; }
+code .cv { color: #008080; }
+code .in { color: #008080; }
+</style>
+<style>
+body {
+box-sizing: border-box;
+min-width: 200px;
+max-width: 980px;
+margin: 0 auto;
+padding: 45px;
+padding-top: 0px;
+}
+</style>
+
+
+</head>
+
+<body>
+
+<!-- demo/subscriber_gateway.md is generated from demo/subscriber_gateway.Rmd. Please edit that file -->
+
+<h1 id="subscriber-gateway-demo">Subscriber gateway demo</h1>
+<p>This is a rendered walkthrough of the subscriber gateway topology in
+<code>ducknng</code>. All three services run inside a single in-process
+DuckDB connection — no separate worker processes required — because each
+service uses <code>service_serialized_connection</code>, giving it a
+dedicated execution lane.</p>
+<p>Render it from the repo root with:</p>
+<div class="sourceCode" id="cb1"><pre class="sourceCode sh"><code class="sourceCode bash"><span id="cb1-1"><a href="#cb1-1" tabindex="-1"></a><span class="fu">make</span> subscriber_gateway_rdm</span></code></pre></div>
+<details>
+<summary>
+<strong>Gateway Setup</strong>
+</summary>
+
+<div class="sourceCode" id="cb2"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb2-1"><a href="#cb2-1" tabindex="-1"></a>knitr<span class="sc">::</span>opts_chunk<span class="sc">$</span><span class="fu">set</span>(<span class="at">collapse =</span> <span class="cn">TRUE</span>, <span class="at">comment =</span> <span class="st">&quot;#&gt;&quot;</span>)</span>
+<span id="cb2-2"><a href="#cb2-2" tabindex="-1"></a></span>
+<span id="cb2-3"><a href="#cb2-3" tabindex="-1"></a><span class="fu">library</span>(DBI)</span>
+<span id="cb2-4"><a href="#cb2-4" tabindex="-1"></a><span class="fu">library</span>(duckdb)</span>
+<span id="cb2-5"><a href="#cb2-5" tabindex="-1"></a><span class="fu">library</span>(jsonlite)</span>
+<span id="cb2-6"><a href="#cb2-6" tabindex="-1"></a><span class="fu">library</span>(knitr)</span>
+<span id="cb2-7"><a href="#cb2-7" tabindex="-1"></a><span class="fu">library</span>(nanonext)</span>
+<span id="cb2-8"><a href="#cb2-8" tabindex="-1"></a></span>
+<span id="cb2-9"><a href="#cb2-9" tabindex="-1"></a>project_root <span class="ot">&lt;-</span> <span class="fu">normalizePath</span>(<span class="st">&quot;..&quot;</span>, <span class="at">mustWork =</span> <span class="cn">TRUE</span>)</span>
+<span id="cb2-10"><a href="#cb2-10" tabindex="-1"></a>extension_path <span class="ot">&lt;-</span> <span class="fu">normalizePath</span>(</span>
+<span id="cb2-11"><a href="#cb2-11" tabindex="-1"></a>  <span class="fu">file.path</span>(project_root, <span class="st">&quot;build&quot;</span>, <span class="st">&quot;release&quot;</span>, <span class="st">&quot;ducknng.duckdb_extension&quot;</span>),</span>
+<span id="cb2-12"><a href="#cb2-12" tabindex="-1"></a>  <span class="at">mustWork =</span> <span class="cn">FALSE</span></span>
+<span id="cb2-13"><a href="#cb2-13" tabindex="-1"></a>)</span>
+<span id="cb2-14"><a href="#cb2-14" tabindex="-1"></a></span>
+<span id="cb2-15"><a href="#cb2-15" tabindex="-1"></a><span class="cf">if</span> (<span class="sc">!</span><span class="fu">file.exists</span>(extension_path)) {</span>
+<span id="cb2-16"><a href="#cb2-16" tabindex="-1"></a>  <span class="fu">stop</span>(<span class="st">&quot;build/release/ducknng.duckdb_extension not found; run `make release` first.&quot;</span>)</span>
+<span id="cb2-17"><a href="#cb2-17" tabindex="-1"></a>}</span>
+<span id="cb2-18"><a href="#cb2-18" tabindex="-1"></a></span>
+<span id="cb2-19"><a href="#cb2-19" tabindex="-1"></a>sql_quote <span class="ot">&lt;-</span> <span class="cf">function</span>(text) <span class="fu">gsub</span>(<span class="st">&quot;&#39;&quot;</span>, <span class="st">&quot;&#39;&#39;&quot;</span>, text, <span class="at">fixed =</span> <span class="cn">TRUE</span>)</span>
+<span id="cb2-20"><a href="#cb2-20" tabindex="-1"></a></span>
+<span id="cb2-21"><a href="#cb2-21" tabindex="-1"></a>body_raw <span class="ot">&lt;-</span> <span class="cf">function</span>(x) {</span>
+<span id="cb2-22"><a href="#cb2-22" tabindex="-1"></a>  <span class="cf">if</span> (<span class="fu">is.null</span>(x) <span class="sc">||</span> <span class="sc">!</span><span class="fu">length</span>(x)) <span class="fu">return</span>(<span class="fu">raw</span>())</span>
+<span id="cb2-23"><a href="#cb2-23" tabindex="-1"></a>  <span class="cf">if</span> (<span class="fu">typeof</span>(x) <span class="sc">==</span> <span class="st">&quot;raw&quot;</span>) <span class="fu">return</span>(x)</span>
+<span id="cb2-24"><a href="#cb2-24" tabindex="-1"></a>  <span class="cf">if</span> (<span class="fu">is.integer</span>(x) <span class="sc">||</span> <span class="fu">is.numeric</span>(x)) <span class="fu">return</span>(<span class="fu">as.raw</span>(<span class="fu">as.integer</span>(x) <span class="sc">%%</span> <span class="dv">256</span><span class="dt">L</span>))</span>
+<span id="cb2-25"><a href="#cb2-25" tabindex="-1"></a>  <span class="cf">if</span> (<span class="fu">is.character</span>(x)) <span class="fu">return</span>(<span class="fu">charToRaw</span>(x))</span>
+<span id="cb2-26"><a href="#cb2-26" tabindex="-1"></a>  <span class="fu">stop</span>(<span class="st">&quot;unsupported response body type&quot;</span>)</span>
+<span id="cb2-27"><a href="#cb2-27" tabindex="-1"></a>}</span>
+<span id="cb2-28"><a href="#cb2-28" tabindex="-1"></a></span>
+<span id="cb2-29"><a href="#cb2-29" tabindex="-1"></a>raw_hex <span class="ot">&lt;-</span> <span class="cf">function</span>(x) <span class="fu">paste</span>(<span class="fu">sprintf</span>(<span class="st">&quot;%02X&quot;</span>, <span class="fu">as.integer</span>(<span class="fu">body_raw</span>(x))), <span class="at">collapse =</span> <span class="st">&quot;&quot;</span>)</span>
+<span id="cb2-30"><a href="#cb2-30" tabindex="-1"></a></span>
+<span id="cb2-31"><a href="#cb2-31" tabindex="-1"></a>header_value <span class="ot">&lt;-</span> <span class="cf">function</span>(headers, name) {</span>
+<span id="cb2-32"><a href="#cb2-32" tabindex="-1"></a>  <span class="cf">if</span> (<span class="fu">is.null</span>(headers) <span class="sc">||</span> <span class="fu">is.null</span>(<span class="fu">names</span>(headers))) <span class="fu">return</span>(<span class="cn">NA_character_</span>)</span>
+<span id="cb2-33"><a href="#cb2-33" tabindex="-1"></a>  idx <span class="ot">&lt;-</span> <span class="fu">which</span>(<span class="fu">tolower</span>(<span class="fu">names</span>(headers)) <span class="sc">==</span> <span class="fu">tolower</span>(name))</span>
+<span id="cb2-34"><a href="#cb2-34" tabindex="-1"></a>  <span class="cf">if</span> (<span class="sc">!</span><span class="fu">length</span>(idx)) <span class="fu">return</span>(<span class="cn">NA_character_</span>)</span>
+<span id="cb2-35"><a href="#cb2-35" tabindex="-1"></a>  <span class="fu">as.character</span>(headers[[idx[[<span class="dv">1</span><span class="dt">L</span>]]]])</span>
+<span id="cb2-36"><a href="#cb2-36" tabindex="-1"></a>}</span>
+<span id="cb2-37"><a href="#cb2-37" tabindex="-1"></a></span>
+<span id="cb2-38"><a href="#cb2-38" tabindex="-1"></a>response_summary <span class="ot">&lt;-</span> <span class="cf">function</span>(resp) {</span>
+<span id="cb2-39"><a href="#cb2-39" tabindex="-1"></a>  <span class="fu">data.frame</span>(</span>
+<span id="cb2-40"><a href="#cb2-40" tabindex="-1"></a>    <span class="at">status        =</span> resp<span class="sc">$</span>status,</span>
+<span id="cb2-41"><a href="#cb2-41" tabindex="-1"></a>    <span class="at">tenant        =</span> <span class="fu">header_value</span>(resp<span class="sc">$</span>headers, <span class="st">&quot;X-Ducknng-Tenant&quot;</span>),</span>
+<span id="cb2-42"><a href="#cb2-42" tabindex="-1"></a>    <span class="at">subscriber    =</span> <span class="fu">header_value</span>(resp<span class="sc">$</span>headers, <span class="st">&quot;X-Ducknng-Subscriber&quot;</span>),</span>
+<span id="cb2-43"><a href="#cb2-43" tabindex="-1"></a>    <span class="at">end_of_stream =</span> <span class="fu">header_value</span>(resp<span class="sc">$</span>headers, <span class="st">&quot;X-Ducknng-End-Of-Stream&quot;</span>),</span>
+<span id="cb2-44"><a href="#cb2-44" tabindex="-1"></a>    <span class="at">has_next_token =</span> <span class="sc">!</span><span class="fu">is.na</span>(<span class="fu">header_value</span>(resp<span class="sc">$</span>headers, <span class="st">&quot;X-Ducknng-Next-Token&quot;</span>)),</span>
+<span id="cb2-45"><a href="#cb2-45" tabindex="-1"></a>    <span class="at">stringsAsFactors =</span> <span class="cn">FALSE</span></span>
+<span id="cb2-46"><a href="#cb2-46" tabindex="-1"></a>  )</span>
+<span id="cb2-47"><a href="#cb2-47" tabindex="-1"></a>}</span>
+<span id="cb2-48"><a href="#cb2-48" tabindex="-1"></a></span>
+<span id="cb2-49"><a href="#cb2-49" tabindex="-1"></a>gateway_post <span class="ot">&lt;-</span> <span class="cf">function</span>(base_url, path, payload, <span class="at">api_token =</span> <span class="cn">NULL</span>) {</span>
+<span id="cb2-50"><a href="#cb2-50" tabindex="-1"></a>  headers <span class="ot">&lt;-</span> <span class="fu">c</span>(<span class="st">&quot;Content-Type&quot;</span> <span class="ot">=</span> <span class="st">&quot;application/json&quot;</span>)</span>
+<span id="cb2-51"><a href="#cb2-51" tabindex="-1"></a>  <span class="cf">if</span> (<span class="sc">!</span><span class="fu">is.null</span>(api_token)) {</span>
+<span id="cb2-52"><a href="#cb2-52" tabindex="-1"></a>    headers <span class="ot">&lt;-</span> <span class="fu">c</span>(headers, <span class="st">&quot;Authorization&quot;</span> <span class="ot">=</span> <span class="fu">paste</span>(<span class="st">&quot;Bearer&quot;</span>, api_token))</span>
+<span id="cb2-53"><a href="#cb2-53" tabindex="-1"></a>  }</span>
+<span id="cb2-54"><a href="#cb2-54" tabindex="-1"></a>  <span class="fu">ncurl</span>(</span>
+<span id="cb2-55"><a href="#cb2-55" tabindex="-1"></a>    <span class="fu">paste0</span>(base_url, path),</span>
+<span id="cb2-56"><a href="#cb2-56" tabindex="-1"></a>    <span class="at">convert  =</span> <span class="cn">FALSE</span>,</span>
+<span id="cb2-57"><a href="#cb2-57" tabindex="-1"></a>    <span class="at">response =</span> <span class="cn">TRUE</span>,</span>
+<span id="cb2-58"><a href="#cb2-58" tabindex="-1"></a>    <span class="at">method   =</span> <span class="st">&quot;POST&quot;</span>,</span>
+<span id="cb2-59"><a href="#cb2-59" tabindex="-1"></a>    <span class="at">headers  =</span> headers,</span>
+<span id="cb2-60"><a href="#cb2-60" tabindex="-1"></a>    <span class="at">data     =</span> <span class="fu">charToRaw</span>(<span class="fu">toJSON</span>(payload, <span class="at">auto_unbox =</span> <span class="cn">TRUE</span>)),</span>
+<span id="cb2-61"><a href="#cb2-61" tabindex="-1"></a>    <span class="at">timeout  =</span> <span class="dv">5000</span><span class="dt">L</span></span>
+<span id="cb2-62"><a href="#cb2-62" tabindex="-1"></a>  )</span>
+<span id="cb2-63"><a href="#cb2-63" tabindex="-1"></a>}</span>
+<span id="cb2-64"><a href="#cb2-64" tabindex="-1"></a></span>
+<span id="cb2-65"><a href="#cb2-65" tabindex="-1"></a>wait_healthz <span class="ot">&lt;-</span> <span class="cf">function</span>(base_url, <span class="at">timeout_s =</span> <span class="dv">10</span>) {</span>
+<span id="cb2-66"><a href="#cb2-66" tabindex="-1"></a>  deadline <span class="ot">&lt;-</span> <span class="fu">Sys.time</span>() <span class="sc">+</span> timeout_s</span>
+<span id="cb2-67"><a href="#cb2-67" tabindex="-1"></a>  <span class="cf">while</span> (<span class="fu">Sys.time</span>() <span class="sc">&lt;</span> deadline) {</span>
+<span id="cb2-68"><a href="#cb2-68" tabindex="-1"></a>    probe <span class="ot">&lt;-</span> <span class="fu">tryCatch</span>(</span>
+<span id="cb2-69"><a href="#cb2-69" tabindex="-1"></a>      <span class="fu">ncurl</span>(<span class="fu">paste0</span>(base_url, <span class="st">&quot;/healthz&quot;</span>), <span class="at">timeout =</span> <span class="dv">500</span><span class="dt">L</span>),</span>
+<span id="cb2-70"><a href="#cb2-70" tabindex="-1"></a>      <span class="at">error =</span> <span class="cf">function</span>(e) <span class="cn">NULL</span></span>
+<span id="cb2-71"><a href="#cb2-71" tabindex="-1"></a>    )</span>
+<span id="cb2-72"><a href="#cb2-72" tabindex="-1"></a>    <span class="cf">if</span> (<span class="sc">!</span><span class="fu">is.null</span>(probe) <span class="sc">&amp;&amp;</span> <span class="fu">identical</span>(probe<span class="sc">$</span>status, <span class="dv">200</span><span class="dt">L</span>)) <span class="fu">return</span>(<span class="fu">invisible</span>(<span class="cn">TRUE</span>))</span>
+<span id="cb2-73"><a href="#cb2-73" tabindex="-1"></a>    <span class="fu">Sys.sleep</span>(<span class="fl">0.1</span>)</span>
+<span id="cb2-74"><a href="#cb2-74" tabindex="-1"></a>  }</span>
+<span id="cb2-75"><a href="#cb2-75" tabindex="-1"></a>  <span class="fu">stop</span>(<span class="st">&quot;gateway health check did not become ready&quot;</span>)</span>
+<span id="cb2-76"><a href="#cb2-76" tabindex="-1"></a>}</span>
+<span id="cb2-77"><a href="#cb2-77" tabindex="-1"></a></span>
+<span id="cb2-78"><a href="#cb2-78" tabindex="-1"></a><span class="co"># ---------------------------------------------------------------------------</span></span>
+<span id="cb2-79"><a href="#cb2-79" tabindex="-1"></a><span class="co"># Route SQL</span></span>
+<span id="cb2-80"><a href="#cb2-80" tabindex="-1"></a><span class="co"># ---------------------------------------------------------------------------</span></span>
+<span id="cb2-81"><a href="#cb2-81" tabindex="-1"></a>start_sql <span class="ot">&lt;-</span> <span class="st">&quot;</span></span>
+<span id="cb2-82"><a href="#cb2-82" tabindex="-1"></a><span class="st">WITH req AS (</span></span>
+<span id="cb2-83"><a href="#cb2-83" tabindex="-1"></a><span class="st">  SELECT</span></span>
+<span id="cb2-84"><a href="#cb2-84" tabindex="-1"></a><span class="st">    r.headers_json,</span></span>
+<span id="cb2-85"><a href="#cb2-85" tabindex="-1"></a><span class="st">    r.caller_identity,</span></span>
+<span id="cb2-86"><a href="#cb2-86" tabindex="-1"></a><span class="st">    json_extract_string(TRY_CAST(b.body_text AS JSON), &#39;$.sql&#39;) AS sql,</span></span>
+<span id="cb2-87"><a href="#cb2-87" tabindex="-1"></a><span class="st">    coalesce(TRY_CAST(json_extract_string(TRY_CAST(b.body_text AS JSON), &#39;$.batch_rows&#39;) AS UBIGINT), 0::UBIGINT) AS batch_rows,</span></span>
+<span id="cb2-88"><a href="#cb2-88" tabindex="-1"></a><span class="st">    coalesce(TRY_CAST(json_extract_string(TRY_CAST(b.body_text AS JSON), &#39;$.batch_bytes&#39;) AS UBIGINT), 0::UBIGINT) AS batch_bytes</span></span>
+<span id="cb2-89"><a href="#cb2-89" tabindex="-1"></a><span class="st">  FROM ducknng_http_request() AS r, ducknng_http_request_body() AS b</span></span>
+<span id="cb2-90"><a href="#cb2-90" tabindex="-1"></a><span class="st">),</span></span>
+<span id="cb2-91"><a href="#cb2-91" tabindex="-1"></a><span class="st">header_auth AS (</span></span>
+<span id="cb2-92"><a href="#cb2-92" tabindex="-1"></a><span class="st">  SELECT</span></span>
+<span id="cb2-93"><a href="#cb2-93" tabindex="-1"></a><span class="st">    max(</span></span>
+<span id="cb2-94"><a href="#cb2-94" tabindex="-1"></a><span class="st">      CASE</span></span>
+<span id="cb2-95"><a href="#cb2-95" tabindex="-1"></a><span class="st">        WHEN lower(json_extract_string(value, &#39;$.name&#39;)) = &#39;authorization&#39;</span></span>
+<span id="cb2-96"><a href="#cb2-96" tabindex="-1"></a><span class="st">          THEN NULLIF(regexp_extract(json_extract_string(value, &#39;$.value&#39;), &#39;^Bearer[ ]+(.+)$&#39;, 1), &#39;&#39;)</span></span>
+<span id="cb2-97"><a href="#cb2-97" tabindex="-1"></a><span class="st">        ELSE NULL</span></span>
+<span id="cb2-98"><a href="#cb2-98" tabindex="-1"></a><span class="st">      END</span></span>
+<span id="cb2-99"><a href="#cb2-99" tabindex="-1"></a><span class="st">    ) AS bearer_token</span></span>
+<span id="cb2-100"><a href="#cb2-100" tabindex="-1"></a><span class="st">  FROM req, json_each(coalesce(req.headers_json, &#39;[]&#39;)::JSON)</span></span>
+<span id="cb2-101"><a href="#cb2-101" tabindex="-1"></a><span class="st">),</span></span>
+<span id="cb2-102"><a href="#cb2-102" tabindex="-1"></a><span class="st">auth AS (</span></span>
+<span id="cb2-103"><a href="#cb2-103" tabindex="-1"></a><span class="st">  SELECT req.caller_identity, header_auth.bearer_token</span></span>
+<span id="cb2-104"><a href="#cb2-104" tabindex="-1"></a><span class="st">  FROM req, header_auth</span></span>
+<span id="cb2-105"><a href="#cb2-105" tabindex="-1"></a><span class="st">),</span></span>
+<span id="cb2-106"><a href="#cb2-106" tabindex="-1"></a><span class="st">principal AS (</span></span>
+<span id="cb2-107"><a href="#cb2-107" tabindex="-1"></a><span class="st">  SELECT</span></span>
+<span id="cb2-108"><a href="#cb2-108" tabindex="-1"></a><span class="st">    i.tenant_id,</span></span>
+<span id="cb2-109"><a href="#cb2-109" tabindex="-1"></a><span class="st">    i.principal_id,</span></span>
+<span id="cb2-110"><a href="#cb2-110" tabindex="-1"></a><span class="st">    CASE</span></span>
+<span id="cb2-111"><a href="#cb2-111" tabindex="-1"></a><span class="st">      WHEN auth.caller_identity IS NOT NULL AND i.caller_identity = auth.caller_identity THEN &#39;caller_identity&#39;</span></span>
+<span id="cb2-112"><a href="#cb2-112" tabindex="-1"></a><span class="st">      ELSE &#39;bearer&#39;</span></span>
+<span id="cb2-113"><a href="#cb2-113" tabindex="-1"></a><span class="st">    END AS auth_source</span></span>
+<span id="cb2-114"><a href="#cb2-114" tabindex="-1"></a><span class="st">  FROM auth</span></span>
+<span id="cb2-115"><a href="#cb2-115" tabindex="-1"></a><span class="st">  JOIN gateway_identities AS i</span></span>
+<span id="cb2-116"><a href="#cb2-116" tabindex="-1"></a><span class="st">    ON i.active AND (</span></span>
+<span id="cb2-117"><a href="#cb2-117" tabindex="-1"></a><span class="st">      (auth.caller_identity IS NOT NULL AND i.caller_identity = auth.caller_identity) OR</span></span>
+<span id="cb2-118"><a href="#cb2-118" tabindex="-1"></a><span class="st">      (auth.bearer_token IS NOT NULL AND i.api_token = auth.bearer_token)</span></span>
+<span id="cb2-119"><a href="#cb2-119" tabindex="-1"></a><span class="st">    )</span></span>
+<span id="cb2-120"><a href="#cb2-120" tabindex="-1"></a><span class="st">  ORDER BY CASE</span></span>
+<span id="cb2-121"><a href="#cb2-121" tabindex="-1"></a><span class="st">    WHEN auth.caller_identity IS NOT NULL AND i.caller_identity = auth.caller_identity THEN 0</span></span>
+<span id="cb2-122"><a href="#cb2-122" tabindex="-1"></a><span class="st">    ELSE 1</span></span>
+<span id="cb2-123"><a href="#cb2-123" tabindex="-1"></a><span class="st">  END</span></span>
+<span id="cb2-124"><a href="#cb2-124" tabindex="-1"></a><span class="st">  LIMIT 1</span></span>
+<span id="cb2-125"><a href="#cb2-125" tabindex="-1"></a><span class="st">),</span></span>
+<span id="cb2-126"><a href="#cb2-126" tabindex="-1"></a><span class="st">subscriber AS (</span></span>
+<span id="cb2-127"><a href="#cb2-127" tabindex="-1"></a><span class="st">  SELECT s.subscriber_id, s.backend_url</span></span>
+<span id="cb2-128"><a href="#cb2-128" tabindex="-1"></a><span class="st">  FROM principal</span></span>
+<span id="cb2-129"><a href="#cb2-129" tabindex="-1"></a><span class="st">  JOIN gateway_subscribers AS s</span></span>
+<span id="cb2-130"><a href="#cb2-130" tabindex="-1"></a><span class="st">    ON s.enabled AND s.tenant_id = principal.tenant_id</span></span>
+<span id="cb2-131"><a href="#cb2-131" tabindex="-1"></a><span class="st">  ORDER BY s.priority, s.subscriber_id</span></span>
+<span id="cb2-132"><a href="#cb2-132" tabindex="-1"></a><span class="st">  LIMIT 1</span></span>
+<span id="cb2-133"><a href="#cb2-133" tabindex="-1"></a><span class="st">),</span></span>
+<span id="cb2-134"><a href="#cb2-134" tabindex="-1"></a><span class="st">opened AS MATERIALIZED (</span></span>
+<span id="cb2-135"><a href="#cb2-135" tabindex="-1"></a><span class="st">  SELECT</span></span>
+<span id="cb2-136"><a href="#cb2-136" tabindex="-1"></a><span class="st">    principal.tenant_id,</span></span>
+<span id="cb2-137"><a href="#cb2-137" tabindex="-1"></a><span class="st">    principal.principal_id,</span></span>
+<span id="cb2-138"><a href="#cb2-138" tabindex="-1"></a><span class="st">    principal.auth_source,</span></span>
+<span id="cb2-139"><a href="#cb2-139" tabindex="-1"></a><span class="st">    subscriber.subscriber_id,</span></span>
+<span id="cb2-140"><a href="#cb2-140" tabindex="-1"></a><span class="st">    subscriber.backend_url,</span></span>
+<span id="cb2-141"><a href="#cb2-141" tabindex="-1"></a><span class="st">    ducknng_open_query_raw(</span></span>
+<span id="cb2-142"><a href="#cb2-142" tabindex="-1"></a><span class="st">      subscriber.backend_url,</span></span>
+<span id="cb2-143"><a href="#cb2-143" tabindex="-1"></a><span class="st">      req.sql,</span></span>
+<span id="cb2-144"><a href="#cb2-144" tabindex="-1"></a><span class="st">      req.batch_rows,</span></span>
+<span id="cb2-145"><a href="#cb2-145" tabindex="-1"></a><span class="st">      req.batch_bytes,</span></span>
+<span id="cb2-146"><a href="#cb2-146" tabindex="-1"></a><span class="st">      0::UBIGINT</span></span>
+<span id="cb2-147"><a href="#cb2-147" tabindex="-1"></a><span class="st">    ) AS frame</span></span>
+<span id="cb2-148"><a href="#cb2-148" tabindex="-1"></a><span class="st">  FROM req, principal, subscriber</span></span>
+<span id="cb2-149"><a href="#cb2-149" tabindex="-1"></a><span class="st">  WHERE req.sql IS NOT NULL</span></span>
+<span id="cb2-150"><a href="#cb2-150" tabindex="-1"></a><span class="st">),</span></span>
+<span id="cb2-151"><a href="#cb2-151" tabindex="-1"></a><span class="st">open_decoded AS MATERIALIZED (</span></span>
+<span id="cb2-152"><a href="#cb2-152" tabindex="-1"></a><span class="st">  SELECT</span></span>
+<span id="cb2-153"><a href="#cb2-153" tabindex="-1"></a><span class="st">    opened.tenant_id,</span></span>
+<span id="cb2-154"><a href="#cb2-154" tabindex="-1"></a><span class="st">    opened.principal_id,</span></span>
+<span id="cb2-155"><a href="#cb2-155" tabindex="-1"></a><span class="st">    opened.auth_source,</span></span>
+<span id="cb2-156"><a href="#cb2-156" tabindex="-1"></a><span class="st">    opened.subscriber_id,</span></span>
+<span id="cb2-157"><a href="#cb2-157" tabindex="-1"></a><span class="st">    opened.backend_url,</span></span>
+<span id="cb2-158"><a href="#cb2-158" tabindex="-1"></a><span class="st">    TRY_CAST(ducknng_frame_payload_text(opened.frame) AS JSON) AS payload_json,</span></span>
+<span id="cb2-159"><a href="#cb2-159" tabindex="-1"></a><span class="st">    CASE</span></span>
+<span id="cb2-160"><a href="#cb2-160" tabindex="-1"></a><span class="st">      WHEN ducknng_frame_error_text(opened.frame) IS NOT NULL</span></span>
+<span id="cb2-161"><a href="#cb2-161" tabindex="-1"></a><span class="st">        THEN ducknng_frame_error_text(opened.frame)</span></span>
+<span id="cb2-162"><a href="#cb2-162" tabindex="-1"></a><span class="st">      WHEN TRY_CAST(ducknng_frame_payload_text(opened.frame) AS JSON) IS NULL</span></span>
+<span id="cb2-163"><a href="#cb2-163" tabindex="-1"></a><span class="st">        THEN &#39;ducknng: query_open reply payload was not valid JSON&#39;</span></span>
+<span id="cb2-164"><a href="#cb2-164" tabindex="-1"></a><span class="st">      WHEN json_extract(TRY_CAST(ducknng_frame_payload_text(opened.frame) AS JSON), &#39;$.session_id&#39;)::UBIGINT IS NULL</span></span>
+<span id="cb2-165"><a href="#cb2-165" tabindex="-1"></a><span class="st">        OR json_extract_string(TRY_CAST(ducknng_frame_payload_text(opened.frame) AS JSON), &#39;$.session_token&#39;) IS NULL</span></span>
+<span id="cb2-166"><a href="#cb2-166" tabindex="-1"></a><span class="st">        THEN &#39;ducknng: query_open reply did not include session_id and session_token&#39;</span></span>
+<span id="cb2-167"><a href="#cb2-167" tabindex="-1"></a><span class="st">      ELSE NULL</span></span>
+<span id="cb2-168"><a href="#cb2-168" tabindex="-1"></a><span class="st">    END AS open_error</span></span>
+<span id="cb2-169"><a href="#cb2-169" tabindex="-1"></a><span class="st">  FROM opened</span></span>
+<span id="cb2-170"><a href="#cb2-170" tabindex="-1"></a><span class="st">),</span></span>
+<span id="cb2-171"><a href="#cb2-171" tabindex="-1"></a><span class="st">continuation_seed AS MATERIALIZED (</span></span>
+<span id="cb2-172"><a href="#cb2-172" tabindex="-1"></a><span class="st">  SELECT</span></span>
+<span id="cb2-173"><a href="#cb2-173" tabindex="-1"></a><span class="st">    tenant_id,</span></span>
+<span id="cb2-174"><a href="#cb2-174" tabindex="-1"></a><span class="st">    principal_id,</span></span>
+<span id="cb2-175"><a href="#cb2-175" tabindex="-1"></a><span class="st">    auth_source,</span></span>
+<span id="cb2-176"><a href="#cb2-176" tabindex="-1"></a><span class="st">    subscriber_id,</span></span>
+<span id="cb2-177"><a href="#cb2-177" tabindex="-1"></a><span class="st">    backend_url,</span></span>
+<span id="cb2-178"><a href="#cb2-178" tabindex="-1"></a><span class="st">    json_extract(payload_json, &#39;$.session_id&#39;)::UBIGINT AS session_id,</span></span>
+<span id="cb2-179"><a href="#cb2-179" tabindex="-1"></a><span class="st">    json_extract_string(payload_json, &#39;$.session_token&#39;) AS session_token,</span></span>
+<span id="cb2-180"><a href="#cb2-180" tabindex="-1"></a><span class="st">    (SELECT batch_rows FROM req LIMIT 1) AS batch_rows,</span></span>
+<span id="cb2-181"><a href="#cb2-181" tabindex="-1"></a><span class="st">    (SELECT batch_bytes FROM req LIMIT 1) AS batch_bytes</span></span>
+<span id="cb2-182"><a href="#cb2-182" tabindex="-1"></a><span class="st">  FROM open_decoded</span></span>
+<span id="cb2-183"><a href="#cb2-183" tabindex="-1"></a><span class="st">  WHERE open_error IS NULL</span></span>
+<span id="cb2-184"><a href="#cb2-184" tabindex="-1"></a><span class="st">),</span></span>
+<span id="cb2-185"><a href="#cb2-185" tabindex="-1"></a><span class="st">fetched AS MATERIALIZED (</span></span>
+<span id="cb2-186"><a href="#cb2-186" tabindex="-1"></a><span class="st">  SELECT</span></span>
+<span id="cb2-187"><a href="#cb2-187" tabindex="-1"></a><span class="st">    continuation_seed.tenant_id,</span></span>
+<span id="cb2-188"><a href="#cb2-188" tabindex="-1"></a><span class="st">    continuation_seed.principal_id,</span></span>
+<span id="cb2-189"><a href="#cb2-189" tabindex="-1"></a><span class="st">    continuation_seed.auth_source,</span></span>
+<span id="cb2-190"><a href="#cb2-190" tabindex="-1"></a><span class="st">    continuation_seed.subscriber_id,</span></span>
+<span id="cb2-191"><a href="#cb2-191" tabindex="-1"></a><span class="st">    continuation_seed.backend_url,</span></span>
+<span id="cb2-192"><a href="#cb2-192" tabindex="-1"></a><span class="st">    continuation_seed.session_id,</span></span>
+<span id="cb2-193"><a href="#cb2-193" tabindex="-1"></a><span class="st">    continuation_seed.session_token,</span></span>
+<span id="cb2-194"><a href="#cb2-194" tabindex="-1"></a><span class="st">    ducknng_fetch_query_raw(</span></span>
+<span id="cb2-195"><a href="#cb2-195" tabindex="-1"></a><span class="st">      continuation_seed.backend_url,</span></span>
+<span id="cb2-196"><a href="#cb2-196" tabindex="-1"></a><span class="st">      continuation_seed.session_id,</span></span>
+<span id="cb2-197"><a href="#cb2-197" tabindex="-1"></a><span class="st">      continuation_seed.session_token,</span></span>
+<span id="cb2-198"><a href="#cb2-198" tabindex="-1"></a><span class="st">      continuation_seed.batch_rows,</span></span>
+<span id="cb2-199"><a href="#cb2-199" tabindex="-1"></a><span class="st">      continuation_seed.batch_bytes,</span></span>
+<span id="cb2-200"><a href="#cb2-200" tabindex="-1"></a><span class="st">      0::UBIGINT</span></span>
+<span id="cb2-201"><a href="#cb2-201" tabindex="-1"></a><span class="st">    ) AS frame</span></span>
+<span id="cb2-202"><a href="#cb2-202" tabindex="-1"></a><span class="st">  FROM continuation_seed</span></span>
+<span id="cb2-203"><a href="#cb2-203" tabindex="-1"></a><span class="st">),</span></span>
+<span id="cb2-204"><a href="#cb2-204" tabindex="-1"></a><span class="st">fetch_decoded AS MATERIALIZED (</span></span>
+<span id="cb2-205"><a href="#cb2-205" tabindex="-1"></a><span class="st">  SELECT</span></span>
+<span id="cb2-206"><a href="#cb2-206" tabindex="-1"></a><span class="st">    fetched.tenant_id,</span></span>
+<span id="cb2-207"><a href="#cb2-207" tabindex="-1"></a><span class="st">    fetched.principal_id,</span></span>
+<span id="cb2-208"><a href="#cb2-208" tabindex="-1"></a><span class="st">    fetched.auth_source,</span></span>
+<span id="cb2-209"><a href="#cb2-209" tabindex="-1"></a><span class="st">    fetched.subscriber_id,</span></span>
+<span id="cb2-210"><a href="#cb2-210" tabindex="-1"></a><span class="st">    fetched.backend_url,</span></span>
+<span id="cb2-211"><a href="#cb2-211" tabindex="-1"></a><span class="st">    fetched.session_id,</span></span>
+<span id="cb2-212"><a href="#cb2-212" tabindex="-1"></a><span class="st">    fetched.session_token,</span></span>
+<span id="cb2-213"><a href="#cb2-213" tabindex="-1"></a><span class="st">    ducknng_frame_error_text(fetched.frame) AS fetch_error,</span></span>
+<span id="cb2-214"><a href="#cb2-214" tabindex="-1"></a><span class="st">    TRY_CAST(ducknng_frame_payload_text(fetched.frame) AS JSON) AS payload_json,</span></span>
+<span id="cb2-215"><a href="#cb2-215" tabindex="-1"></a><span class="st">    ducknng_frame_payload(fetched.frame) AS payload,</span></span>
+<span id="cb2-216"><a href="#cb2-216" tabindex="-1"></a><span class="st">    ducknng_frame_end_of_stream(fetched.frame) AS end_of_stream</span></span>
+<span id="cb2-217"><a href="#cb2-217" tabindex="-1"></a><span class="st">  FROM fetched</span></span>
+<span id="cb2-218"><a href="#cb2-218" tabindex="-1"></a><span class="st">),</span></span>
+<span id="cb2-219"><a href="#cb2-219" tabindex="-1"></a><span class="st">continuation AS MATERIALIZED (</span></span>
+<span id="cb2-220"><a href="#cb2-220" tabindex="-1"></a><span class="st">  SELECT</span></span>
+<span id="cb2-221"><a href="#cb2-221" tabindex="-1"></a><span class="st">    tenant_id,</span></span>
+<span id="cb2-222"><a href="#cb2-222" tabindex="-1"></a><span class="st">    principal_id,</span></span>
+<span id="cb2-223"><a href="#cb2-223" tabindex="-1"></a><span class="st">    auth_source,</span></span>
+<span id="cb2-224"><a href="#cb2-224" tabindex="-1"></a><span class="st">    subscriber_id,</span></span>
+<span id="cb2-225"><a href="#cb2-225" tabindex="-1"></a><span class="st">    CAST(</span></span>
+<span id="cb2-226"><a href="#cb2-226" tabindex="-1"></a><span class="st">      to_hex(</span></span>
+<span id="cb2-227"><a href="#cb2-227" tabindex="-1"></a><span class="st">        encode(</span></span>
+<span id="cb2-228"><a href="#cb2-228" tabindex="-1"></a><span class="st">          CAST(</span></span>
+<span id="cb2-229"><a href="#cb2-229" tabindex="-1"></a><span class="st">            to_json(</span></span>
+<span id="cb2-230"><a href="#cb2-230" tabindex="-1"></a><span class="st">              struct_pack(</span></span>
+<span id="cb2-231"><a href="#cb2-231" tabindex="-1"></a><span class="st">                tenant_id    := tenant_id,</span></span>
+<span id="cb2-232"><a href="#cb2-232" tabindex="-1"></a><span class="st">                principal_id := principal_id,</span></span>
+<span id="cb2-233"><a href="#cb2-233" tabindex="-1"></a><span class="st">                auth_source  := auth_source,</span></span>
+<span id="cb2-234"><a href="#cb2-234" tabindex="-1"></a><span class="st">                subscriber_id := subscriber_id,</span></span>
+<span id="cb2-235"><a href="#cb2-235" tabindex="-1"></a><span class="st">                session_id   := session_id,</span></span>
+<span id="cb2-236"><a href="#cb2-236" tabindex="-1"></a><span class="st">                session_token := session_token,</span></span>
+<span id="cb2-237"><a href="#cb2-237" tabindex="-1"></a><span class="st">                backend_url  := backend_url</span></span>
+<span id="cb2-238"><a href="#cb2-238" tabindex="-1"></a><span class="st">              )</span></span>
+<span id="cb2-239"><a href="#cb2-239" tabindex="-1"></a><span class="st">            ) AS VARCHAR</span></span>
+<span id="cb2-240"><a href="#cb2-240" tabindex="-1"></a><span class="st">          )</span></span>
+<span id="cb2-241"><a href="#cb2-241" tabindex="-1"></a><span class="st">        )</span></span>
+<span id="cb2-242"><a href="#cb2-242" tabindex="-1"></a><span class="st">      ) AS VARCHAR</span></span>
+<span id="cb2-243"><a href="#cb2-243" tabindex="-1"></a><span class="st">    ) AS continuation_token,</span></span>
+<span id="cb2-244"><a href="#cb2-244" tabindex="-1"></a><span class="st">    payload,</span></span>
+<span id="cb2-245"><a href="#cb2-245" tabindex="-1"></a><span class="st">    fetch_error,</span></span>
+<span id="cb2-246"><a href="#cb2-246" tabindex="-1"></a><span class="st">    coalesce(json_extract_string(payload_json, &#39;$.state&#39;), &#39;&#39;) AS payload_state,</span></span>
+<span id="cb2-247"><a href="#cb2-247" tabindex="-1"></a><span class="st">    end_of_stream</span></span>
+<span id="cb2-248"><a href="#cb2-248" tabindex="-1"></a><span class="st">  FROM fetch_decoded</span></span>
+<span id="cb2-249"><a href="#cb2-249" tabindex="-1"></a><span class="st">),</span></span>
+<span id="cb2-250"><a href="#cb2-250" tabindex="-1"></a><span class="st">reply AS (</span></span>
+<span id="cb2-251"><a href="#cb2-251" tabindex="-1"></a><span class="st">  SELECT</span></span>
+<span id="cb2-252"><a href="#cb2-252" tabindex="-1"></a><span class="st">    CASE</span></span>
+<span id="cb2-253"><a href="#cb2-253" tabindex="-1"></a><span class="st">      WHEN NOT EXISTS (SELECT 1 FROM principal)                                       THEN 401</span></span>
+<span id="cb2-254"><a href="#cb2-254" tabindex="-1"></a><span class="st">      WHEN EXISTS (SELECT 1 FROM principal) AND NOT EXISTS (SELECT 1 FROM subscriber) THEN 503</span></span>
+<span id="cb2-255"><a href="#cb2-255" tabindex="-1"></a><span class="st">      WHEN EXISTS (SELECT 1 FROM req WHERE sql IS NULL)                               THEN 400</span></span>
+<span id="cb2-256"><a href="#cb2-256" tabindex="-1"></a><span class="st">      WHEN EXISTS (SELECT 1 FROM open_decoded WHERE open_error IS NOT NULL)           THEN 502</span></span>
+<span id="cb2-257"><a href="#cb2-257" tabindex="-1"></a><span class="st">      WHEN EXISTS (SELECT 1 FROM continuation WHERE fetch_error IS NOT NULL)          THEN 502</span></span>
+<span id="cb2-258"><a href="#cb2-258" tabindex="-1"></a><span class="st">      WHEN EXISTS (SELECT 1 FROM continuation WHERE fetch_error IS NULL AND payload_state = &#39;exhausted&#39;) THEN 204</span></span>
+<span id="cb2-259"><a href="#cb2-259" tabindex="-1"></a><span class="st">      ELSE 200</span></span>
+<span id="cb2-260"><a href="#cb2-260" tabindex="-1"></a><span class="st">    END AS status,</span></span>
+<span id="cb2-261"><a href="#cb2-261" tabindex="-1"></a><span class="st">    CAST(</span></span>
+<span id="cb2-262"><a href="#cb2-262" tabindex="-1"></a><span class="st">      to_json(</span></span>
+<span id="cb2-263"><a href="#cb2-263" tabindex="-1"></a><span class="st">        list_filter(</span></span>
+<span id="cb2-264"><a href="#cb2-264" tabindex="-1"></a><span class="st">          [</span></span>
+<span id="cb2-265"><a href="#cb2-265" tabindex="-1"></a><span class="st">            struct_pack(name := &#39;X-Ducknng-Tenant&#39;,</span></span>
+<span id="cb2-266"><a href="#cb2-266" tabindex="-1"></a><span class="st">              value := (SELECT tenant_id FROM principal LIMIT 1)),</span></span>
+<span id="cb2-267"><a href="#cb2-267" tabindex="-1"></a><span class="st">            struct_pack(name := &#39;X-Ducknng-Subscriber&#39;,</span></span>
+<span id="cb2-268"><a href="#cb2-268" tabindex="-1"></a><span class="st">              value := (SELECT subscriber_id FROM subscriber LIMIT 1)),</span></span>
+<span id="cb2-269"><a href="#cb2-269" tabindex="-1"></a><span class="st">            struct_pack(</span></span>
+<span id="cb2-270"><a href="#cb2-270" tabindex="-1"></a><span class="st">              name  := &#39;X-Ducknng-End-Of-Stream&#39;,</span></span>
+<span id="cb2-271"><a href="#cb2-271" tabindex="-1"></a><span class="st">              value := CASE</span></span>
+<span id="cb2-272"><a href="#cb2-272" tabindex="-1"></a><span class="st">                WHEN EXISTS (SELECT 1 FROM continuation WHERE fetch_error IS NULL AND (payload_state = &#39;exhausted&#39; OR end_of_stream)) THEN &#39;true&#39;</span></span>
+<span id="cb2-273"><a href="#cb2-273" tabindex="-1"></a><span class="st">                WHEN EXISTS (SELECT 1 FROM continuation WHERE fetch_error IS NULL AND payload_state = &#39;&#39;) THEN &#39;false&#39;</span></span>
+<span id="cb2-274"><a href="#cb2-274" tabindex="-1"></a><span class="st">                ELSE NULL</span></span>
+<span id="cb2-275"><a href="#cb2-275" tabindex="-1"></a><span class="st">              END</span></span>
+<span id="cb2-276"><a href="#cb2-276" tabindex="-1"></a><span class="st">            ),</span></span>
+<span id="cb2-277"><a href="#cb2-277" tabindex="-1"></a><span class="st">            struct_pack(</span></span>
+<span id="cb2-278"><a href="#cb2-278" tabindex="-1"></a><span class="st">              name  := &#39;X-Ducknng-Next-Token&#39;,</span></span>
+<span id="cb2-279"><a href="#cb2-279" tabindex="-1"></a><span class="st">              value := CASE</span></span>
+<span id="cb2-280"><a href="#cb2-280" tabindex="-1"></a><span class="st">                WHEN EXISTS (SELECT 1 FROM continuation WHERE fetch_error IS NULL AND payload_state &lt;&gt; &#39;exhausted&#39; AND NOT end_of_stream)</span></span>
+<span id="cb2-281"><a href="#cb2-281" tabindex="-1"></a><span class="st">                  THEN (SELECT continuation_token FROM continuation LIMIT 1)</span></span>
+<span id="cb2-282"><a href="#cb2-282" tabindex="-1"></a><span class="st">                ELSE NULL</span></span>
+<span id="cb2-283"><a href="#cb2-283" tabindex="-1"></a><span class="st">              END</span></span>
+<span id="cb2-284"><a href="#cb2-284" tabindex="-1"></a><span class="st">            )</span></span>
+<span id="cb2-285"><a href="#cb2-285" tabindex="-1"></a><span class="st">          ],</span></span>
+<span id="cb2-286"><a href="#cb2-286" tabindex="-1"></a><span class="st">          x -&gt; x.value IS NOT NULL</span></span>
+<span id="cb2-287"><a href="#cb2-287" tabindex="-1"></a><span class="st">        )</span></span>
+<span id="cb2-288"><a href="#cb2-288" tabindex="-1"></a><span class="st">      ) AS VARCHAR</span></span>
+<span id="cb2-289"><a href="#cb2-289" tabindex="-1"></a><span class="st">    ) AS headers_json,</span></span>
+<span id="cb2-290"><a href="#cb2-290" tabindex="-1"></a><span class="st">    &#39;application/vnd.apache.arrow.stream&#39; AS content_type,</span></span>
+<span id="cb2-291"><a href="#cb2-291" tabindex="-1"></a><span class="st">    CAST(CASE</span></span>
+<span id="cb2-292"><a href="#cb2-292" tabindex="-1"></a><span class="st">      WHEN EXISTS (SELECT 1 FROM continuation WHERE fetch_error IS NULL AND payload_state = &#39;&#39;) THEN</span></span>
+<span id="cb2-293"><a href="#cb2-293" tabindex="-1"></a><span class="st">        (SELECT payload FROM continuation WHERE fetch_error IS NULL AND payload_state = &#39;&#39; LIMIT 1)</span></span>
+<span id="cb2-294"><a href="#cb2-294" tabindex="-1"></a><span class="st">      ELSE NULL</span></span>
+<span id="cb2-295"><a href="#cb2-295" tabindex="-1"></a><span class="st">    END AS BLOB) AS body,</span></span>
+<span id="cb2-296"><a href="#cb2-296" tabindex="-1"></a><span class="st">    CASE</span></span>
+<span id="cb2-297"><a href="#cb2-297" tabindex="-1"></a><span class="st">      WHEN NOT EXISTS (SELECT 1 FROM principal)</span></span>
+<span id="cb2-298"><a href="#cb2-298" tabindex="-1"></a><span class="st">        THEN CAST(to_json(struct_pack(error := &#39;missing or invalid bearer token&#39;)) AS VARCHAR)</span></span>
+<span id="cb2-299"><a href="#cb2-299" tabindex="-1"></a><span class="st">      WHEN EXISTS (SELECT 1 FROM principal) AND NOT EXISTS (SELECT 1 FROM subscriber)</span></span>
+<span id="cb2-300"><a href="#cb2-300" tabindex="-1"></a><span class="st">        THEN CAST(to_json(struct_pack(error := &#39;no subscriber available for tenant&#39;)) AS VARCHAR)</span></span>
+<span id="cb2-301"><a href="#cb2-301" tabindex="-1"></a><span class="st">      WHEN EXISTS (SELECT 1 FROM req WHERE sql IS NULL)</span></span>
+<span id="cb2-302"><a href="#cb2-302" tabindex="-1"></a><span class="st">        THEN CAST(to_json(struct_pack(error := &#39;request body must contain sql&#39;)) AS VARCHAR)</span></span>
+<span id="cb2-303"><a href="#cb2-303" tabindex="-1"></a><span class="st">      WHEN EXISTS (SELECT 1 FROM open_decoded WHERE open_error IS NOT NULL)</span></span>
+<span id="cb2-304"><a href="#cb2-304" tabindex="-1"></a><span class="st">        THEN CAST(to_json(struct_pack(error := (SELECT open_error FROM open_decoded WHERE open_error IS NOT NULL LIMIT 1))) AS VARCHAR)</span></span>
+<span id="cb2-305"><a href="#cb2-305" tabindex="-1"></a><span class="st">      WHEN EXISTS (SELECT 1 FROM continuation WHERE fetch_error IS NOT NULL)</span></span>
+<span id="cb2-306"><a href="#cb2-306" tabindex="-1"></a><span class="st">        THEN CAST(to_json(struct_pack(error := (SELECT fetch_error FROM continuation WHERE fetch_error IS NOT NULL LIMIT 1))) AS VARCHAR)</span></span>
+<span id="cb2-307"><a href="#cb2-307" tabindex="-1"></a><span class="st">      ELSE NULL</span></span>
+<span id="cb2-308"><a href="#cb2-308" tabindex="-1"></a><span class="st">    END AS body_text</span></span>
+<span id="cb2-309"><a href="#cb2-309" tabindex="-1"></a><span class="st">  )</span></span>
+<span id="cb2-310"><a href="#cb2-310" tabindex="-1"></a><span class="st">SELECT status, headers_json, content_type, body, body_text</span></span>
+<span id="cb2-311"><a href="#cb2-311" tabindex="-1"></a><span class="st">FROM reply</span></span>
+<span id="cb2-312"><a href="#cb2-312" tabindex="-1"></a><span class="st">&quot;</span></span>
+<span id="cb2-313"><a href="#cb2-313" tabindex="-1"></a></span>
+<span id="cb2-314"><a href="#cb2-314" tabindex="-1"></a>fetch_sql <span class="ot">&lt;-</span> <span class="st">&quot;</span></span>
+<span id="cb2-315"><a href="#cb2-315" tabindex="-1"></a><span class="st">WITH req AS (</span></span>
+<span id="cb2-316"><a href="#cb2-316" tabindex="-1"></a><span class="st">  SELECT</span></span>
+<span id="cb2-317"><a href="#cb2-317" tabindex="-1"></a><span class="st">    r.headers_json,</span></span>
+<span id="cb2-318"><a href="#cb2-318" tabindex="-1"></a><span class="st">    r.caller_identity,</span></span>
+<span id="cb2-319"><a href="#cb2-319" tabindex="-1"></a><span class="st">    json_extract_string(TRY_CAST(b.body_text AS JSON), &#39;$.token&#39;) AS token</span></span>
+<span id="cb2-320"><a href="#cb2-320" tabindex="-1"></a><span class="st">  FROM ducknng_http_request() AS r, ducknng_http_request_body() AS b</span></span>
+<span id="cb2-321"><a href="#cb2-321" tabindex="-1"></a><span class="st">),</span></span>
+<span id="cb2-322"><a href="#cb2-322" tabindex="-1"></a><span class="st">header_auth AS (</span></span>
+<span id="cb2-323"><a href="#cb2-323" tabindex="-1"></a><span class="st">  SELECT</span></span>
+<span id="cb2-324"><a href="#cb2-324" tabindex="-1"></a><span class="st">    max(</span></span>
+<span id="cb2-325"><a href="#cb2-325" tabindex="-1"></a><span class="st">      CASE</span></span>
+<span id="cb2-326"><a href="#cb2-326" tabindex="-1"></a><span class="st">        WHEN lower(json_extract_string(value, &#39;$.name&#39;)) = &#39;authorization&#39;</span></span>
+<span id="cb2-327"><a href="#cb2-327" tabindex="-1"></a><span class="st">          THEN NULLIF(regexp_extract(json_extract_string(value, &#39;$.value&#39;), &#39;^Bearer[ ]+(.+)$&#39;, 1), &#39;&#39;)</span></span>
+<span id="cb2-328"><a href="#cb2-328" tabindex="-1"></a><span class="st">        ELSE NULL</span></span>
+<span id="cb2-329"><a href="#cb2-329" tabindex="-1"></a><span class="st">      END</span></span>
+<span id="cb2-330"><a href="#cb2-330" tabindex="-1"></a><span class="st">    ) AS bearer_token</span></span>
+<span id="cb2-331"><a href="#cb2-331" tabindex="-1"></a><span class="st">  FROM req, json_each(coalesce(req.headers_json, &#39;[]&#39;)::JSON)</span></span>
+<span id="cb2-332"><a href="#cb2-332" tabindex="-1"></a><span class="st">),</span></span>
+<span id="cb2-333"><a href="#cb2-333" tabindex="-1"></a><span class="st">auth AS (</span></span>
+<span id="cb2-334"><a href="#cb2-334" tabindex="-1"></a><span class="st">  SELECT req.caller_identity, header_auth.bearer_token</span></span>
+<span id="cb2-335"><a href="#cb2-335" tabindex="-1"></a><span class="st">  FROM req, header_auth</span></span>
+<span id="cb2-336"><a href="#cb2-336" tabindex="-1"></a><span class="st">),</span></span>
+<span id="cb2-337"><a href="#cb2-337" tabindex="-1"></a><span class="st">principal AS (</span></span>
+<span id="cb2-338"><a href="#cb2-338" tabindex="-1"></a><span class="st">  SELECT</span></span>
+<span id="cb2-339"><a href="#cb2-339" tabindex="-1"></a><span class="st">    i.tenant_id,</span></span>
+<span id="cb2-340"><a href="#cb2-340" tabindex="-1"></a><span class="st">    i.principal_id,</span></span>
+<span id="cb2-341"><a href="#cb2-341" tabindex="-1"></a><span class="st">    CASE</span></span>
+<span id="cb2-342"><a href="#cb2-342" tabindex="-1"></a><span class="st">      WHEN auth.caller_identity IS NOT NULL AND i.caller_identity = auth.caller_identity THEN &#39;caller_identity&#39;</span></span>
+<span id="cb2-343"><a href="#cb2-343" tabindex="-1"></a><span class="st">      ELSE &#39;bearer&#39;</span></span>
+<span id="cb2-344"><a href="#cb2-344" tabindex="-1"></a><span class="st">    END AS auth_source</span></span>
+<span id="cb2-345"><a href="#cb2-345" tabindex="-1"></a><span class="st">  FROM auth</span></span>
+<span id="cb2-346"><a href="#cb2-346" tabindex="-1"></a><span class="st">  JOIN gateway_identities AS i</span></span>
+<span id="cb2-347"><a href="#cb2-347" tabindex="-1"></a><span class="st">    ON i.active AND (</span></span>
+<span id="cb2-348"><a href="#cb2-348" tabindex="-1"></a><span class="st">      (auth.caller_identity IS NOT NULL AND i.caller_identity = auth.caller_identity) OR</span></span>
+<span id="cb2-349"><a href="#cb2-349" tabindex="-1"></a><span class="st">      (auth.bearer_token IS NOT NULL AND i.api_token = auth.bearer_token)</span></span>
+<span id="cb2-350"><a href="#cb2-350" tabindex="-1"></a><span class="st">    )</span></span>
+<span id="cb2-351"><a href="#cb2-351" tabindex="-1"></a><span class="st">  ORDER BY CASE</span></span>
+<span id="cb2-352"><a href="#cb2-352" tabindex="-1"></a><span class="st">    WHEN auth.caller_identity IS NOT NULL AND i.caller_identity = auth.caller_identity THEN 0</span></span>
+<span id="cb2-353"><a href="#cb2-353" tabindex="-1"></a><span class="st">    ELSE 1</span></span>
+<span id="cb2-354"><a href="#cb2-354" tabindex="-1"></a><span class="st">  END</span></span>
+<span id="cb2-355"><a href="#cb2-355" tabindex="-1"></a><span class="st">  LIMIT 1</span></span>
+<span id="cb2-356"><a href="#cb2-356" tabindex="-1"></a><span class="st">),</span></span>
+<span id="cb2-357"><a href="#cb2-357" tabindex="-1"></a><span class="st">token_raw AS MATERIALIZED (</span></span>
+<span id="cb2-358"><a href="#cb2-358" tabindex="-1"></a><span class="st">  SELECT TRY_CAST(decode(from_hex(token)) AS VARCHAR) AS token_json</span></span>
+<span id="cb2-359"><a href="#cb2-359" tabindex="-1"></a><span class="st">  FROM req</span></span>
+<span id="cb2-360"><a href="#cb2-360" tabindex="-1"></a><span class="st">  WHERE token IS NOT NULL</span></span>
+<span id="cb2-361"><a href="#cb2-361" tabindex="-1"></a><span class="st">),</span></span>
+<span id="cb2-362"><a href="#cb2-362" tabindex="-1"></a><span class="st">token_meta AS MATERIALIZED (</span></span>
+<span id="cb2-363"><a href="#cb2-363" tabindex="-1"></a><span class="st">  SELECT</span></span>
+<span id="cb2-364"><a href="#cb2-364" tabindex="-1"></a><span class="st">    json_extract_string(token_json::JSON, &#39;$.tenant_id&#39;)    AS tenant_id,</span></span>
+<span id="cb2-365"><a href="#cb2-365" tabindex="-1"></a><span class="st">    json_extract_string(token_json::JSON, &#39;$.principal_id&#39;) AS principal_id,</span></span>
+<span id="cb2-366"><a href="#cb2-366" tabindex="-1"></a><span class="st">    json_extract_string(token_json::JSON, &#39;$.auth_source&#39;)  AS auth_source,</span></span>
+<span id="cb2-367"><a href="#cb2-367" tabindex="-1"></a><span class="st">    json_extract_string(token_json::JSON, &#39;$.subscriber_id&#39;) AS subscriber_id,</span></span>
+<span id="cb2-368"><a href="#cb2-368" tabindex="-1"></a><span class="st">    json_extract(token_json::JSON, &#39;$.session_id&#39;)::UBIGINT  AS session_id,</span></span>
+<span id="cb2-369"><a href="#cb2-369" tabindex="-1"></a><span class="st">    json_extract_string(token_json::JSON, &#39;$.session_token&#39;) AS session_token,</span></span>
+<span id="cb2-370"><a href="#cb2-370" tabindex="-1"></a><span class="st">    json_extract_string(token_json::JSON, &#39;$.backend_url&#39;)   AS backend_url</span></span>
+<span id="cb2-371"><a href="#cb2-371" tabindex="-1"></a><span class="st">  FROM token_raw</span></span>
+<span id="cb2-372"><a href="#cb2-372" tabindex="-1"></a><span class="st">  WHERE token_json IS NOT NULL</span></span>
+<span id="cb2-373"><a href="#cb2-373" tabindex="-1"></a><span class="st">),</span></span>
+<span id="cb2-374"><a href="#cb2-374" tabindex="-1"></a><span class="st">token_ready AS MATERIALIZED (</span></span>
+<span id="cb2-375"><a href="#cb2-375" tabindex="-1"></a><span class="st">  SELECT * FROM token_meta</span></span>
+<span id="cb2-376"><a href="#cb2-376" tabindex="-1"></a><span class="st">  WHERE tenant_id IS NOT NULL AND principal_id IS NOT NULL</span></span>
+<span id="cb2-377"><a href="#cb2-377" tabindex="-1"></a><span class="st">    AND auth_source IS NOT NULL AND subscriber_id IS NOT NULL</span></span>
+<span id="cb2-378"><a href="#cb2-378" tabindex="-1"></a><span class="st">    AND session_id IS NOT NULL AND session_token IS NOT NULL</span></span>
+<span id="cb2-379"><a href="#cb2-379" tabindex="-1"></a><span class="st">    AND backend_url IS NOT NULL</span></span>
+<span id="cb2-380"><a href="#cb2-380" tabindex="-1"></a><span class="st">),</span></span>
+<span id="cb2-381"><a href="#cb2-381" tabindex="-1"></a><span class="st">authorized AS MATERIALIZED (</span></span>
+<span id="cb2-382"><a href="#cb2-382" tabindex="-1"></a><span class="st">  SELECT * FROM principal, token_ready</span></span>
+<span id="cb2-383"><a href="#cb2-383" tabindex="-1"></a><span class="st">  WHERE principal.tenant_id   = token_ready.tenant_id</span></span>
+<span id="cb2-384"><a href="#cb2-384" tabindex="-1"></a><span class="st">    AND principal.principal_id = token_ready.principal_id</span></span>
+<span id="cb2-385"><a href="#cb2-385" tabindex="-1"></a><span class="st">    AND principal.auth_source  = token_ready.auth_source</span></span>
+<span id="cb2-386"><a href="#cb2-386" tabindex="-1"></a><span class="st">),</span></span>
+<span id="cb2-387"><a href="#cb2-387" tabindex="-1"></a><span class="st">fetched AS MATERIALIZED (</span></span>
+<span id="cb2-388"><a href="#cb2-388" tabindex="-1"></a><span class="st">  SELECT</span></span>
+<span id="cb2-389"><a href="#cb2-389" tabindex="-1"></a><span class="st">    authorized.tenant_id,</span></span>
+<span id="cb2-390"><a href="#cb2-390" tabindex="-1"></a><span class="st">    authorized.subscriber_id,</span></span>
+<span id="cb2-391"><a href="#cb2-391" tabindex="-1"></a><span class="st">    ducknng_fetch_query_raw(</span></span>
+<span id="cb2-392"><a href="#cb2-392" tabindex="-1"></a><span class="st">      authorized.backend_url,</span></span>
+<span id="cb2-393"><a href="#cb2-393" tabindex="-1"></a><span class="st">      authorized.session_id,</span></span>
+<span id="cb2-394"><a href="#cb2-394" tabindex="-1"></a><span class="st">      authorized.session_token,</span></span>
+<span id="cb2-395"><a href="#cb2-395" tabindex="-1"></a><span class="st">      0::UBIGINT,</span></span>
+<span id="cb2-396"><a href="#cb2-396" tabindex="-1"></a><span class="st">      0::UBIGINT,</span></span>
+<span id="cb2-397"><a href="#cb2-397" tabindex="-1"></a><span class="st">      0::UBIGINT</span></span>
+<span id="cb2-398"><a href="#cb2-398" tabindex="-1"></a><span class="st">    ) AS frame</span></span>
+<span id="cb2-399"><a href="#cb2-399" tabindex="-1"></a><span class="st">  FROM authorized</span></span>
+<span id="cb2-400"><a href="#cb2-400" tabindex="-1"></a><span class="st">),</span></span>
+<span id="cb2-401"><a href="#cb2-401" tabindex="-1"></a><span class="st">decoded AS MATERIALIZED (</span></span>
+<span id="cb2-402"><a href="#cb2-402" tabindex="-1"></a><span class="st">  SELECT</span></span>
+<span id="cb2-403"><a href="#cb2-403" tabindex="-1"></a><span class="st">    tenant_id,</span></span>
+<span id="cb2-404"><a href="#cb2-404" tabindex="-1"></a><span class="st">    subscriber_id,</span></span>
+<span id="cb2-405"><a href="#cb2-405" tabindex="-1"></a><span class="st">    ducknng_frame_error_text(frame) AS frame_error,</span></span>
+<span id="cb2-406"><a href="#cb2-406" tabindex="-1"></a><span class="st">    TRY_CAST(ducknng_frame_payload_text(fetched.frame) AS JSON) AS payload_json,</span></span>
+<span id="cb2-407"><a href="#cb2-407" tabindex="-1"></a><span class="st">    ducknng_frame_payload(fetched.frame) AS payload,</span></span>
+<span id="cb2-408"><a href="#cb2-408" tabindex="-1"></a><span class="st">    ducknng_frame_end_of_stream(fetched.frame) AS end_of_stream</span></span>
+<span id="cb2-409"><a href="#cb2-409" tabindex="-1"></a><span class="st">  FROM fetched</span></span>
+<span id="cb2-410"><a href="#cb2-410" tabindex="-1"></a><span class="st">),</span></span>
+<span id="cb2-411"><a href="#cb2-411" tabindex="-1"></a><span class="st">continuation AS MATERIALIZED (</span></span>
+<span id="cb2-412"><a href="#cb2-412" tabindex="-1"></a><span class="st">  SELECT</span></span>
+<span id="cb2-413"><a href="#cb2-413" tabindex="-1"></a><span class="st">    tenant_id,</span></span>
+<span id="cb2-414"><a href="#cb2-414" tabindex="-1"></a><span class="st">    subscriber_id,</span></span>
+<span id="cb2-415"><a href="#cb2-415" tabindex="-1"></a><span class="st">    CAST(</span></span>
+<span id="cb2-416"><a href="#cb2-416" tabindex="-1"></a><span class="st">      to_hex(</span></span>
+<span id="cb2-417"><a href="#cb2-417" tabindex="-1"></a><span class="st">        encode(</span></span>
+<span id="cb2-418"><a href="#cb2-418" tabindex="-1"></a><span class="st">          CAST(</span></span>
+<span id="cb2-419"><a href="#cb2-419" tabindex="-1"></a><span class="st">            to_json(</span></span>
+<span id="cb2-420"><a href="#cb2-420" tabindex="-1"></a><span class="st">              struct_pack(</span></span>
+<span id="cb2-421"><a href="#cb2-421" tabindex="-1"></a><span class="st">                tenant_id    := (SELECT tenant_id    FROM authorized LIMIT 1),</span></span>
+<span id="cb2-422"><a href="#cb2-422" tabindex="-1"></a><span class="st">                principal_id := (SELECT principal_id FROM authorized LIMIT 1),</span></span>
+<span id="cb2-423"><a href="#cb2-423" tabindex="-1"></a><span class="st">                auth_source  := (SELECT auth_source  FROM authorized LIMIT 1),</span></span>
+<span id="cb2-424"><a href="#cb2-424" tabindex="-1"></a><span class="st">                subscriber_id := subscriber_id,</span></span>
+<span id="cb2-425"><a href="#cb2-425" tabindex="-1"></a><span class="st">                session_id   := (SELECT session_id   FROM authorized LIMIT 1),</span></span>
+<span id="cb2-426"><a href="#cb2-426" tabindex="-1"></a><span class="st">                session_token := (SELECT session_token FROM authorized LIMIT 1),</span></span>
+<span id="cb2-427"><a href="#cb2-427" tabindex="-1"></a><span class="st">                backend_url  := (SELECT backend_url  FROM authorized LIMIT 1)</span></span>
+<span id="cb2-428"><a href="#cb2-428" tabindex="-1"></a><span class="st">              )</span></span>
+<span id="cb2-429"><a href="#cb2-429" tabindex="-1"></a><span class="st">            ) AS VARCHAR</span></span>
+<span id="cb2-430"><a href="#cb2-430" tabindex="-1"></a><span class="st">          )</span></span>
+<span id="cb2-431"><a href="#cb2-431" tabindex="-1"></a><span class="st">        )</span></span>
+<span id="cb2-432"><a href="#cb2-432" tabindex="-1"></a><span class="st">      ) AS VARCHAR</span></span>
+<span id="cb2-433"><a href="#cb2-433" tabindex="-1"></a><span class="st">    ) AS continuation_token,</span></span>
+<span id="cb2-434"><a href="#cb2-434" tabindex="-1"></a><span class="st">    payload,</span></span>
+<span id="cb2-435"><a href="#cb2-435" tabindex="-1"></a><span class="st">    frame_error,</span></span>
+<span id="cb2-436"><a href="#cb2-436" tabindex="-1"></a><span class="st">    coalesce(json_extract_string(payload_json, &#39;$.state&#39;), &#39;&#39;) AS payload_state,</span></span>
+<span id="cb2-437"><a href="#cb2-437" tabindex="-1"></a><span class="st">    end_of_stream</span></span>
+<span id="cb2-438"><a href="#cb2-438" tabindex="-1"></a><span class="st">  FROM decoded</span></span>
+<span id="cb2-439"><a href="#cb2-439" tabindex="-1"></a><span class="st">),</span></span>
+<span id="cb2-440"><a href="#cb2-440" tabindex="-1"></a><span class="st">reply AS (</span></span>
+<span id="cb2-441"><a href="#cb2-441" tabindex="-1"></a><span class="st">  SELECT</span></span>
+<span id="cb2-442"><a href="#cb2-442" tabindex="-1"></a><span class="st">    CASE</span></span>
+<span id="cb2-443"><a href="#cb2-443" tabindex="-1"></a><span class="st">      WHEN NOT EXISTS (SELECT 1 FROM principal)                                          THEN 401</span></span>
+<span id="cb2-444"><a href="#cb2-444" tabindex="-1"></a><span class="st">      WHEN NOT EXISTS (SELECT 1 FROM token_ready)                                        THEN 400</span></span>
+<span id="cb2-445"><a href="#cb2-445" tabindex="-1"></a><span class="st">      WHEN NOT EXISTS (SELECT 1 FROM authorized)                                         THEN 403</span></span>
+<span id="cb2-446"><a href="#cb2-446" tabindex="-1"></a><span class="st">      WHEN EXISTS (SELECT 1 FROM continuation WHERE frame_error IS NOT NULL)             THEN 502</span></span>
+<span id="cb2-447"><a href="#cb2-447" tabindex="-1"></a><span class="st">      WHEN EXISTS (SELECT 1 FROM continuation WHERE payload_state = &#39;exhausted&#39;)         THEN 204</span></span>
+<span id="cb2-448"><a href="#cb2-448" tabindex="-1"></a><span class="st">      ELSE 200</span></span>
+<span id="cb2-449"><a href="#cb2-449" tabindex="-1"></a><span class="st">    END AS status,</span></span>
+<span id="cb2-450"><a href="#cb2-450" tabindex="-1"></a><span class="st">    CAST(</span></span>
+<span id="cb2-451"><a href="#cb2-451" tabindex="-1"></a><span class="st">      to_json(</span></span>
+<span id="cb2-452"><a href="#cb2-452" tabindex="-1"></a><span class="st">        list_filter(</span></span>
+<span id="cb2-453"><a href="#cb2-453" tabindex="-1"></a><span class="st">          [</span></span>
+<span id="cb2-454"><a href="#cb2-454" tabindex="-1"></a><span class="st">            struct_pack(name := &#39;X-Ducknng-Tenant&#39;,</span></span>
+<span id="cb2-455"><a href="#cb2-455" tabindex="-1"></a><span class="st">              value := (SELECT tenant_id FROM authorized LIMIT 1)),</span></span>
+<span id="cb2-456"><a href="#cb2-456" tabindex="-1"></a><span class="st">            struct_pack(name := &#39;X-Ducknng-Subscriber&#39;,</span></span>
+<span id="cb2-457"><a href="#cb2-457" tabindex="-1"></a><span class="st">              value := (SELECT subscriber_id FROM authorized LIMIT 1)),</span></span>
+<span id="cb2-458"><a href="#cb2-458" tabindex="-1"></a><span class="st">            struct_pack(</span></span>
+<span id="cb2-459"><a href="#cb2-459" tabindex="-1"></a><span class="st">              name  := &#39;X-Ducknng-End-Of-Stream&#39;,</span></span>
+<span id="cb2-460"><a href="#cb2-460" tabindex="-1"></a><span class="st">              value := CASE</span></span>
+<span id="cb2-461"><a href="#cb2-461" tabindex="-1"></a><span class="st">                WHEN EXISTS (SELECT 1 FROM continuation WHERE frame_error IS NULL AND (payload_state = &#39;exhausted&#39; OR end_of_stream)) THEN &#39;true&#39;</span></span>
+<span id="cb2-462"><a href="#cb2-462" tabindex="-1"></a><span class="st">                WHEN EXISTS (SELECT 1 FROM continuation WHERE frame_error IS NULL AND payload_state = &#39;&#39;) THEN &#39;false&#39;</span></span>
+<span id="cb2-463"><a href="#cb2-463" tabindex="-1"></a><span class="st">                ELSE NULL</span></span>
+<span id="cb2-464"><a href="#cb2-464" tabindex="-1"></a><span class="st">              END</span></span>
+<span id="cb2-465"><a href="#cb2-465" tabindex="-1"></a><span class="st">            ),</span></span>
+<span id="cb2-466"><a href="#cb2-466" tabindex="-1"></a><span class="st">            struct_pack(</span></span>
+<span id="cb2-467"><a href="#cb2-467" tabindex="-1"></a><span class="st">              name  := &#39;X-Ducknng-Next-Token&#39;,</span></span>
+<span id="cb2-468"><a href="#cb2-468" tabindex="-1"></a><span class="st">              value := CASE</span></span>
+<span id="cb2-469"><a href="#cb2-469" tabindex="-1"></a><span class="st">                WHEN EXISTS (SELECT 1 FROM continuation WHERE frame_error IS NULL AND payload_state &lt;&gt; &#39;exhausted&#39; AND NOT end_of_stream)</span></span>
+<span id="cb2-470"><a href="#cb2-470" tabindex="-1"></a><span class="st">                  THEN (SELECT continuation_token FROM continuation LIMIT 1)</span></span>
+<span id="cb2-471"><a href="#cb2-471" tabindex="-1"></a><span class="st">                ELSE NULL</span></span>
+<span id="cb2-472"><a href="#cb2-472" tabindex="-1"></a><span class="st">              END</span></span>
+<span id="cb2-473"><a href="#cb2-473" tabindex="-1"></a><span class="st">            )</span></span>
+<span id="cb2-474"><a href="#cb2-474" tabindex="-1"></a><span class="st">          ],</span></span>
+<span id="cb2-475"><a href="#cb2-475" tabindex="-1"></a><span class="st">          x -&gt; x.value IS NOT NULL</span></span>
+<span id="cb2-476"><a href="#cb2-476" tabindex="-1"></a><span class="st">        )</span></span>
+<span id="cb2-477"><a href="#cb2-477" tabindex="-1"></a><span class="st">      ) AS VARCHAR</span></span>
+<span id="cb2-478"><a href="#cb2-478" tabindex="-1"></a><span class="st">    ) AS headers_json,</span></span>
+<span id="cb2-479"><a href="#cb2-479" tabindex="-1"></a><span class="st">    &#39;application/vnd.apache.arrow.stream&#39; AS content_type,</span></span>
+<span id="cb2-480"><a href="#cb2-480" tabindex="-1"></a><span class="st">    CAST(CASE</span></span>
+<span id="cb2-481"><a href="#cb2-481" tabindex="-1"></a><span class="st">      WHEN EXISTS (SELECT 1 FROM continuation WHERE frame_error IS NULL AND payload_state = &#39;&#39;) THEN</span></span>
+<span id="cb2-482"><a href="#cb2-482" tabindex="-1"></a><span class="st">        (SELECT payload FROM continuation WHERE frame_error IS NULL LIMIT 1)</span></span>
+<span id="cb2-483"><a href="#cb2-483" tabindex="-1"></a><span class="st">      ELSE NULL</span></span>
+<span id="cb2-484"><a href="#cb2-484" tabindex="-1"></a><span class="st">    END AS BLOB) AS body,</span></span>
+<span id="cb2-485"><a href="#cb2-485" tabindex="-1"></a><span class="st">    CASE</span></span>
+<span id="cb2-486"><a href="#cb2-486" tabindex="-1"></a><span class="st">      WHEN NOT EXISTS (SELECT 1 FROM principal)</span></span>
+<span id="cb2-487"><a href="#cb2-487" tabindex="-1"></a><span class="st">        THEN CAST(to_json(struct_pack(error := &#39;missing or invalid bearer token&#39;)) AS VARCHAR)</span></span>
+<span id="cb2-488"><a href="#cb2-488" tabindex="-1"></a><span class="st">      WHEN NOT EXISTS (SELECT 1 FROM token_ready)</span></span>
+<span id="cb2-489"><a href="#cb2-489" tabindex="-1"></a><span class="st">        THEN CAST(to_json(struct_pack(error := &#39;invalid continuation token&#39;)) AS VARCHAR)</span></span>
+<span id="cb2-490"><a href="#cb2-490" tabindex="-1"></a><span class="st">      WHEN NOT EXISTS (SELECT 1 FROM authorized)</span></span>
+<span id="cb2-491"><a href="#cb2-491" tabindex="-1"></a><span class="st">        THEN CAST(to_json(struct_pack(error := &#39;continuation token belongs to another tenant or principal&#39;)) AS VARCHAR)</span></span>
+<span id="cb2-492"><a href="#cb2-492" tabindex="-1"></a><span class="st">      WHEN EXISTS (SELECT 1 FROM continuation WHERE frame_error IS NOT NULL)</span></span>
+<span id="cb2-493"><a href="#cb2-493" tabindex="-1"></a><span class="st">        THEN CAST(to_json(struct_pack(error := (SELECT frame_error FROM continuation WHERE frame_error IS NOT NULL LIMIT 1))) AS VARCHAR)</span></span>
+<span id="cb2-494"><a href="#cb2-494" tabindex="-1"></a><span class="st">      ELSE NULL</span></span>
+<span id="cb2-495"><a href="#cb2-495" tabindex="-1"></a><span class="st">    END AS body_text</span></span>
+<span id="cb2-496"><a href="#cb2-496" tabindex="-1"></a><span class="st">  )</span></span>
+<span id="cb2-497"><a href="#cb2-497" tabindex="-1"></a><span class="st">SELECT status, headers_json, content_type, body, body_text</span></span>
+<span id="cb2-498"><a href="#cb2-498" tabindex="-1"></a><span class="st">FROM reply</span></span>
+<span id="cb2-499"><a href="#cb2-499" tabindex="-1"></a><span class="st">&quot;</span></span>
+<span id="cb2-500"><a href="#cb2-500" tabindex="-1"></a></span>
+<span id="cb2-501"><a href="#cb2-501" tabindex="-1"></a>close_sql <span class="ot">&lt;-</span> <span class="st">&quot;</span></span>
+<span id="cb2-502"><a href="#cb2-502" tabindex="-1"></a><span class="st">DROP TABLE IF EXISTS __ducknng_gateway_close_state;</span></span>
+<span id="cb2-503"><a href="#cb2-503" tabindex="-1"></a><span class="st">DROP TABLE IF EXISTS __ducknng_gateway_close_meta;</span></span>
+<span id="cb2-504"><a href="#cb2-504" tabindex="-1"></a><span class="st">DROP TABLE IF EXISTS __ducknng_gateway_close_reply;</span></span>
+<span id="cb2-505"><a href="#cb2-505" tabindex="-1"></a><span class="st">CREATE TEMP TABLE __ducknng_gateway_close_state AS</span></span>
+<span id="cb2-506"><a href="#cb2-506" tabindex="-1"></a><span class="st">WITH req AS (</span></span>
+<span id="cb2-507"><a href="#cb2-507" tabindex="-1"></a><span class="st">  SELECT</span></span>
+<span id="cb2-508"><a href="#cb2-508" tabindex="-1"></a><span class="st">    r.headers_json,</span></span>
+<span id="cb2-509"><a href="#cb2-509" tabindex="-1"></a><span class="st">    r.caller_identity,</span></span>
+<span id="cb2-510"><a href="#cb2-510" tabindex="-1"></a><span class="st">    json_extract_string(TRY_CAST(b.body_text AS JSON), &#39;$.token&#39;) AS token</span></span>
+<span id="cb2-511"><a href="#cb2-511" tabindex="-1"></a><span class="st">  FROM ducknng_http_request() AS r, ducknng_http_request_body() AS b</span></span>
+<span id="cb2-512"><a href="#cb2-512" tabindex="-1"></a><span class="st">),</span></span>
+<span id="cb2-513"><a href="#cb2-513" tabindex="-1"></a><span class="st">header_auth AS (</span></span>
+<span id="cb2-514"><a href="#cb2-514" tabindex="-1"></a><span class="st">  SELECT</span></span>
+<span id="cb2-515"><a href="#cb2-515" tabindex="-1"></a><span class="st">    max(</span></span>
+<span id="cb2-516"><a href="#cb2-516" tabindex="-1"></a><span class="st">      CASE</span></span>
+<span id="cb2-517"><a href="#cb2-517" tabindex="-1"></a><span class="st">        WHEN lower(json_extract_string(value, &#39;$.name&#39;)) = &#39;authorization&#39;</span></span>
+<span id="cb2-518"><a href="#cb2-518" tabindex="-1"></a><span class="st">          THEN NULLIF(regexp_extract(json_extract_string(value, &#39;$.value&#39;), &#39;^Bearer[ ]+(.+)$&#39;, 1), &#39;&#39;)</span></span>
+<span id="cb2-519"><a href="#cb2-519" tabindex="-1"></a><span class="st">        ELSE NULL</span></span>
+<span id="cb2-520"><a href="#cb2-520" tabindex="-1"></a><span class="st">      END</span></span>
+<span id="cb2-521"><a href="#cb2-521" tabindex="-1"></a><span class="st">    ) AS bearer_token</span></span>
+<span id="cb2-522"><a href="#cb2-522" tabindex="-1"></a><span class="st">  FROM req, json_each(coalesce(req.headers_json, &#39;[]&#39;)::JSON)</span></span>
+<span id="cb2-523"><a href="#cb2-523" tabindex="-1"></a><span class="st">),</span></span>
+<span id="cb2-524"><a href="#cb2-524" tabindex="-1"></a><span class="st">auth AS (SELECT req.caller_identity, header_auth.bearer_token FROM req, header_auth),</span></span>
+<span id="cb2-525"><a href="#cb2-525" tabindex="-1"></a><span class="st">principal AS MATERIALIZED (</span></span>
+<span id="cb2-526"><a href="#cb2-526" tabindex="-1"></a><span class="st">  SELECT</span></span>
+<span id="cb2-527"><a href="#cb2-527" tabindex="-1"></a><span class="st">    i.tenant_id,</span></span>
+<span id="cb2-528"><a href="#cb2-528" tabindex="-1"></a><span class="st">    i.principal_id,</span></span>
+<span id="cb2-529"><a href="#cb2-529" tabindex="-1"></a><span class="st">    CASE</span></span>
+<span id="cb2-530"><a href="#cb2-530" tabindex="-1"></a><span class="st">      WHEN auth.caller_identity IS NOT NULL AND i.caller_identity = auth.caller_identity THEN &#39;caller_identity&#39;</span></span>
+<span id="cb2-531"><a href="#cb2-531" tabindex="-1"></a><span class="st">      ELSE &#39;bearer&#39;</span></span>
+<span id="cb2-532"><a href="#cb2-532" tabindex="-1"></a><span class="st">    END AS auth_source</span></span>
+<span id="cb2-533"><a href="#cb2-533" tabindex="-1"></a><span class="st">  FROM auth</span></span>
+<span id="cb2-534"><a href="#cb2-534" tabindex="-1"></a><span class="st">  JOIN gateway_identities AS i</span></span>
+<span id="cb2-535"><a href="#cb2-535" tabindex="-1"></a><span class="st">    ON i.active AND (</span></span>
+<span id="cb2-536"><a href="#cb2-536" tabindex="-1"></a><span class="st">      (auth.caller_identity IS NOT NULL AND i.caller_identity = auth.caller_identity) OR</span></span>
+<span id="cb2-537"><a href="#cb2-537" tabindex="-1"></a><span class="st">      (auth.bearer_token IS NOT NULL AND i.api_token = auth.bearer_token)</span></span>
+<span id="cb2-538"><a href="#cb2-538" tabindex="-1"></a><span class="st">    )</span></span>
+<span id="cb2-539"><a href="#cb2-539" tabindex="-1"></a><span class="st">  ORDER BY CASE</span></span>
+<span id="cb2-540"><a href="#cb2-540" tabindex="-1"></a><span class="st">    WHEN auth.caller_identity IS NOT NULL AND i.caller_identity = auth.caller_identity THEN 0</span></span>
+<span id="cb2-541"><a href="#cb2-541" tabindex="-1"></a><span class="st">    ELSE 1</span></span>
+<span id="cb2-542"><a href="#cb2-542" tabindex="-1"></a><span class="st">  END</span></span>
+<span id="cb2-543"><a href="#cb2-543" tabindex="-1"></a><span class="st">  LIMIT 1</span></span>
+<span id="cb2-544"><a href="#cb2-544" tabindex="-1"></a><span class="st">),</span></span>
+<span id="cb2-545"><a href="#cb2-545" tabindex="-1"></a><span class="st">token_raw AS MATERIALIZED (</span></span>
+<span id="cb2-546"><a href="#cb2-546" tabindex="-1"></a><span class="st">  SELECT TRY_CAST(decode(from_hex(token)) AS VARCHAR) AS token_json</span></span>
+<span id="cb2-547"><a href="#cb2-547" tabindex="-1"></a><span class="st">  FROM req WHERE token IS NOT NULL</span></span>
+<span id="cb2-548"><a href="#cb2-548" tabindex="-1"></a><span class="st">),</span></span>
+<span id="cb2-549"><a href="#cb2-549" tabindex="-1"></a><span class="st">token_meta AS MATERIALIZED (</span></span>
+<span id="cb2-550"><a href="#cb2-550" tabindex="-1"></a><span class="st">  SELECT</span></span>
+<span id="cb2-551"><a href="#cb2-551" tabindex="-1"></a><span class="st">    json_extract_string(token_json::JSON, &#39;$.tenant_id&#39;)    AS tenant_id,</span></span>
+<span id="cb2-552"><a href="#cb2-552" tabindex="-1"></a><span class="st">    json_extract_string(token_json::JSON, &#39;$.principal_id&#39;) AS principal_id,</span></span>
+<span id="cb2-553"><a href="#cb2-553" tabindex="-1"></a><span class="st">    json_extract_string(token_json::JSON, &#39;$.auth_source&#39;)  AS auth_source,</span></span>
+<span id="cb2-554"><a href="#cb2-554" tabindex="-1"></a><span class="st">    json_extract_string(token_json::JSON, &#39;$.subscriber_id&#39;) AS subscriber_id,</span></span>
+<span id="cb2-555"><a href="#cb2-555" tabindex="-1"></a><span class="st">    json_extract(token_json::JSON, &#39;$.session_id&#39;)::UBIGINT  AS session_id,</span></span>
+<span id="cb2-556"><a href="#cb2-556" tabindex="-1"></a><span class="st">    json_extract_string(token_json::JSON, &#39;$.session_token&#39;) AS session_token,</span></span>
+<span id="cb2-557"><a href="#cb2-557" tabindex="-1"></a><span class="st">    json_extract_string(token_json::JSON, &#39;$.backend_url&#39;)   AS backend_url</span></span>
+<span id="cb2-558"><a href="#cb2-558" tabindex="-1"></a><span class="st">  FROM token_raw WHERE token_json IS NOT NULL</span></span>
+<span id="cb2-559"><a href="#cb2-559" tabindex="-1"></a><span class="st">),</span></span>
+<span id="cb2-560"><a href="#cb2-560" tabindex="-1"></a><span class="st">token_ready AS MATERIALIZED (</span></span>
+<span id="cb2-561"><a href="#cb2-561" tabindex="-1"></a><span class="st">  SELECT * FROM token_meta</span></span>
+<span id="cb2-562"><a href="#cb2-562" tabindex="-1"></a><span class="st">  WHERE tenant_id IS NOT NULL AND principal_id IS NOT NULL</span></span>
+<span id="cb2-563"><a href="#cb2-563" tabindex="-1"></a><span class="st">    AND auth_source IS NOT NULL AND subscriber_id IS NOT NULL</span></span>
+<span id="cb2-564"><a href="#cb2-564" tabindex="-1"></a><span class="st">    AND session_id IS NOT NULL AND session_token IS NOT NULL</span></span>
+<span id="cb2-565"><a href="#cb2-565" tabindex="-1"></a><span class="st">    AND backend_url IS NOT NULL</span></span>
+<span id="cb2-566"><a href="#cb2-566" tabindex="-1"></a><span class="st">),</span></span>
+<span id="cb2-567"><a href="#cb2-567" tabindex="-1"></a><span class="st">authorized AS MATERIALIZED (</span></span>
+<span id="cb2-568"><a href="#cb2-568" tabindex="-1"></a><span class="st">  SELECT * FROM principal, token_ready</span></span>
+<span id="cb2-569"><a href="#cb2-569" tabindex="-1"></a><span class="st">  WHERE principal.tenant_id   = token_ready.tenant_id</span></span>
+<span id="cb2-570"><a href="#cb2-570" tabindex="-1"></a><span class="st">    AND principal.principal_id = token_ready.principal_id</span></span>
+<span id="cb2-571"><a href="#cb2-571" tabindex="-1"></a><span class="st">    AND principal.auth_source  = token_ready.auth_source</span></span>
+<span id="cb2-572"><a href="#cb2-572" tabindex="-1"></a><span class="st">)</span></span>
+<span id="cb2-573"><a href="#cb2-573" tabindex="-1"></a><span class="st">SELECT</span></span>
+<span id="cb2-574"><a href="#cb2-574" tabindex="-1"></a><span class="st">  EXISTS (SELECT 1 FROM principal)    AS has_principal,</span></span>
+<span id="cb2-575"><a href="#cb2-575" tabindex="-1"></a><span class="st">  EXISTS (SELECT 1 FROM token_ready)  AS has_token_meta,</span></span>
+<span id="cb2-576"><a href="#cb2-576" tabindex="-1"></a><span class="st">  EXISTS (SELECT 1 FROM authorized)   AS is_authorized,</span></span>
+<span id="cb2-577"><a href="#cb2-577" tabindex="-1"></a><span class="st">  (SELECT tenant_id    FROM authorized LIMIT 1) AS tenant_id,</span></span>
+<span id="cb2-578"><a href="#cb2-578" tabindex="-1"></a><span class="st">  (SELECT subscriber_id FROM authorized LIMIT 1) AS subscriber_id,</span></span>
+<span id="cb2-579"><a href="#cb2-579" tabindex="-1"></a><span class="st">  (SELECT backend_url  FROM authorized LIMIT 1) AS backend_url,</span></span>
+<span id="cb2-580"><a href="#cb2-580" tabindex="-1"></a><span class="st">  (SELECT session_id   FROM authorized LIMIT 1) AS session_id,</span></span>
+<span id="cb2-581"><a href="#cb2-581" tabindex="-1"></a><span class="st">  (SELECT session_token FROM authorized LIMIT 1) AS session_token;</span></span>
+<span id="cb2-582"><a href="#cb2-582" tabindex="-1"></a><span class="st">CREATE TEMP TABLE __ducknng_gateway_close_meta AS</span></span>
+<span id="cb2-583"><a href="#cb2-583" tabindex="-1"></a><span class="st">SELECT</span></span>
+<span id="cb2-584"><a href="#cb2-584" tabindex="-1"></a><span class="st">  tenant_id,</span></span>
+<span id="cb2-585"><a href="#cb2-585" tabindex="-1"></a><span class="st">  subscriber_id,</span></span>
+<span id="cb2-586"><a href="#cb2-586" tabindex="-1"></a><span class="st">  ducknng_frame_error_text(</span></span>
+<span id="cb2-587"><a href="#cb2-587" tabindex="-1"></a><span class="st">    ducknng_close_query_raw(backend_url, session_id, session_token, 0::UBIGINT)</span></span>
+<span id="cb2-588"><a href="#cb2-588" tabindex="-1"></a><span class="st">  ) AS close_error</span></span>
+<span id="cb2-589"><a href="#cb2-589" tabindex="-1"></a><span class="st">FROM __ducknng_gateway_close_state</span></span>
+<span id="cb2-590"><a href="#cb2-590" tabindex="-1"></a><span class="st">WHERE is_authorized;</span></span>
+<span id="cb2-591"><a href="#cb2-591" tabindex="-1"></a><span class="st">CREATE TEMP TABLE __ducknng_gateway_close_reply AS</span></span>
+<span id="cb2-592"><a href="#cb2-592" tabindex="-1"></a><span class="st">SELECT</span></span>
+<span id="cb2-593"><a href="#cb2-593" tabindex="-1"></a><span class="st">  CASE</span></span>
+<span id="cb2-594"><a href="#cb2-594" tabindex="-1"></a><span class="st">    WHEN NOT has_principal  THEN 401</span></span>
+<span id="cb2-595"><a href="#cb2-595" tabindex="-1"></a><span class="st">    WHEN NOT has_token_meta THEN 400</span></span>
+<span id="cb2-596"><a href="#cb2-596" tabindex="-1"></a><span class="st">    WHEN NOT is_authorized  THEN 403</span></span>
+<span id="cb2-597"><a href="#cb2-597" tabindex="-1"></a><span class="st">    WHEN EXISTS (SELECT 1 FROM __ducknng_gateway_close_meta WHERE close_error IS NOT NULL) THEN 502</span></span>
+<span id="cb2-598"><a href="#cb2-598" tabindex="-1"></a><span class="st">    ELSE 200</span></span>
+<span id="cb2-599"><a href="#cb2-599" tabindex="-1"></a><span class="st">  END AS status,</span></span>
+<span id="cb2-600"><a href="#cb2-600" tabindex="-1"></a><span class="st">  &#39;application/json; charset=utf-8&#39; AS content_type,</span></span>
+<span id="cb2-601"><a href="#cb2-601" tabindex="-1"></a><span class="st">  CASE</span></span>
+<span id="cb2-602"><a href="#cb2-602" tabindex="-1"></a><span class="st">    WHEN NOT has_principal</span></span>
+<span id="cb2-603"><a href="#cb2-603" tabindex="-1"></a><span class="st">      THEN CAST(to_json(struct_pack(closed := FALSE, error := &#39;missing or invalid bearer token&#39;)) AS VARCHAR)</span></span>
+<span id="cb2-604"><a href="#cb2-604" tabindex="-1"></a><span class="st">    WHEN NOT has_token_meta</span></span>
+<span id="cb2-605"><a href="#cb2-605" tabindex="-1"></a><span class="st">      THEN CAST(to_json(struct_pack(closed := FALSE, error := &#39;invalid continuation token&#39;)) AS VARCHAR)</span></span>
+<span id="cb2-606"><a href="#cb2-606" tabindex="-1"></a><span class="st">    WHEN NOT is_authorized</span></span>
+<span id="cb2-607"><a href="#cb2-607" tabindex="-1"></a><span class="st">      THEN CAST(to_json(struct_pack(closed := FALSE, error := &#39;continuation token belongs to another tenant or principal&#39;)) AS VARCHAR)</span></span>
+<span id="cb2-608"><a href="#cb2-608" tabindex="-1"></a><span class="st">    WHEN EXISTS (SELECT 1 FROM __ducknng_gateway_close_meta WHERE close_error IS NOT NULL)</span></span>
+<span id="cb2-609"><a href="#cb2-609" tabindex="-1"></a><span class="st">      THEN CAST(to_json(struct_pack(closed := FALSE,</span></span>
+<span id="cb2-610"><a href="#cb2-610" tabindex="-1"></a><span class="st">             error := (SELECT close_error FROM __ducknng_gateway_close_meta</span></span>
+<span id="cb2-611"><a href="#cb2-611" tabindex="-1"></a><span class="st">                       WHERE close_error IS NOT NULL LIMIT 1))) AS VARCHAR)</span></span>
+<span id="cb2-612"><a href="#cb2-612" tabindex="-1"></a><span class="st">    ELSE CAST(to_json(struct_pack(</span></span>
+<span id="cb2-613"><a href="#cb2-613" tabindex="-1"></a><span class="st">           closed      := TRUE,</span></span>
+<span id="cb2-614"><a href="#cb2-614" tabindex="-1"></a><span class="st">           tenant_id   := (SELECT tenant_id    FROM __ducknng_gateway_close_meta LIMIT 1),</span></span>
+<span id="cb2-615"><a href="#cb2-615" tabindex="-1"></a><span class="st">           subscriber_id := (SELECT subscriber_id FROM __ducknng_gateway_close_meta LIMIT 1)</span></span>
+<span id="cb2-616"><a href="#cb2-616" tabindex="-1"></a><span class="st">         )) AS VARCHAR)</span></span>
+<span id="cb2-617"><a href="#cb2-617" tabindex="-1"></a><span class="st">  END AS body_text</span></span>
+<span id="cb2-618"><a href="#cb2-618" tabindex="-1"></a><span class="st">FROM __ducknng_gateway_close_state;</span></span>
+<span id="cb2-619"><a href="#cb2-619" tabindex="-1"></a><span class="st">SELECT status, content_type, body_text</span></span>
+<span id="cb2-620"><a href="#cb2-620" tabindex="-1"></a><span class="st">FROM __ducknng_gateway_close_reply</span></span>
+<span id="cb2-621"><a href="#cb2-621" tabindex="-1"></a><span class="st">&quot;</span></span>
+<span id="cb2-622"><a href="#cb2-622" tabindex="-1"></a></span>
+<span id="cb2-623"><a href="#cb2-623" tabindex="-1"></a><span class="co"># ---------------------------------------------------------------------------</span></span>
+<span id="cb2-624"><a href="#cb2-624" tabindex="-1"></a><span class="co"># Start all services in a single in-process DuckDB connection</span></span>
+<span id="cb2-625"><a href="#cb2-625" tabindex="-1"></a><span class="co"># ---------------------------------------------------------------------------</span></span>
+<span id="cb2-626"><a href="#cb2-626" tabindex="-1"></a>con <span class="ot">&lt;-</span> <span class="fu">dbConnect</span>(<span class="fu">duckdb</span>(<span class="at">config =</span> <span class="fu">list</span>(<span class="at">allow_unsigned_extensions =</span> <span class="st">&quot;true&quot;</span>, <span class="at">allow_extensions_metadata_mismatch =</span> <span class="st">&quot;true&quot;</span>)))</span>
+<span id="cb2-627"><a href="#cb2-627" tabindex="-1"></a><span class="fu">dbExecute</span>(con, <span class="fu">sprintf</span>(<span class="st">&quot;LOAD &#39;%s&#39;&quot;</span>, <span class="fu">sql_quote</span>(extension_path)))</span>
+<span id="cb2-628"><a href="#cb2-628" tabindex="-1"></a><span class="fu">dbExecute</span>(con, <span class="st">&quot;INSTALL json&quot;</span>)</span>
+<span id="cb2-629"><a href="#cb2-629" tabindex="-1"></a><span class="fu">dbExecute</span>(con, <span class="st">&quot;LOAD json&quot;</span>)</span>
+<span id="cb2-630"><a href="#cb2-630" tabindex="-1"></a></span>
+<span id="cb2-631"><a href="#cb2-631" tabindex="-1"></a><span class="co"># Shared tenant data: alice rows i=1..3000, bob rows i=10001..13000.</span></span>
+<span id="cb2-632"><a href="#cb2-632" tabindex="-1"></a><span class="co"># Both services share this table; client SQL uses WHERE owner = &#39;...&#39; to</span></span>
+<span id="cb2-633"><a href="#cb2-633" tabindex="-1"></a><span class="co"># read only their own rows. In a production deployment each subscriber</span></span>
+<span id="cb2-634"><a href="#cb2-634" tabindex="-1"></a><span class="co"># backend would be a separate DuckDB database.</span></span>
+<span id="cb2-635"><a href="#cb2-635" tabindex="-1"></a><span class="fu">dbExecute</span>(con, <span class="st">&quot;CREATE TABLE tenant_numbers(owner VARCHAR, i INTEGER, v INTEGER)&quot;</span>)</span>
+<span id="cb2-636"><a href="#cb2-636" tabindex="-1"></a><span class="fu">dbExecute</span>(con,</span>
+<span id="cb2-637"><a href="#cb2-637" tabindex="-1"></a>  <span class="st">&quot;INSERT INTO tenant_numbers</span></span>
+<span id="cb2-638"><a href="#cb2-638" tabindex="-1"></a><span class="st">   SELECT &#39;alice&#39; AS owner, i, i * 10 AS v FROM range(1, 3001) AS t(i)&quot;</span></span>
+<span id="cb2-639"><a href="#cb2-639" tabindex="-1"></a>)</span>
+<span id="cb2-640"><a href="#cb2-640" tabindex="-1"></a><span class="fu">dbExecute</span>(con,</span>
+<span id="cb2-641"><a href="#cb2-641" tabindex="-1"></a>  <span class="st">&quot;INSERT INTO tenant_numbers</span></span>
+<span id="cb2-642"><a href="#cb2-642" tabindex="-1"></a><span class="st">   SELECT &#39;bob&#39; AS owner, i, i * 10 AS v FROM range(10001, 13001) AS t(i)&quot;</span></span>
+<span id="cb2-643"><a href="#cb2-643" tabindex="-1"></a>)</span>
+<span id="cb2-644"><a href="#cb2-644" tabindex="-1"></a></span>
+<span id="cb2-645"><a href="#cb2-645" tabindex="-1"></a><span class="co"># Backend: subscriber_alice</span></span>
+<span id="cb2-646"><a href="#cb2-646" tabindex="-1"></a><span class="fu">dbExecute</span>(con,</span>
+<span id="cb2-647"><a href="#cb2-647" tabindex="-1"></a>  <span class="st">&quot;SELECT ducknng_start_server(&#39;subscriber_alice&#39;,</span></span>
+<span id="cb2-648"><a href="#cb2-648" tabindex="-1"></a><span class="st">     &#39;tcp://127.0.0.1:0&#39;, 1, 134217728, 300000, 0::UBIGINT)&quot;</span></span>
+<span id="cb2-649"><a href="#cb2-649" tabindex="-1"></a>)</span>
+<span id="cb2-650"><a href="#cb2-650" tabindex="-1"></a><span class="fu">dbExecute</span>(con,</span>
+<span id="cb2-651"><a href="#cb2-651" tabindex="-1"></a>  <span class="st">&quot;SELECT ducknng_set_service_execution_model(</span></span>
+<span id="cb2-652"><a href="#cb2-652" tabindex="-1"></a><span class="st">     &#39;subscriber_alice&#39;, &#39;service_serialized_connection&#39;)&quot;</span></span>
+<span id="cb2-653"><a href="#cb2-653" tabindex="-1"></a>)</span>
+<span id="cb2-654"><a href="#cb2-654" tabindex="-1"></a>alice_backend_url <span class="ot">&lt;-</span> <span class="fu">dbGetQuery</span>(con,</span>
+<span id="cb2-655"><a href="#cb2-655" tabindex="-1"></a>  <span class="st">&quot;SELECT listen FROM ducknng_list_servers() WHERE name = &#39;subscriber_alice&#39;&quot;</span></span>
+<span id="cb2-656"><a href="#cb2-656" tabindex="-1"></a>)<span class="sc">$</span>listen</span>
+<span id="cb2-657"><a href="#cb2-657" tabindex="-1"></a></span>
+<span id="cb2-658"><a href="#cb2-658" tabindex="-1"></a><span class="co"># Backend: subscriber_bob</span></span>
+<span id="cb2-659"><a href="#cb2-659" tabindex="-1"></a><span class="fu">dbExecute</span>(con,</span>
+<span id="cb2-660"><a href="#cb2-660" tabindex="-1"></a>  <span class="st">&quot;SELECT ducknng_start_server(&#39;subscriber_bob&#39;,</span></span>
+<span id="cb2-661"><a href="#cb2-661" tabindex="-1"></a><span class="st">     &#39;tcp://127.0.0.1:0&#39;, 1, 134217728, 300000, 0::UBIGINT)&quot;</span></span>
+<span id="cb2-662"><a href="#cb2-662" tabindex="-1"></a>)</span>
+<span id="cb2-663"><a href="#cb2-663" tabindex="-1"></a><span class="fu">dbExecute</span>(con,</span>
+<span id="cb2-664"><a href="#cb2-664" tabindex="-1"></a>  <span class="st">&quot;SELECT ducknng_set_service_execution_model(</span></span>
+<span id="cb2-665"><a href="#cb2-665" tabindex="-1"></a><span class="st">     &#39;subscriber_bob&#39;, &#39;service_serialized_connection&#39;)&quot;</span></span>
+<span id="cb2-666"><a href="#cb2-666" tabindex="-1"></a>)</span>
+<span id="cb2-667"><a href="#cb2-667" tabindex="-1"></a>bob_backend_url <span class="ot">&lt;-</span> <span class="fu">dbGetQuery</span>(con,</span>
+<span id="cb2-668"><a href="#cb2-668" tabindex="-1"></a>  <span class="st">&quot;SELECT listen FROM ducknng_list_servers() WHERE name = &#39;subscriber_bob&#39;&quot;</span></span>
+<span id="cb2-669"><a href="#cb2-669" tabindex="-1"></a>)<span class="sc">$</span>listen</span>
+<span id="cb2-670"><a href="#cb2-670" tabindex="-1"></a></span>
+<span id="cb2-671"><a href="#cb2-671" tabindex="-1"></a><span class="co"># Gateway tables</span></span>
+<span id="cb2-672"><a href="#cb2-672" tabindex="-1"></a><span class="fu">dbExecute</span>(con,</span>
+<span id="cb2-673"><a href="#cb2-673" tabindex="-1"></a>  <span class="st">&quot;CREATE TABLE gateway_identities(</span></span>
+<span id="cb2-674"><a href="#cb2-674" tabindex="-1"></a><span class="st">     api_token VARCHAR, caller_identity VARCHAR,</span></span>
+<span id="cb2-675"><a href="#cb2-675" tabindex="-1"></a><span class="st">     tenant_id VARCHAR, principal_id VARCHAR, active BOOLEAN)&quot;</span></span>
+<span id="cb2-676"><a href="#cb2-676" tabindex="-1"></a>)</span>
+<span id="cb2-677"><a href="#cb2-677" tabindex="-1"></a><span class="fu">dbExecute</span>(con,</span>
+<span id="cb2-678"><a href="#cb2-678" tabindex="-1"></a>  <span class="st">&quot;INSERT INTO gateway_identities VALUES</span></span>
+<span id="cb2-679"><a href="#cb2-679" tabindex="-1"></a><span class="st">     (&#39;demo-alice-token&#39;, NULL, &#39;tenant_alice&#39;, &#39;demo:alice&#39;, TRUE),</span></span>
+<span id="cb2-680"><a href="#cb2-680" tabindex="-1"></a><span class="st">     (&#39;demo-bob-token&#39;,   NULL, &#39;tenant_bob&#39;,   &#39;demo:bob&#39;,   TRUE),</span></span>
+<span id="cb2-681"><a href="#cb2-681" tabindex="-1"></a><span class="st">     (&#39;demo-orphan-token&#39;, NULL, &#39;tenant_orphan&#39;, &#39;demo:orphan&#39;, TRUE)&quot;</span></span>
+<span id="cb2-682"><a href="#cb2-682" tabindex="-1"></a>)</span>
+<span id="cb2-683"><a href="#cb2-683" tabindex="-1"></a><span class="fu">dbExecute</span>(con,</span>
+<span id="cb2-684"><a href="#cb2-684" tabindex="-1"></a>  <span class="st">&quot;CREATE TABLE gateway_subscribers(</span></span>
+<span id="cb2-685"><a href="#cb2-685" tabindex="-1"></a><span class="st">     subscriber_id VARCHAR, tenant_id VARCHAR,</span></span>
+<span id="cb2-686"><a href="#cb2-686" tabindex="-1"></a><span class="st">     backend_url VARCHAR, priority INTEGER, enabled BOOLEAN)&quot;</span></span>
+<span id="cb2-687"><a href="#cb2-687" tabindex="-1"></a>)</span>
+<span id="cb2-688"><a href="#cb2-688" tabindex="-1"></a><span class="fu">dbExecute</span>(con, <span class="fu">sprintf</span>(</span>
+<span id="cb2-689"><a href="#cb2-689" tabindex="-1"></a>  <span class="st">&quot;INSERT INTO gateway_subscribers VALUES</span></span>
+<span id="cb2-690"><a href="#cb2-690" tabindex="-1"></a><span class="st">     (&#39;alice_worker&#39;, &#39;tenant_alice&#39;, &#39;%s&#39;, 1, TRUE),</span></span>
+<span id="cb2-691"><a href="#cb2-691" tabindex="-1"></a><span class="st">     (&#39;bob_worker&#39;,   &#39;tenant_bob&#39;,   &#39;%s&#39;, 1, TRUE)&quot;</span>,</span>
+<span id="cb2-692"><a href="#cb2-692" tabindex="-1"></a>  <span class="fu">sql_quote</span>(alice_backend_url),</span>
+<span id="cb2-693"><a href="#cb2-693" tabindex="-1"></a>  <span class="fu">sql_quote</span>(bob_backend_url)</span>
+<span id="cb2-694"><a href="#cb2-694" tabindex="-1"></a>))</span>
+<span id="cb2-695"><a href="#cb2-695" tabindex="-1"></a></span>
+<span id="cb2-696"><a href="#cb2-696" tabindex="-1"></a><span class="co"># Gateway HTTP service</span></span>
+<span id="cb2-697"><a href="#cb2-697" tabindex="-1"></a><span class="fu">dbExecute</span>(con,</span>
+<span id="cb2-698"><a href="#cb2-698" tabindex="-1"></a>  <span class="st">&quot;SELECT ducknng_start_server(&#39;gateway&#39;,</span></span>
+<span id="cb2-699"><a href="#cb2-699" tabindex="-1"></a><span class="st">     &#39;http://127.0.0.1:0/_ducknng&#39;, 1, 134217728, 300000, 0::UBIGINT)&quot;</span></span>
+<span id="cb2-700"><a href="#cb2-700" tabindex="-1"></a>)</span>
+<span id="cb2-701"><a href="#cb2-701" tabindex="-1"></a><span class="fu">dbExecute</span>(con,</span>
+<span id="cb2-702"><a href="#cb2-702" tabindex="-1"></a>  <span class="st">&quot;SELECT ducknng_set_service_execution_model(</span></span>
+<span id="cb2-703"><a href="#cb2-703" tabindex="-1"></a><span class="st">     &#39;gateway&#39;, &#39;service_serialized_connection&#39;)&quot;</span></span>
+<span id="cb2-704"><a href="#cb2-704" tabindex="-1"></a>)</span>
+<span id="cb2-705"><a href="#cb2-705" tabindex="-1"></a>gateway_listen <span class="ot">&lt;-</span> <span class="fu">dbGetQuery</span>(con,</span>
+<span id="cb2-706"><a href="#cb2-706" tabindex="-1"></a>  <span class="st">&quot;SELECT replace(listen, &#39;/_ducknng&#39;, &#39;&#39;) FROM ducknng_list_servers()</span></span>
+<span id="cb2-707"><a href="#cb2-707" tabindex="-1"></a><span class="st">   WHERE name = &#39;gateway&#39;&quot;</span></span>
+<span id="cb2-708"><a href="#cb2-708" tabindex="-1"></a>)[[<span class="dv">1</span>]]</span>
+<span id="cb2-709"><a href="#cb2-709" tabindex="-1"></a>gateway_base_url <span class="ot">&lt;-</span> gateway_listen</span>
+<span id="cb2-710"><a href="#cb2-710" tabindex="-1"></a></span>
+<span id="cb2-711"><a href="#cb2-711" tabindex="-1"></a><span class="co"># Routes</span></span>
+<span id="cb2-712"><a href="#cb2-712" tabindex="-1"></a><span class="fu">dbExecute</span>(con,</span>
+<span id="cb2-713"><a href="#cb2-713" tabindex="-1"></a>  <span class="st">&quot;SELECT ducknng_register_http_route(&#39;gateway&#39;, &#39;GET&#39;, &#39;/healthz&#39;,</span></span>
+<span id="cb2-714"><a href="#cb2-714" tabindex="-1"></a><span class="st">     &#39;SELECT 200 AS status,</span></span>
+<span id="cb2-715"><a href="#cb2-715" tabindex="-1"></a><span class="st">             &#39;&#39;text/plain; charset=utf-8&#39;&#39; AS content_type,</span></span>
+<span id="cb2-716"><a href="#cb2-716" tabindex="-1"></a><span class="st">             &#39;&#39;ok&#39;&#39; AS body_text&#39;)&quot;</span></span>
+<span id="cb2-717"><a href="#cb2-717" tabindex="-1"></a>)</span>
+<span id="cb2-718"><a href="#cb2-718" tabindex="-1"></a><span class="fu">dbExecute</span>(con, <span class="fu">sprintf</span>(</span>
+<span id="cb2-719"><a href="#cb2-719" tabindex="-1"></a>  <span class="st">&quot;SELECT ducknng_register_http_route(&#39;gateway&#39;, &#39;POST&#39;, &#39;/v1/query/start&#39;,</span></span>
+<span id="cb2-720"><a href="#cb2-720" tabindex="-1"></a><span class="st">     &#39;%s&#39;, 1048576::UBIGINT)&quot;</span>,</span>
+<span id="cb2-721"><a href="#cb2-721" tabindex="-1"></a>  <span class="fu">sql_quote</span>(start_sql)</span>
+<span id="cb2-722"><a href="#cb2-722" tabindex="-1"></a>))</span>
+<span id="cb2-723"><a href="#cb2-723" tabindex="-1"></a><span class="fu">dbExecute</span>(con, <span class="fu">sprintf</span>(</span>
+<span id="cb2-724"><a href="#cb2-724" tabindex="-1"></a>  <span class="st">&quot;SELECT ducknng_register_http_route(&#39;gateway&#39;, &#39;POST&#39;, &#39;/v1/query/fetch&#39;,</span></span>
+<span id="cb2-725"><a href="#cb2-725" tabindex="-1"></a><span class="st">     &#39;%s&#39;, 1048576::UBIGINT)&quot;</span>,</span>
+<span id="cb2-726"><a href="#cb2-726" tabindex="-1"></a>  <span class="fu">sql_quote</span>(fetch_sql)</span>
+<span id="cb2-727"><a href="#cb2-727" tabindex="-1"></a>))</span>
+<span id="cb2-728"><a href="#cb2-728" tabindex="-1"></a><span class="fu">dbExecute</span>(con, <span class="fu">sprintf</span>(</span>
+<span id="cb2-729"><a href="#cb2-729" tabindex="-1"></a>  <span class="st">&quot;SELECT ducknng_register_http_route(&#39;gateway&#39;, &#39;POST&#39;, &#39;/v1/query/close&#39;,</span></span>
+<span id="cb2-730"><a href="#cb2-730" tabindex="-1"></a><span class="st">     &#39;%s&#39;, 1048576::UBIGINT)&quot;</span>,</span>
+<span id="cb2-731"><a href="#cb2-731" tabindex="-1"></a>  <span class="fu">sql_quote</span>(close_sql)</span>
+<span id="cb2-732"><a href="#cb2-732" tabindex="-1"></a>))</span>
+<span id="cb2-733"><a href="#cb2-733" tabindex="-1"></a></span>
+<span id="cb2-734"><a href="#cb2-734" tabindex="-1"></a>alice_token <span class="ot">&lt;-</span> <span class="st">&quot;demo-alice-token&quot;</span></span>
+<span id="cb2-735"><a href="#cb2-735" tabindex="-1"></a>bob_token   <span class="ot">&lt;-</span> <span class="st">&quot;demo-bob-token&quot;</span></span>
+<span id="cb2-736"><a href="#cb2-736" tabindex="-1"></a></span>
+<span id="cb2-737"><a href="#cb2-737" tabindex="-1"></a><span class="fu">wait_healthz</span>(gateway_base_url)</span></code></pre></div>
+</details>
+
+<h2 id="topology">Topology</h2>
+<p>One gateway service owns the public HTTP edge, identity resolution,
+and subscriber lookup. Two private backend services expose ordinary
+<code>ducknng</code> query-session services over TCP. All three share
+one in-memory DuckDB database, and all three use
+<code>service_serialized_connection</code> so they each have their own
+dedicated connection lane.</p>
+<pre class="text"><code>HTTP client
+    |
+    v
+gateway service (service_serialized_connection)
+  http://127.0.0.1:&lt;auto&gt;/_ducknng
+    |
+    +--&gt; subscriber_alice  tcp://127.0.0.1:&lt;auto&gt;
+    |    (service_serialized_connection)
+    |
+    +--&gt; subscriber_bob    tcp://127.0.0.1:&lt;auto&gt;
+         (service_serialized_connection)</code></pre>
+<p>Because gateway route SQL calls
+<code>ducknng_open_query_raw(backend_url, ...)</code> synchronously, the
+gateway’s connection blocks while waiting for the backend reply. Since
+each backend listens on its own connection, it can respond independently
+— no deadlock, even though all three services share one DuckDB runtime.
+In a production deployment each subscriber backend would be a separate
+DuckDB process with its own isolated database.</p>
+<p>The route layer stays generic because the gateway owns two SQL
+tables:</p>
+<div class="sourceCode" id="cb4"><pre class="sourceCode sql"><code class="sourceCode sql"><span id="cb4-1"><a href="#cb4-1" tabindex="-1"></a><span class="kw">CREATE</span> <span class="kw">TABLE</span> gateway_identities(</span>
+<span id="cb4-2"><a href="#cb4-2" tabindex="-1"></a>  api_token <span class="dt">VARCHAR</span>,</span>
+<span id="cb4-3"><a href="#cb4-3" tabindex="-1"></a>  caller_identity <span class="dt">VARCHAR</span>,</span>
+<span id="cb4-4"><a href="#cb4-4" tabindex="-1"></a>  tenant_id <span class="dt">VARCHAR</span>,</span>
+<span id="cb4-5"><a href="#cb4-5" tabindex="-1"></a>  principal_id <span class="dt">VARCHAR</span>,</span>
+<span id="cb4-6"><a href="#cb4-6" tabindex="-1"></a>  active <span class="dt">BOOLEAN</span></span>
+<span id="cb4-7"><a href="#cb4-7" tabindex="-1"></a>);</span>
+<span id="cb4-8"><a href="#cb4-8" tabindex="-1"></a></span>
+<span id="cb4-9"><a href="#cb4-9" tabindex="-1"></a><span class="kw">CREATE</span> <span class="kw">TABLE</span> gateway_subscribers(</span>
+<span id="cb4-10"><a href="#cb4-10" tabindex="-1"></a>  subscriber_id <span class="dt">VARCHAR</span>,</span>
+<span id="cb4-11"><a href="#cb4-11" tabindex="-1"></a>  tenant_id <span class="dt">VARCHAR</span>,</span>
+<span id="cb4-12"><a href="#cb4-12" tabindex="-1"></a>  backend_url <span class="dt">VARCHAR</span>,</span>
+<span id="cb4-13"><a href="#cb4-13" tabindex="-1"></a>  priority <span class="dt">INTEGER</span>,</span>
+<span id="cb4-14"><a href="#cb4-14" tabindex="-1"></a>  enabled <span class="dt">BOOLEAN</span></span>
+<span id="cb4-15"><a href="#cb4-15" tabindex="-1"></a>);</span></code></pre></div>
+<p><code>gateway_identities</code> resolves bearer tokens into a tenant
+and principal. <code>gateway_subscribers</code> resolves that tenant to
+one private backend URL. Nothing in the public route SQL needs to know
+whether the backend plane has two workers or two hundred.</p>
+<h2 id="starting-the-services">Starting the services</h2>
+<p>All three services start in one DuckDB connection. Backend services
+start first so their assigned TCP ports are available when building the
+gateway’s subscriber table.</p>
+<div class="sourceCode" id="cb5"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb5-1"><a href="#cb5-1" tabindex="-1"></a><span class="co"># Backend: subscriber_alice (OS assigns the port)</span></span>
+<span id="cb5-2"><a href="#cb5-2" tabindex="-1"></a><span class="fu">dbExecute</span>(con,</span>
+<span id="cb5-3"><a href="#cb5-3" tabindex="-1"></a>  <span class="st">&quot;SELECT ducknng_start_server(&#39;subscriber_alice&#39;,</span></span>
+<span id="cb5-4"><a href="#cb5-4" tabindex="-1"></a><span class="st">     &#39;tcp://127.0.0.1:0&#39;, 1, 134217728, 300000, 0::UBIGINT)&quot;</span></span>
+<span id="cb5-5"><a href="#cb5-5" tabindex="-1"></a>)</span>
+<span id="cb5-6"><a href="#cb5-6" tabindex="-1"></a><span class="fu">dbExecute</span>(con,</span>
+<span id="cb5-7"><a href="#cb5-7" tabindex="-1"></a>  <span class="st">&quot;SELECT ducknng_set_service_execution_model(</span></span>
+<span id="cb5-8"><a href="#cb5-8" tabindex="-1"></a><span class="st">     &#39;subscriber_alice&#39;, &#39;service_serialized_connection&#39;)&quot;</span></span>
+<span id="cb5-9"><a href="#cb5-9" tabindex="-1"></a>)</span>
+<span id="cb5-10"><a href="#cb5-10" tabindex="-1"></a></span>
+<span id="cb5-11"><a href="#cb5-11" tabindex="-1"></a><span class="co"># Backend: subscriber_bob</span></span>
+<span id="cb5-12"><a href="#cb5-12" tabindex="-1"></a><span class="fu">dbExecute</span>(con,</span>
+<span id="cb5-13"><a href="#cb5-13" tabindex="-1"></a>  <span class="st">&quot;SELECT ducknng_start_server(&#39;subscriber_bob&#39;,</span></span>
+<span id="cb5-14"><a href="#cb5-14" tabindex="-1"></a><span class="st">     &#39;tcp://127.0.0.1:0&#39;, 1, 134217728, 300000, 0::UBIGINT)&quot;</span></span>
+<span id="cb5-15"><a href="#cb5-15" tabindex="-1"></a>)</span>
+<span id="cb5-16"><a href="#cb5-16" tabindex="-1"></a><span class="fu">dbExecute</span>(con,</span>
+<span id="cb5-17"><a href="#cb5-17" tabindex="-1"></a>  <span class="st">&quot;SELECT ducknng_set_service_execution_model(</span></span>
+<span id="cb5-18"><a href="#cb5-18" tabindex="-1"></a><span class="st">     &#39;subscriber_bob&#39;, &#39;service_serialized_connection&#39;)&quot;</span></span>
+<span id="cb5-19"><a href="#cb5-19" tabindex="-1"></a>)</span>
+<span id="cb5-20"><a href="#cb5-20" tabindex="-1"></a></span>
+<span id="cb5-21"><a href="#cb5-21" tabindex="-1"></a><span class="co"># Gateway HTTP service</span></span>
+<span id="cb5-22"><a href="#cb5-22" tabindex="-1"></a><span class="fu">dbExecute</span>(con,</span>
+<span id="cb5-23"><a href="#cb5-23" tabindex="-1"></a>  <span class="st">&quot;SELECT ducknng_start_server(&#39;gateway&#39;,</span></span>
+<span id="cb5-24"><a href="#cb5-24" tabindex="-1"></a><span class="st">     &#39;http://127.0.0.1:0/_ducknng&#39;, 1, 134217728, 300000, 0::UBIGINT)&quot;</span></span>
+<span id="cb5-25"><a href="#cb5-25" tabindex="-1"></a>)</span>
+<span id="cb5-26"><a href="#cb5-26" tabindex="-1"></a><span class="fu">dbExecute</span>(con,</span>
+<span id="cb5-27"><a href="#cb5-27" tabindex="-1"></a>  <span class="st">&quot;SELECT ducknng_set_service_execution_model(</span></span>
+<span id="cb5-28"><a href="#cb5-28" tabindex="-1"></a><span class="st">     &#39;gateway&#39;, &#39;service_serialized_connection&#39;)&quot;</span></span>
+<span id="cb5-29"><a href="#cb5-29" tabindex="-1"></a>)</span></code></pre></div>
+<h2 id="gateway-route-shape">Gateway route shape</h2>
+<p>The public edge is three HTTP routes, all registered with a 1 MiB
+body limit:</p>
+<div class="sourceCode" id="cb6"><pre class="sourceCode sql"><code class="sourceCode sql"><span id="cb6-1"><a href="#cb6-1" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_register_http_route(<span class="st">&#39;gateway&#39;</span>, <span class="st">&#39;GET&#39;</span>,  <span class="st">&#39;/healthz&#39;</span>,         <span class="op">..</span>.);</span>
+<span id="cb6-2"><a href="#cb6-2" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_register_http_route(<span class="st">&#39;gateway&#39;</span>, <span class="st">&#39;POST&#39;</span>, <span class="st">&#39;/v1/query/start&#39;</span>,  <span class="op">..</span>., <span class="dv">1048576</span>:<span class="ch">:UBIGINT</span>);</span>
+<span id="cb6-3"><a href="#cb6-3" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_register_http_route(<span class="st">&#39;gateway&#39;</span>, <span class="st">&#39;POST&#39;</span>, <span class="st">&#39;/v1/query/fetch&#39;</span>,  <span class="op">..</span>., <span class="dv">1048576</span>:<span class="ch">:UBIGINT</span>);</span>
+<span id="cb6-4"><a href="#cb6-4" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_register_http_route(<span class="st">&#39;gateway&#39;</span>, <span class="st">&#39;POST&#39;</span>, <span class="st">&#39;/v1/query/close&#39;</span>,  <span class="op">..</span>., <span class="dv">1048576</span>:<span class="ch">:UBIGINT</span>);</span></code></pre></div>
+<p>Inside those routes the gateway uses the raw session helpers so
+request-body columns and continuation-token columns stay dynamic:</p>
+<div class="sourceCode" id="cb7"><pre class="sourceCode sql"><code class="sourceCode sql"><span id="cb7-1"><a href="#cb7-1" tabindex="-1"></a>ducknng_open_query_raw(<span class="op">..</span>.)</span>
+<span id="cb7-2"><a href="#cb7-2" tabindex="-1"></a>ducknng_fetch_query_raw(<span class="op">..</span>.)</span>
+<span id="cb7-3"><a href="#cb7-3" tabindex="-1"></a>ducknng_close_query_raw(<span class="op">..</span>.)</span>
+<span id="cb7-4"><a href="#cb7-4" tabindex="-1"></a>ducknng_frame_payload(<span class="op">..</span>.)</span>
+<span id="cb7-5"><a href="#cb7-5" tabindex="-1"></a>ducknng_frame_payload_text(<span class="op">..</span>.)</span>
+<span id="cb7-6"><a href="#cb7-6" tabindex="-1"></a>ducknng_frame_error_text(<span class="op">..</span>.)</span></code></pre></div>
+<p>That keeps the route layer transport-local and gateway-owned. The
+public client sees HTTP plus Arrow batches; the private worker plane
+stays on the ordinary <code>ducknng</code> session contract.</p>
+<h2 id="alice-starts-a-query-through-the-public-gateway">Alice starts a
+query through the public gateway</h2>
+<div class="sourceCode" id="cb8"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb8-1"><a href="#cb8-1" tabindex="-1"></a>start <span class="ot">&lt;-</span> <span class="fu">ncurl</span>(</span>
+<span id="cb8-2"><a href="#cb8-2" tabindex="-1"></a>  <span class="fu">paste0</span>(gateway_base_url, <span class="st">&quot;/v1/query/start&quot;</span>),</span>
+<span id="cb8-3"><a href="#cb8-3" tabindex="-1"></a>  <span class="at">convert  =</span> <span class="cn">FALSE</span>,</span>
+<span id="cb8-4"><a href="#cb8-4" tabindex="-1"></a>  <span class="at">response =</span> <span class="cn">TRUE</span>,</span>
+<span id="cb8-5"><a href="#cb8-5" tabindex="-1"></a>  <span class="at">method   =</span> <span class="st">&quot;POST&quot;</span>,</span>
+<span id="cb8-6"><a href="#cb8-6" tabindex="-1"></a>  <span class="at">headers  =</span> <span class="fu">c</span>(</span>
+<span id="cb8-7"><a href="#cb8-7" tabindex="-1"></a>    <span class="st">&quot;Content-Type&quot;</span>  <span class="ot">=</span> <span class="st">&quot;application/json&quot;</span>,</span>
+<span id="cb8-8"><a href="#cb8-8" tabindex="-1"></a>    <span class="st">&quot;Authorization&quot;</span> <span class="ot">=</span> <span class="st">&quot;Bearer demo-alice-token&quot;</span></span>
+<span id="cb8-9"><a href="#cb8-9" tabindex="-1"></a>  ),</span>
+<span id="cb8-10"><a href="#cb8-10" tabindex="-1"></a>  <span class="at">data    =</span> <span class="fu">charToRaw</span>(</span>
+<span id="cb8-11"><a href="#cb8-11" tabindex="-1"></a>    <span class="st">&#39;{&quot;sql&quot;:&quot;SELECT owner, i, v FROM tenant_numbers WHERE owner = </span><span class="sc">\&#39;</span><span class="st">alice</span><span class="sc">\&#39;</span><span class="st"> ORDER BY i&quot;,</span></span>
+<span id="cb8-12"><a href="#cb8-12" tabindex="-1"></a><span class="st">      &quot;batch_rows&quot;:4}&#39;</span></span>
+<span id="cb8-13"><a href="#cb8-13" tabindex="-1"></a>  ),</span>
+<span id="cb8-14"><a href="#cb8-14" tabindex="-1"></a>  <span class="at">timeout =</span> <span class="dv">5000</span><span class="dt">L</span></span>
+<span id="cb8-15"><a href="#cb8-15" tabindex="-1"></a>)</span></code></pre></div>
+<table>
+<thead>
+<tr class="header">
+<th align="right">status</th>
+<th align="left">tenant</th>
+<th align="left">subscriber</th>
+<th align="left">end_of_stream</th>
+<th align="left">has_next_token</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td align="right">200</td>
+<td align="left">tenant_alice</td>
+<td align="left">alice_worker</td>
+<td align="left">false</td>
+<td align="left">TRUE</td>
+</tr>
+</tbody>
+</table>
+<p>The response body is an Arrow IPC batch. The gateway resolved the
+bearer token, chose <code>alice_worker</code> as the backend, and
+embedded backend session state in the opaque
+<code>X-Ducknng-Next-Token</code>.</p>
+<table>
+<thead>
+<tr class="header">
+<th align="left">owner</th>
+<th align="right">i</th>
+<th align="right">v</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td align="left">alice</td>
+<td align="right">1</td>
+<td align="right">10</td>
+</tr>
+<tr class="even">
+<td align="left">alice</td>
+<td align="right">2</td>
+<td align="right">20</td>
+</tr>
+<tr class="odd">
+<td align="left">alice</td>
+<td align="right">3</td>
+<td align="right">30</td>
+</tr>
+<tr class="even">
+<td align="left">alice</td>
+<td align="right">4</td>
+<td align="right">40</td>
+</tr>
+</tbody>
+</table>
+<h2 id="fetch-continues-on-the-same-private-subscriber">Fetch continues
+on the same private subscriber</h2>
+<div class="sourceCode" id="cb9"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb9-1"><a href="#cb9-1" tabindex="-1"></a>fetch <span class="ot">&lt;-</span> <span class="fu">ncurl</span>(</span>
+<span id="cb9-2"><a href="#cb9-2" tabindex="-1"></a>  <span class="fu">paste0</span>(gateway_base_url, <span class="st">&quot;/v1/query/fetch&quot;</span>),</span>
+<span id="cb9-3"><a href="#cb9-3" tabindex="-1"></a>  <span class="at">convert  =</span> <span class="cn">FALSE</span>,</span>
+<span id="cb9-4"><a href="#cb9-4" tabindex="-1"></a>  <span class="at">response =</span> <span class="cn">TRUE</span>,</span>
+<span id="cb9-5"><a href="#cb9-5" tabindex="-1"></a>  <span class="at">method   =</span> <span class="st">&quot;POST&quot;</span>,</span>
+<span id="cb9-6"><a href="#cb9-6" tabindex="-1"></a>  <span class="at">headers  =</span> <span class="fu">c</span>(</span>
+<span id="cb9-7"><a href="#cb9-7" tabindex="-1"></a>    <span class="st">&quot;Content-Type&quot;</span>  <span class="ot">=</span> <span class="st">&quot;application/json&quot;</span>,</span>
+<span id="cb9-8"><a href="#cb9-8" tabindex="-1"></a>    <span class="st">&quot;Authorization&quot;</span> <span class="ot">=</span> <span class="st">&quot;Bearer demo-alice-token&quot;</span></span>
+<span id="cb9-9"><a href="#cb9-9" tabindex="-1"></a>  ),</span>
+<span id="cb9-10"><a href="#cb9-10" tabindex="-1"></a>  <span class="at">data    =</span> <span class="fu">charToRaw</span>(<span class="fu">sprintf</span>(<span class="st">&#39;{&quot;token&quot;:&quot;%s&quot;}&#39;</span>, alice_next_token)),</span>
+<span id="cb9-11"><a href="#cb9-11" tabindex="-1"></a>  <span class="at">timeout =</span> <span class="dv">5000</span><span class="dt">L</span></span>
+<span id="cb9-12"><a href="#cb9-12" tabindex="-1"></a>)</span></code></pre></div>
+<table>
+<thead>
+<tr class="header">
+<th align="right">status</th>
+<th align="left">tenant</th>
+<th align="left">subscriber</th>
+<th align="left">end_of_stream</th>
+<th align="left">has_next_token</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td align="right">200</td>
+<td align="left">tenant_alice</td>
+<td align="left">alice_worker</td>
+<td align="left">false</td>
+<td align="left">TRUE</td>
+</tr>
+</tbody>
+</table>
+<table>
+<thead>
+<tr class="header">
+<th align="left">owner</th>
+<th align="right">i</th>
+<th align="right">v</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td align="left">alice</td>
+<td align="right">2049</td>
+<td align="right">20490</td>
+</tr>
+<tr class="even">
+<td align="left">alice</td>
+<td align="right">2050</td>
+<td align="right">20500</td>
+</tr>
+<tr class="odd">
+<td align="left">alice</td>
+<td align="right">2051</td>
+<td align="right">20510</td>
+</tr>
+<tr class="even">
+<td align="left">alice</td>
+<td align="right">2052</td>
+<td align="right">20520</td>
+</tr>
+</tbody>
+</table>
+<p>The public continuation token is gateway-owned. It carries tenant and
+subscriber affinity plus the private backend <code>session_id</code> and
+<code>session_token</code> without exposing them directly to the
+client.</p>
+<h2 id="a-second-identity-routes-to-a-different-subscriber">A second
+identity routes to a different subscriber</h2>
+<div class="sourceCode" id="cb10"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb10-1"><a href="#cb10-1" tabindex="-1"></a>bob_start <span class="ot">&lt;-</span> <span class="fu">ncurl</span>(</span>
+<span id="cb10-2"><a href="#cb10-2" tabindex="-1"></a>  <span class="fu">paste0</span>(gateway_base_url, <span class="st">&quot;/v1/query/start&quot;</span>),</span>
+<span id="cb10-3"><a href="#cb10-3" tabindex="-1"></a>  <span class="at">convert  =</span> <span class="cn">FALSE</span>,</span>
+<span id="cb10-4"><a href="#cb10-4" tabindex="-1"></a>  <span class="at">response =</span> <span class="cn">TRUE</span>,</span>
+<span id="cb10-5"><a href="#cb10-5" tabindex="-1"></a>  <span class="at">method   =</span> <span class="st">&quot;POST&quot;</span>,</span>
+<span id="cb10-6"><a href="#cb10-6" tabindex="-1"></a>  <span class="at">headers  =</span> <span class="fu">c</span>(</span>
+<span id="cb10-7"><a href="#cb10-7" tabindex="-1"></a>    <span class="st">&quot;Content-Type&quot;</span>  <span class="ot">=</span> <span class="st">&quot;application/json&quot;</span>,</span>
+<span id="cb10-8"><a href="#cb10-8" tabindex="-1"></a>    <span class="st">&quot;Authorization&quot;</span> <span class="ot">=</span> <span class="st">&quot;Bearer demo-bob-token&quot;</span></span>
+<span id="cb10-9"><a href="#cb10-9" tabindex="-1"></a>  ),</span>
+<span id="cb10-10"><a href="#cb10-10" tabindex="-1"></a>  <span class="at">data    =</span> <span class="fu">charToRaw</span>(</span>
+<span id="cb10-11"><a href="#cb10-11" tabindex="-1"></a>    <span class="st">&#39;{&quot;sql&quot;:&quot;SELECT owner, i, v FROM tenant_numbers WHERE owner = </span><span class="sc">\&#39;</span><span class="st">bob</span><span class="sc">\&#39;</span><span class="st"> ORDER BY i&quot;,</span></span>
+<span id="cb10-12"><a href="#cb10-12" tabindex="-1"></a><span class="st">      &quot;batch_rows&quot;:4}&#39;</span></span>
+<span id="cb10-13"><a href="#cb10-13" tabindex="-1"></a>  ),</span>
+<span id="cb10-14"><a href="#cb10-14" tabindex="-1"></a>  <span class="at">timeout =</span> <span class="dv">5000</span><span class="dt">L</span></span>
+<span id="cb10-15"><a href="#cb10-15" tabindex="-1"></a>)</span></code></pre></div>
+<table>
+<thead>
+<tr class="header">
+<th align="right">status</th>
+<th align="left">tenant</th>
+<th align="left">subscriber</th>
+<th align="left">end_of_stream</th>
+<th align="left">has_next_token</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td align="right">200</td>
+<td align="left">tenant_bob</td>
+<td align="left">bob_worker</td>
+<td align="left">false</td>
+<td align="left">TRUE</td>
+</tr>
+</tbody>
+</table>
+<table>
+<thead>
+<tr class="header">
+<th align="left">owner</th>
+<th align="right">i</th>
+<th align="right">v</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td align="left">bob</td>
+<td align="right">10001</td>
+<td align="right">100010</td>
+</tr>
+<tr class="even">
+<td align="left">bob</td>
+<td align="right">10002</td>
+<td align="right">100020</td>
+</tr>
+<tr class="odd">
+<td align="left">bob</td>
+<td align="right">10003</td>
+<td align="right">100030</td>
+</tr>
+<tr class="even">
+<td align="left">bob</td>
+<td align="right">10004</td>
+<td align="right">100040</td>
+</tr>
+</tbody>
+</table>
+<p>The public start route did not change. Only the authenticated
+identity changed, and the gateway routed the request to
+<code>bob_worker</code> rather than <code>alice_worker</code>.</p>
+<h2 id="cross-tenant-close-is-rejected">Cross-tenant close is
+rejected</h2>
+<div class="sourceCode" id="cb11"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb11-1"><a href="#cb11-1" tabindex="-1"></a>wrong_close <span class="ot">&lt;-</span> <span class="fu">ncurl</span>(</span>
+<span id="cb11-2"><a href="#cb11-2" tabindex="-1"></a>  <span class="fu">paste0</span>(gateway_base_url, <span class="st">&quot;/v1/query/close&quot;</span>),</span>
+<span id="cb11-3"><a href="#cb11-3" tabindex="-1"></a>  <span class="at">convert  =</span> <span class="cn">FALSE</span>,</span>
+<span id="cb11-4"><a href="#cb11-4" tabindex="-1"></a>  <span class="at">response =</span> <span class="cn">TRUE</span>,</span>
+<span id="cb11-5"><a href="#cb11-5" tabindex="-1"></a>  <span class="at">method   =</span> <span class="st">&quot;POST&quot;</span>,</span>
+<span id="cb11-6"><a href="#cb11-6" tabindex="-1"></a>  <span class="at">headers  =</span> <span class="fu">c</span>(</span>
+<span id="cb11-7"><a href="#cb11-7" tabindex="-1"></a>    <span class="st">&quot;Content-Type&quot;</span>  <span class="ot">=</span> <span class="st">&quot;application/json&quot;</span>,</span>
+<span id="cb11-8"><a href="#cb11-8" tabindex="-1"></a>    <span class="st">&quot;Authorization&quot;</span> <span class="ot">=</span> <span class="st">&quot;Bearer demo-bob-token&quot;</span></span>
+<span id="cb11-9"><a href="#cb11-9" tabindex="-1"></a>  ),</span>
+<span id="cb11-10"><a href="#cb11-10" tabindex="-1"></a>  <span class="at">data    =</span> <span class="fu">charToRaw</span>(<span class="fu">sprintf</span>(<span class="st">&#39;{&quot;token&quot;:&quot;%s&quot;}&#39;</span>, alice_next_token)),</span>
+<span id="cb11-11"><a href="#cb11-11" tabindex="-1"></a>  <span class="at">timeout =</span> <span class="dv">5000</span><span class="dt">L</span></span>
+<span id="cb11-12"><a href="#cb11-12" tabindex="-1"></a>)</span></code></pre></div>
+<table>
+<thead>
+<tr class="header">
+<th align="right">status</th>
+<th align="left">body</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td align="right">403</td>
+<td align="left">{“closed”:false,“error”:“continuation token belongs to
+another tenant or principal”}</td>
+</tr>
+</tbody>
+</table>
+<p>The <code>403</code> is the important ownership boundary: a gateway
+token is not a cross-tenant escape hatch.</p>
+<h2 id="the-owning-tenant-can-close-the-session">The owning tenant can
+close the session</h2>
+<div class="sourceCode" id="cb12"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb12-1"><a href="#cb12-1" tabindex="-1"></a>close <span class="ot">&lt;-</span> <span class="fu">ncurl</span>(</span>
+<span id="cb12-2"><a href="#cb12-2" tabindex="-1"></a>  <span class="fu">paste0</span>(gateway_base_url, <span class="st">&quot;/v1/query/close&quot;</span>),</span>
+<span id="cb12-3"><a href="#cb12-3" tabindex="-1"></a>  <span class="at">convert  =</span> <span class="cn">FALSE</span>,</span>
+<span id="cb12-4"><a href="#cb12-4" tabindex="-1"></a>  <span class="at">response =</span> <span class="cn">TRUE</span>,</span>
+<span id="cb12-5"><a href="#cb12-5" tabindex="-1"></a>  <span class="at">method   =</span> <span class="st">&quot;POST&quot;</span>,</span>
+<span id="cb12-6"><a href="#cb12-6" tabindex="-1"></a>  <span class="at">headers  =</span> <span class="fu">c</span>(</span>
+<span id="cb12-7"><a href="#cb12-7" tabindex="-1"></a>    <span class="st">&quot;Content-Type&quot;</span>  <span class="ot">=</span> <span class="st">&quot;application/json&quot;</span>,</span>
+<span id="cb12-8"><a href="#cb12-8" tabindex="-1"></a>    <span class="st">&quot;Authorization&quot;</span> <span class="ot">=</span> <span class="st">&quot;Bearer demo-alice-token&quot;</span></span>
+<span id="cb12-9"><a href="#cb12-9" tabindex="-1"></a>  ),</span>
+<span id="cb12-10"><a href="#cb12-10" tabindex="-1"></a>  <span class="at">data    =</span> <span class="fu">charToRaw</span>(<span class="fu">sprintf</span>(<span class="st">&#39;{&quot;token&quot;:&quot;%s&quot;}&#39;</span>, alice_next_token)),</span>
+<span id="cb12-11"><a href="#cb12-11" tabindex="-1"></a>  <span class="at">timeout =</span> <span class="dv">5000</span><span class="dt">L</span></span>
+<span id="cb12-12"><a href="#cb12-12" tabindex="-1"></a>)</span></code></pre></div>
+<table>
+<thead>
+<tr class="header">
+<th align="right">status</th>
+<th align="left">body</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td align="right">200</td>
+<td align="left">{“closed”:true,“tenant_id”:“tenant_alice”,“subscriber_id”:“alice_worker”}</td>
+</tr>
+</tbody>
+</table>
+<h2 id="what-this-shape-buys-you">What this shape buys you</h2>
+<p>This topology is generic in the right place:</p>
+<ul>
+<li>the public route surface stays fixed</li>
+<li>auth resolution is table-driven</li>
+<li>subscriber discovery is table-driven</li>
+<li>backend session affinity stays private</li>
+<li>Arrow remains the row contract</li>
+</ul>
+<p>The <code>service_serialized_connection</code> model makes all of
+this work within a single DuckDB runtime: each service has its own
+connection lane, so a gateway route handler can make synchronous NNG
+calls to sibling services without deadlocking.</p>
+
+</body>
+</html>

@@ -1,0 +1,228 @@
+# name: test/sql/ducknng_body_codecs.test
+# group: [ducknng]
+
+require ducknng
+
+query I
+SELECT count(*) FROM ducknng_list_codecs()
+----
+10
+
+query IT
+SELECT a, b
+FROM ducknng_parse_body('[{"a":1,"b":"x"},{"a":2,"b":"y"}]'::BLOB, 'application/json; charset=utf-8')
+ORDER BY a
+----
+1	x
+2	y
+
+query IT
+SELECT a, b
+FROM ducknng_parse_body(
+  (concat('a,b', chr(10), '1,x', chr(10), '2,y', chr(10)))::BLOB,
+  'text/csv'
+)
+ORDER BY a
+----
+1	x
+2	y
+
+query IT
+SELECT a, b
+FROM ducknng_parse_body(
+  (concat('a', chr(9), 'b', chr(10), '1', chr(9), 'x', chr(10), '2', chr(9), 'y', chr(10)))::BLOB,
+  'text/tab-separated-values'
+)
+ORDER BY a
+----
+1	x
+2	y
+
+query IT
+SELECT a, b
+FROM ducknng_parse_body(
+  (concat('{"a":1,"b":"x"}', chr(10), '{"a":2,"b":"y"}', chr(10)))::BLOB,
+  'application/x-ndjson'
+)
+ORDER BY a
+----
+1	x
+2	y
+
+query TT
+SELECT name, value
+FROM ducknng_parse_body('foo=bar&baz=hello%20world&plus=a+b'::BLOB, 'application/x-www-form-urlencoded')
+ORDER BY name
+----
+baz	hello world
+foo	bar
+plus	a b
+
+query T
+SELECT body_text
+FROM ducknng_parse_body('hello from text'::BLOB, 'text/plain; charset=utf-8')
+----
+hello from text
+
+query T
+SELECT hex(body)
+FROM ducknng_parse_body(from_hex('000102'), 'application/octet-stream')
+----
+000102
+
+query I
+SELECT CASE
+  WHEN ducknng_start_server('codec_rpc', 'ipc:///tmp/ducknng_body_codecs.ipc', 1, 134217728, 300000, 0::UBIGINT)
+  THEN 1 ELSE 0 END
+----
+1
+
+query I
+SELECT CASE WHEN ducknng_register_exec_method() THEN 1 ELSE 0 END
+----
+1
+
+query IT
+SELECT a, b
+FROM ducknng_query_rpc(
+  'ipc:///tmp/ducknng_body_codecs.ipc',
+  'SELECT * FROM ducknng_parse_body(''[{"a":3,"b":"z"}]''::BLOB, ''application/json'')',
+  0::UBIGINT
+)
+----
+3	z
+
+query I
+SELECT CASE WHEN ducknng_stop_server('codec_rpc') THEN 1 ELSE 0 END
+----
+1
+
+query I
+SELECT CASE
+  WHEN ducknng_start_server('codec_http', 'http://127.0.0.1:0/_ducknng', 1, 134217728, 300000, 0::UBIGINT)
+  THEN 1 ELSE 0 END
+----
+1
+
+statement ok
+SET VARIABLE codec_http_url = (
+  SELECT listen FROM ducknng_list_servers() WHERE name = 'codec_http'
+)
+
+query IT
+SELECT ok, type_name
+FROM ducknng_ncurl_table(
+  getvariable('codec_http_url')::VARCHAR,
+  'POST',
+  '[{"name":"Content-Type","value":"application/vnd.ducknng.frame"}]',
+  from_hex('01000000000000000000000000000000000000000000'),
+  2000,
+  0::UBIGINT
+)
+----
+1	result
+
+query IT
+SELECT ok, type_name
+FROM ducknng_ncurl_table(
+  getvariable('codec_http_url')::VARCHAR,
+  'POST',
+  '[{"name":"Content-Type","value":"Application/Vnd.Ducknng.Frame; charset=binary"}]',
+  from_hex('01000000000000000000000000000000000000000000'),
+  2000,
+  0::UBIGINT
+)
+----
+1	result
+
+query I
+SELECT CASE WHEN ducknng_stop_server('codec_http') THEN 1 ELSE 0 END
+----
+1
+
+# --- user codec hooks (ducknng_register_codec / ducknng_unregister_codec) ---
+
+# Define a SQL UDF that the codec layer can dispatch against. Takes a BLOB
+# and returns a VARCHAR; the codec hook will splice the function name into
+# "SELECT <fn>(?::BLOB)" so the registry only accepts plain identifiers.
+statement ok
+CREATE OR REPLACE FUNCTION test_codec_upper(b BLOB) AS upper(decode(b))
+
+query I
+SELECT CASE WHEN ducknng_register_codec('application/x-test-upper', 'test_codec_upper') THEN 1 ELSE 0 END
+----
+1
+
+# list_codecs() now reports the user codec alongside built-ins.
+query TTTT
+SELECT provider, media_types, kind, function_name
+FROM ducknng_list_codecs()
+WHERE kind = 'user'
+ORDER BY media_types
+----
+user	application/x-test-upper	user	test_codec_upper
+
+# A request whose Content-Type matches the user codec is routed through it,
+# producing a single-row "value VARCHAR" table.
+query T
+SELECT value
+FROM ducknng_parse_body('hello'::BLOB, 'application/x-test-upper')
+----
+HELLO
+
+# Content-type matching is case-insensitive and tolerant of parameters.
+query T
+SELECT value
+FROM ducknng_parse_body('mixed'::BLOB, 'Application/X-Test-Upper; charset=utf-8')
+----
+MIXED
+
+# User codecs take precedence over built-in providers when the media type matches.
+statement ok
+CREATE OR REPLACE FUNCTION test_codec_jsonbypass(b BLOB) AS concat('bypass:', decode(b))
+
+query I
+SELECT CASE WHEN ducknng_register_codec('application/json', 'test_codec_jsonbypass') THEN 1 ELSE 0 END
+----
+1
+
+query T
+SELECT value
+FROM ducknng_parse_body('{"a":1}'::BLOB, 'application/json')
+----
+bypass:{"a":1}
+
+# Unregister restores the built-in JSON provider.
+query I
+SELECT CASE WHEN ducknng_unregister_codec('application/json') THEN 1 ELSE 0 END
+----
+1
+
+query I
+SELECT a
+FROM ducknng_parse_body('[{"a":42}]'::BLOB, 'application/json')
+----
+42
+
+# Function name is a plain SQL identifier allowlist; reject injection attempts.
+statement error
+SELECT ducknng_register_codec('application/x-injection', 'foo; DROP TABLE bar')
+----
+ducknng: codec function name must be a plain SQL identifier
+
+# Unregistering an unknown codec returns FALSE without erroring.
+query I
+SELECT CASE WHEN ducknng_unregister_codec('application/x-never-registered') THEN 1 ELSE 0 END
+----
+0
+
+# Clean up the upper codec.
+query I
+SELECT CASE WHEN ducknng_unregister_codec('application/x-test-upper') THEN 1 ELSE 0 END
+----
+1
+
+query I
+SELECT count(*) FROM ducknng_list_codecs() WHERE kind = 'user'
+----
+0

@@ -1,0 +1,92 @@
+# name: test/sql/ducknng_ip_allowlist.test
+# group: [ducknng]
+
+require ducknng
+
+query I
+SELECT CASE
+  WHEN ducknng_start_server(
+    'ip_allow_rpc',
+    'tcp://127.0.0.1:0',
+    1,
+    134217728,
+    300000,
+    0::UBIGINT,
+    '["127.0.0.1/32"]'
+  )
+  THEN 1 ELSE 0 END
+----
+1
+
+statement ok
+SET VARIABLE ip_allow_rpc_url = (
+  SELECT listen FROM ducknng_list_servers() WHERE name = 'ip_allow_rpc'
+)
+
+query III
+SELECT ip_allowlist_active, ip_allowlist_count = 1, peer_allowlist_active
+FROM ducknng_list_servers()
+WHERE name = 'ip_allow_rpc'
+----
+true	1	false
+
+query III
+SELECT ok,
+       position('"ip_allowlist_active":true' IN manifest) > 0,
+       json_extract(manifest::JSON, '$.server.security.ip_allowlist_count')::UBIGINT = 1
+FROM ducknng_get_rpc_manifest(getvariable('ip_allow_rpc_url')::VARCHAR, 0::UBIGINT)
+----
+1	1	1
+
+query I
+SELECT CASE WHEN ducknng_stop_server('ip_allow_rpc') THEN 1 ELSE 0 END
+----
+1
+
+query I
+SELECT CASE
+  WHEN ducknng_start_server(
+    'ip_allow_http',
+    'http://127.0.0.1:45461/_ducknng',
+    1,
+    134217728,
+    300000,
+    0::UBIGINT,
+    '["127.0.0.1/32"]'
+  )
+  THEN 1 ELSE 0 END
+----
+1
+
+query I
+SELECT ok
+FROM ducknng_get_rpc_manifest('http://127.0.0.1:45461/_ducknng', 0::UBIGINT)
+----
+1
+
+query I
+SELECT ducknng_set_service_ip_allowlist('ip_allow_http', '["192.0.2.0/24"]')
+----
+true
+
+query II
+SELECT ok, error LIKE '%403%'
+FROM ducknng_get_rpc_manifest('http://127.0.0.1:45461/_ducknng', 0::UBIGINT)
+----
+0	1
+
+query I
+SELECT ducknng_set_service_ip_allowlist('ip_allow_http', NULL)
+----
+true
+
+query I
+SELECT ok
+FROM ducknng_get_rpc_manifest('http://127.0.0.1:45461/_ducknng', 0::UBIGINT)
+----
+1
+
+query I
+SELECT CASE WHEN ducknng_stop_server('ip_allow_http') THEN 1 ELSE 0 END
+----
+1

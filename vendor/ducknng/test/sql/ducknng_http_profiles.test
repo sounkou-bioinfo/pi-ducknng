@@ -1,0 +1,212 @@
+# name: test/sql/ducknng_http_profiles.test
+# group: [ducknng]
+
+require ducknng
+
+query I
+SELECT CASE
+  WHEN ducknng_start_server('http_profile_api', 'http://127.0.0.1:0/_ducknng', 1, 134217728, 300000, 0::UBIGINT)
+  THEN 1 ELSE 0 END
+----
+1
+
+statement ok
+SET VARIABLE http_profile_mount = (
+  SELECT listen FROM ducknng_list_servers() WHERE name = 'http_profile_api'
+)
+
+statement ok
+SET VARIABLE http_profile_base = replace(getvariable('http_profile_mount')::VARCHAR, '/_ducknng', '')
+
+statement ok
+SET VARIABLE http_profile_auth_sql =
+'SELECT * FROM ducknng_http_text(
+   200,
+   CASE
+     WHEN ducknng_http_header(''Authorization'') = ''Bearer profile-secret''
+     THEN ''authorized''
+     ELSE ''denied''
+   END
+ )'
+
+query I
+SELECT CASE WHEN ducknng_register_http_route(
+  'http_profile_api', 'GET', '/auth/check', getvariable('http_profile_auth_sql')::VARCHAR
+) THEN 1 ELSE 0 END
+----
+1
+
+statement ok
+SET VARIABLE http_profile_json_sql =
+'SELECT * FROM ducknng_http_json(
+   200,
+   CASE
+     WHEN ducknng_http_header(''Authorization'') = ''Bearer profile-secret''
+     THEN ''[{"authorized":true,"n":42}]''
+     ELSE ''[{"authorized":false,"n":0}]''
+   END
+ )'
+
+query I
+SELECT CASE WHEN ducknng_register_http_route(
+  'http_profile_api', 'GET', '/auth/data.json', getvariable('http_profile_json_sql')::VARCHAR
+) THEN 1 ELSE 0 END
+----
+1
+
+query I
+SELECT CASE WHEN ducknng_register_http_profile(
+  'profile-main',
+  'http',
+  '127.0.0.1',
+  NULL::INTEGER,
+  '/auth',
+  'GET',
+  false,
+  'Authorization',
+  'Bearer profile-secret'
+) THEN 1 ELSE 0 END
+----
+1
+
+statement error
+SELECT ducknng_register_http_profile(
+  'profile-bad-header',
+  'http',
+  '127.0.0.1',
+  NULL::INTEGER,
+  '/auth',
+  'GET',
+  false,
+  'Authorization',
+  'Bearer ' || chr(10)
+)
+----
+ducknng: HTTP profile auth header value must be non-empty and must not contain control characters
+
+# Sync ncurl resolves the profile, injects Authorization, and the response does
+# not expose the token.
+query IIII
+SELECT ok, status = 200, body_text = 'authorized',
+       position('profile-secret' IN coalesce(body_text, '')) = 0
+FROM ducknng_ncurl(
+  getvariable('http_profile_base')::VARCHAR || '/auth/check',
+  'GET', NULL, NULL, 2000, 0::UBIGINT, 'profile-main'
+)
+----
+1	1	1	1
+
+# The parsed table helper uses the same profile resolution path.
+query II
+SELECT CASE WHEN authorized THEN 1 ELSE 0 END, n::INTEGER
+FROM ducknng_ncurl_table(
+  getvariable('http_profile_base')::VARCHAR || '/auth/data.json',
+  'GET', NULL, NULL, 2000, 0::UBIGINT, 'profile-main'
+)
+----
+1	42
+
+# The aio helper also resolves the profile before launch.
+statement ok
+CREATE TEMP TABLE http_profile_aio AS
+SELECT ducknng_ncurl_aio(
+  getvariable('http_profile_base')::VARCHAR || '/auth/check',
+  'GET', NULL, NULL, 2000, 0::UBIGINT, 'profile-main'
+) AS aio_id
+
+query III
+SELECT ok, status = 200, body_text = 'authorized'
+FROM ducknng_ncurl_aio_collect((SELECT list_value(aio_id) FROM http_profile_aio), 2000)
+----
+1	1	1
+
+query I
+SELECT CASE WHEN ducknng_aio_drop(aio_id) THEN 1 ELSE 0 END
+FROM http_profile_aio
+----
+1
+
+statement ok
+DROP TABLE http_profile_aio
+
+# Fail closed before sending when scope does not match.
+query II
+SELECT ok, position('URL host' IN error) > 0
+FROM ducknng_ncurl(
+  replace(getvariable('http_profile_base')::VARCHAR, '127.0.0.1', 'localhost') || '/auth/check',
+  'GET', NULL, NULL, 2000, 0::UBIGINT, 'profile-main'
+)
+----
+0	1
+
+query II
+SELECT ok, position('URL path' IN error) > 0
+FROM ducknng_ncurl(
+  getvariable('http_profile_base')::VARCHAR || '/other',
+  'GET', NULL, NULL, 2000, 0::UBIGINT, 'profile-main'
+)
+----
+0	1
+
+query II
+SELECT ok, position('URL path' IN error) > 0
+FROM ducknng_ncurl(
+  getvariable('http_profile_base')::VARCHAR || '/authz',
+  'GET', NULL, NULL, 2000, 0::UBIGINT, 'profile-main'
+)
+----
+0	1
+
+query II
+SELECT ok, position('HTTP method' IN error) > 0
+FROM ducknng_ncurl(
+  getvariable('http_profile_base')::VARCHAR || '/auth/check',
+  'POST', NULL, NULL, 2000, 0::UBIGINT, 'profile-main'
+)
+----
+0	1
+
+# Caller-supplied Authorization cannot override the profile header.
+query II
+SELECT ok, position('collides' IN error) > 0
+FROM ducknng_ncurl(
+  getvariable('http_profile_base')::VARCHAR || '/auth/check',
+  'GET',
+  '[{"name":"authorization","value":"Bearer attacker"}]',
+  NULL,
+  2000,
+  0::UBIGINT,
+  'profile-main'
+)
+----
+0	1
+
+# Introspection is redacted: it reports the profile id, scope, version, expiry,
+# and auth header names but not the raw credential value.
+query TTTITTTIII
+SELECT profile_id, scheme, host, has_port, path_prefix, method,
+       auth_header_names_json, version > 0, expires_at_ms,
+       position('profile-secret' IN (
+         profile_id || scheme || host || path_prefix || method || auth_header_names_json
+       )) = 0
+FROM ducknng_list_http_profiles()
+WHERE profile_id = 'profile-main'
+----
+profile-main	http	127.0.0.1	0	/auth	GET	["Authorization"]	1	0	1
+
+query I
+SELECT CASE WHEN ducknng_drop_http_profile('profile-main') THEN 1 ELSE 0 END
+----
+1
+
+query I
+SELECT count(*)::INTEGER
+FROM ducknng_list_http_profiles()
+WHERE profile_id = 'profile-main'
+----
+0
+
+query I
+SELECT CASE WHEN ducknng_stop_server('http_profile_api') THEN 1 ELSE 0 END
+----
+1

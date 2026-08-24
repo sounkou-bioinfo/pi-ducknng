@@ -1,0 +1,263 @@
+# name: test/sql/ducknng_http_extras.test
+# group: [ducknng]
+
+require ducknng
+
+# Start an HTTP service for route auth, static file, and worker tests
+
+query I
+SELECT CASE
+  WHEN ducknng_start_server('http_extras_api', 'http://127.0.0.1:0/_ducknng', 1, 134217728, 300000, 0::UBIGINT)
+  THEN 1 ELSE 0 END
+----
+1
+
+statement ok
+SET VARIABLE http_extras_mount = (
+  SELECT listen FROM ducknng_list_servers() WHERE name = 'http_extras_api'
+)
+
+statement ok
+SET VARIABLE http_extras_base = replace(getvariable('http_extras_mount')::VARCHAR, '/_ducknng', '')
+
+# Register a basic route; verify new columns default to NULL / false
+
+query I
+SELECT CASE WHEN ducknng_register_http_route(
+  'http_extras_api',
+  'GET',
+  '/info',
+  'SELECT 200 AS status, ''text/plain'' AS content_type, ''ok'' AS body_text'
+) THEN 1 ELSE 0 END
+----
+1
+
+query III
+SELECT auth_require_identity, static_dir_path IS NULL, auth_allow_identities_json IS NULL
+FROM ducknng_list_http_routes()
+WHERE service_name = 'http_extras_api' AND path = '/info'
+----
+0	1	1
+
+# ducknng_set_http_route_auth: 3-arg clears auth
+
+query I
+SELECT CASE WHEN ducknng_set_http_route_auth('http_extras_api', 'GET', '/info') THEN 1 ELSE 0 END
+----
+1
+
+query II
+SELECT auth_require_identity, auth_allow_identities_json IS NULL
+FROM ducknng_list_http_routes()
+WHERE service_name = 'http_extras_api' AND path = '/info'
+----
+0	1
+
+# ducknng_set_http_route_auth: 4-arg sets require_identity
+
+query I
+SELECT CASE WHEN ducknng_set_http_route_auth('http_extras_api', 'GET', '/info', true) THEN 1 ELSE 0 END
+----
+1
+
+query II
+SELECT auth_require_identity, auth_allow_identities_json IS NULL
+FROM ducknng_list_http_routes()
+WHERE service_name = 'http_extras_api' AND path = '/info'
+----
+1	1
+
+# ducknng_set_http_route_auth: 5-arg sets require_identity and allow-list
+
+query I
+SELECT CASE WHEN ducknng_set_http_route_auth('http_extras_api', 'GET', '/info', true, '["client1","client2"]') THEN 1 ELSE 0 END
+----
+1
+
+query III
+SELECT auth_require_identity, auth_allow_identities_json = '["client1","client2"]', static_dir_path IS NULL
+FROM ducknng_list_http_routes()
+WHERE service_name = 'http_extras_api' AND path = '/info'
+----
+1	1	1
+
+# ducknng_set_http_route_auth: 3-arg clears auth again
+
+query I
+SELECT CASE WHEN ducknng_set_http_route_auth('http_extras_api', 'GET', '/info') THEN 1 ELSE 0 END
+----
+1
+
+query II
+SELECT auth_require_identity, auth_allow_identities_json IS NULL
+FROM ducknng_list_http_routes()
+WHERE service_name = 'http_extras_api' AND path = '/info'
+----
+0	1
+
+# ducknng_register_http_static: registers a prefix route with a static dir path
+
+query I
+SELECT CASE WHEN ducknng_register_http_static('http_extras_api', '/files/', '/tmp') THEN 1 ELSE 0 END
+----
+1
+
+query III
+SELECT match_kind = 'prefix', path = '/files/', static_dir_path = '/tmp'
+FROM ducknng_list_http_routes()
+WHERE service_name = 'http_extras_api' AND path = '/files/'
+----
+1	1	1
+
+# ducknng_register_http_worker / ducknng_list_http_workers / ducknng_unregister_http_worker
+
+query I
+SELECT count(*) FROM ducknng_list_http_workers() WHERE service_name = 'http_extras_api'
+----
+0
+
+query I
+SELECT CASE WHEN ducknng_register_http_worker(
+  'http_extras_api',
+  'noop_worker',
+  'SELECT 1',
+  60000::UBIGINT
+) THEN 1 ELSE 0 END
+----
+1
+
+query IIII
+SELECT service_name = 'http_extras_api', worker_name = 'noop_worker', sql = 'SELECT 1', interval_ms = 60000
+FROM ducknng_list_http_workers()
+WHERE service_name = 'http_extras_api'
+----
+1	1	1	1
+
+query I
+SELECT CASE WHEN ducknng_unregister_http_worker('http_extras_api', 'noop_worker') THEN 1 ELSE 0 END
+----
+1
+
+query I
+SELECT count(*) FROM ducknng_list_http_workers() WHERE service_name = 'http_extras_api'
+----
+0
+
+# ducknng_http_ndjson: verify output shape
+
+query III
+SELECT status = 200, content_type = 'application/x-ndjson; charset=utf-8', body_text = 'line1'
+FROM ducknng_http_ndjson(200, 'line1')
+----
+1	1	1
+
+# ducknng_format_sse: verify SSE event formatting
+query I
+SELECT ducknng_format_sse('hello') = 'data: hello' || chr(10) || chr(10)
+----
+1
+
+query I
+SELECT ducknng_format_sse('hello', event := 'update') = 'event: update' || chr(10) || 'data: hello' || chr(10) || chr(10)
+----
+1
+
+# ducknng_add_stream_route: register a streaming SSE route and verify via ncurl
+
+query I
+SELECT CASE WHEN ducknng_add_stream_route(
+  'http_extras_api', 'GET', '/events',
+  'SELECT ducknng_format_sse(''row '' || i::VARCHAR) AS chunk FROM generate_series(1,3) t(i)'
+) THEN 1 ELSE 0 END
+----
+1
+
+query II
+SELECT is_stream, stream_content_type = 'text/event-stream; charset=utf-8'
+FROM ducknng_list_http_routes()
+WHERE service_name = 'http_extras_api' AND path = '/events'
+----
+1	1
+
+query III
+SELECT ok, status = 200, body_text = ('data: row 1' || chr(10) || chr(10) || 'data: row 2' || chr(10) || chr(10) || 'data: row 3' || chr(10) || chr(10))
+FROM ducknng_ncurl(getvariable('http_extras_base') || '/events', 'GET', NULL, NULL, 5000, 0::UBIGINT)
+----
+1	1	1
+
+# Streaming routes hold the service request boundary until the hijacked
+# stream has completed.  This prevents stop/teardown from freeing HTTP
+# handler or service state while a stream is still using it.
+query I
+SELECT CASE WHEN ducknng_add_stream_route(
+  'http_extras_api', 'GET', '/slow-events',
+  'SELECT ducknng_format_sse(''slow '' || i::VARCHAR || '':'' || COALESCE(CASE WHEN i = 1 THEN sleep_ms(1500) ELSE 0 END, 0)::VARCHAR) AS chunk FROM generate_series(1,3) t(i)'
+) THEN 1 ELSE 0 END
+----
+1
+
+statement ok
+CREATE TEMP TABLE slow_stream_aio AS
+SELECT ducknng_ncurl_aio(getvariable('http_extras_base') || '/slow-events', 'GET', NULL, NULL, 5000, 0::UBIGINT) AS aio_id
+
+query I
+WITH RECURSIVE poll(i, c) AS (
+  SELECT 1, ducknng_service_inflight('http_extras_api')
+  UNION ALL
+  SELECT i + 1, (
+    COALESCE(CASE WHEN c < 1 THEN sleep_ms(10) ELSE 0 END, 0) * 0 +
+    ducknng_service_inflight('http_extras_api')
+  )
+  FROM poll WHERE c < 1 AND i < 500
+) SELECT c FROM poll ORDER BY i DESC LIMIT 1
+----
+1
+
+query I
+SELECT COALESCE(sleep_ms(200), 0) * 0
+----
+0
+
+query I
+SELECT ducknng_service_inflight('http_extras_api')
+----
+1
+
+query I
+SELECT CASE WHEN ducknng_stop_server('http_extras_api') THEN 1 ELSE 0 END
+----
+0
+
+statement ok
+CREATE TEMP TABLE slow_stream_result AS
+SELECT *
+FROM ducknng_ncurl_aio_collect((SELECT list_value(aio_id) FROM slow_stream_aio), 5000)
+
+query III
+SELECT ok, status = 200,
+       body_text = ('data: slow 1:0' || chr(10) || chr(10) || 'data: slow 2:0' || chr(10) || chr(10) || 'data: slow 3:0' || chr(10) || chr(10))
+FROM slow_stream_result
+----
+1	1	1
+
+query I
+SELECT ducknng_aio_drop(aio_id)
+FROM slow_stream_aio
+----
+1
+
+statement ok
+DROP TABLE slow_stream_result
+
+statement ok
+DROP TABLE slow_stream_aio
+
+query I
+SELECT ducknng_service_inflight('http_extras_api')
+----
+0
+
+query I
+SELECT CASE WHEN ducknng_stop_server('http_extras_api') THEN 1 ELSE 0 END
+----
+1

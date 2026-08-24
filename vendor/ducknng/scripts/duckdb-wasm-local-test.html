@@ -1,0 +1,744 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ducknng browser wasm demo</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f3efe4;
+      --panel: #fffdf7;
+      --ink: #1a1a1a;
+      --muted: #6a665c;
+      --accent: #0f766e;
+      --accent-2: #b45309;
+      --border: #d6cfbf;
+      --code: rgba(15, 118, 110, 0.08);
+      --danger: #b91c1c;
+      --ok: #15803d;
+    }
+    body {
+      margin: 0;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      background:
+        radial-gradient(circle at top right, rgba(15, 118, 110, 0.10), transparent 35%),
+        radial-gradient(circle at bottom left, rgba(180, 83, 9, 0.10), transparent 30%),
+        var(--bg);
+      color: var(--ink);
+    }
+    main { max-width: 1120px; margin: 0 auto; padding: 32px 20px 48px; }
+    h1 { margin: 0 0 8px; font-size: 30px; line-height: 1.2; }
+    h2 { margin: 0 0 10px; font-size: 20px; }
+    p { margin: 0 0 12px; color: var(--muted); line-height: 1.5; }
+    .grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; }
+    @media (min-width: 960px) {
+      .grid { grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.05fr); align-items: start; }
+    }
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 18px;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.04);
+      margin-bottom: 16px;
+    }
+    .controls {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin: 12px 0;
+      align-items: center;
+    }
+    button, select {
+      border: 1px solid transparent;
+      border-radius: 999px;
+      background: var(--accent);
+      color: white;
+      padding: 10px 16px;
+      font: inherit;
+    }
+    select { background: #fff; color: var(--ink); border-color: var(--border); }
+    button.secondary { background: #fff; color: var(--ink); border-color: var(--border); }
+    button.warn { background: var(--accent-2); }
+    button:disabled { opacity: 0.55; cursor: wait; }
+    textarea {
+      width: 100%;
+      min-height: 160px;
+      box-sizing: border-box;
+      resize: vertical;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 10px;
+      background: #fff;
+      color: var(--ink);
+      font: inherit;
+      line-height: 1.45;
+    }
+    pre {
+      margin: 0;
+      white-space: pre-wrap;
+      word-break: break-word;
+      line-height: 1.4;
+      min-height: 320px;
+      max-height: 72vh;
+      overflow: auto;
+    }
+    code { background: var(--code); padding: 1px 5px; border-radius: 6px; }
+    .status { font-weight: 700; }
+    .status.ok { color: var(--ok); }
+    .status.failed { color: var(--danger); }
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      background: #fff;
+      padding: 6px 10px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .result-wrap {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      overflow: auto;
+      background: #fff;
+      max-height: 54vh;
+    }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { text-align: left; vertical-align: top; padding: 8px 10px; border-bottom: 1px solid #ece6d8; }
+    th { position: sticky; top: 0; background: #faf7ef; z-index: 1; }
+    tr:last-child td { border-bottom: 0; }
+    .empty { color: var(--muted); padding: 14px; }
+    .banner {
+      border-left: 4px solid var(--accent);
+      padding: 10px 12px;
+      background: rgba(15, 118, 110, 0.08);
+      border-radius: 10px;
+      margin-bottom: 16px;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>ducknng browser wasm demo</h1>
+    <p>
+      This page loads the ducknng DuckDB extension in duckdb-wasm, runs the browser
+      smoke checks, and then exposes a small SQL shell against the same connection.
+      The current browser proof is intentionally narrow: extension load, codec and
+      registry calls, raw <code>inproc://</code> URL-launched AIO bytes, and framed RPC
+      manifest collection over <code>inproc://</code> under the pthread runtime.
+    </p>
+    <div class="banner">
+      Browser <code>ipc://</code>, raw <code>tcp://</code>, native POSIX-style
+      <code>tls+tcp://</code>, HTTP, and WebSocket transports are not proven by this page.
+    </div>
+
+    <div class="grid">
+      <section class="card">
+        <h2>Setup and smoke tests</h2>
+        <p>
+          The threaded runtime needs cross-origin isolation. On GitHub Pages this page
+          installs a same-origin service worker and reloads once to add COOP/COEP headers.
+        </p>
+        <div class="controls">
+          <button id="run">Start ducknng + run smoke tests</button>
+          <button id="smoke-again" class="secondary" disabled>Run smoke tests again</button>
+          <button id="clear-log" class="secondary">Clear log</button>
+          <span id="status" class="status">Idle</span>
+        </div>
+        <div class="controls">
+          <span id="runtime-pill" class="pill">runtime: not loaded</span>
+          <span id="coi-pill" class="pill">crossOriginIsolated: unknown</span>
+        </div>
+        <pre id="log"></pre>
+      </section>
+
+      <section class="card">
+        <h2>SQL shell</h2>
+        <p>
+          Run ad hoc SQL after setup. Results are rendered as a table, while the left log
+          keeps the full setup and query transcript.
+        </p>
+        <textarea id="sql">SELECT codec_name, media_types
+FROM ducknng_list_codecs()
+ORDER BY codec_name
+LIMIT 8;</textarea>
+        <div class="controls">
+          <button id="run-sql" disabled>Run SQL</button>
+          <button id="clear-result" class="secondary" disabled>Clear result</button>
+          <select id="examples" aria-label="Example query">
+            <option value="codecs">Codecs</option>
+            <option value="versions">DuckDB and NNG versions</option>
+            <option value="frame">Decode a synthetic frame</option>
+            <option value="functions">ducknng functions</option>
+            <option value="servers">Running servers</option>
+          </select>
+          <button id="load-example" class="secondary">Load example</button>
+          <span id="shell-status" class="status">Shell disabled until setup completes</span>
+        </div>
+        <div id="result-meta" class="pill">No query has run yet.</div>
+        <div id="result-table" class="result-wrap"><div class="empty">Results will appear here.</div></div>
+      </section>
+    </div>
+  </main>
+
+  <script type="importmap">
+    {
+      "imports": {
+        "apache-arrow": "https://cdn.jsdelivr.net/npm/apache-arrow@17.0.0/+esm"
+      }
+    }
+  </script>
+  <script type="module">
+    import * as duckdb from "../duckdb-browser.mjs";
+
+    const siteBaseUrl = new URL("../", import.meta.url);
+    const logNode = document.getElementById("log");
+    const runButton = document.getElementById("run");
+    const smokeAgainButton = document.getElementById("smoke-again");
+    const clearLogButton = document.getElementById("clear-log");
+    const runSqlButton = document.getElementById("run-sql");
+    const clearResultButton = document.getElementById("clear-result");
+    const loadExampleButton = document.getElementById("load-example");
+    const examplesNode = document.getElementById("examples");
+    const statusNode = document.getElementById("status");
+    const runtimePill = document.getElementById("runtime-pill");
+    const coiPill = document.getElementById("coi-pill");
+    const shellStatus = document.getElementById("shell-status");
+    const sqlNode = document.getElementById("sql");
+    const resultMeta = document.getElementById("result-meta");
+    const resultTable = document.getElementById("result-table");
+
+    let db = null;
+    let conn = null;
+    let runtimeConfig = null;
+    let setupDone = false;
+
+    const extensionLoadTimeoutMs = 120000;
+    const nngSetupTimeoutMs = 60000;
+    const duckdbExtensionRelativePath = "duckdb-wasm/ducknng.duckdb_extension.wasm";
+
+    const examples = {
+      codecs: `SELECT codec_name, media_types
+FROM ducknng_list_codecs()
+ORDER BY codec_name
+LIMIT 8;`,
+      versions: `SELECT version() AS duckdb_version,
+       ducknng_nng_version() AS nng_version;`,
+      frame: `SELECT ducknng_frame_version(frame) AS frame_version,
+       ducknng_frame_type_name(frame) AS type_name,
+       ducknng_frame_name(frame) AS method_name,
+       ducknng_frame_payload_text(frame) AS payload_text
+FROM (SELECT from_hex('01010000000000000000000000000000000000000000') AS frame);`,
+      functions: `SELECT function_name, function_type
+FROM duckdb_functions()
+WHERE function_name LIKE 'ducknng_%'
+ORDER BY function_name
+LIMIT 30;`,
+      servers: `SELECT *
+FROM ducknng_list_servers();`,
+    };
+
+    function resourceUrl(path) {
+      const text = String(path ?? "");
+      if (/^[a-z][a-z0-9+.-]*:/i.test(text)) return text;
+      return new URL(text.replace(/^\/+/, ""), siteBaseUrl).toString();
+    }
+
+    function log(...parts) {
+      const line = parts.map((x) => typeof x === "string" ? x : JSON.stringify(x, jsonReplacer)).join(" ");
+      logNode.textContent += line + "\n";
+      logNode.scrollTop = logNode.scrollHeight;
+      console.log(...parts);
+    }
+
+    function jsonReplacer(_key, value) {
+      return typeof value === "bigint" ? value.toString() : value;
+    }
+
+    function arrowRowToPlain(row) {
+      if (row && typeof row.toJSON === "function") {
+        return row.toJSON();
+      }
+      if (row && typeof row === "object") {
+        return Object.fromEntries(Object.entries(row));
+      }
+      return row;
+    }
+
+    function resultRows(result) {
+      const rows = [];
+      const n = Number(result?.numRows ?? 0);
+      if (typeof result?.get === "function") {
+        for (let i = 0; i < n; i++) {
+          rows.push(arrowRowToPlain(result.get(i)));
+        }
+        return rows;
+      }
+      if (typeof result?.toArray === "function") {
+        return result.toArray().map(arrowRowToPlain);
+      }
+      return null;
+    }
+
+    function formatResult(result) {
+      const rows = resultRows(result);
+      if (rows) {
+        return JSON.stringify(rows, jsonReplacer, 2);
+      }
+      if (typeof result?.toString === "function") {
+        return result.toString();
+      }
+      return JSON.stringify(result, jsonReplacer, 2);
+    }
+
+    function formatCell(value) {
+      if (value === null || value === undefined) return "NULL";
+      if (value instanceof Uint8Array) return `0x${Array.from(value).map((x) => x.toString(16).padStart(2, "0")).join("")}`;
+      if (typeof value === "bigint") return value.toString();
+      if (typeof value === "object") return JSON.stringify(value, jsonReplacer);
+      return String(value);
+    }
+
+    function renderResult(result) {
+      const rows = resultRows(result) ?? [];
+      const fields = result?.schema?.fields?.map((field) => field.name) ?? [];
+      const columns = fields.length ? fields : Array.from(new Set(rows.flatMap((row) => Object.keys(row ?? {}))));
+      resultMeta.textContent = `${rows.length} row${rows.length === 1 ? "" : "s"}`;
+      if (!columns.length) {
+        resultTable.innerHTML = '<div class="empty">Query returned no columns.</div>';
+        return;
+      }
+      const table = document.createElement("table");
+      const thead = document.createElement("thead");
+      const headerRow = document.createElement("tr");
+      for (const column of columns) {
+        const th = document.createElement("th");
+        th.textContent = column;
+        headerRow.appendChild(th);
+      }
+      thead.appendChild(headerRow);
+      table.appendChild(thead);
+      const tbody = document.createElement("tbody");
+      for (const row of rows) {
+        const tr = document.createElement("tr");
+        for (const column of columns) {
+          const td = document.createElement("td");
+          td.textContent = formatCell(row?.[column]);
+          tr.appendChild(td);
+        }
+        tbody.appendChild(tr);
+      }
+      table.appendChild(tbody);
+      resultTable.replaceChildren(table);
+    }
+
+    function setStatus(text, cls = "") {
+      statusNode.textContent = text;
+      statusNode.className = `status ${cls}`.trim();
+    }
+
+    function setShellEnabled(enabled) {
+      runSqlButton.disabled = !enabled;
+      clearResultButton.disabled = !enabled;
+      smokeAgainButton.disabled = !enabled;
+      shellStatus.textContent = enabled ? "Ready" : "Shell disabled until setup completes";
+    }
+
+    async function loadRuntimeConfig() {
+      const fallback = {
+        platform: "wasm_eh",
+        worker: "duckdb-browser-eh.worker.js",
+        wasm: "duckdb-eh.wasm",
+        pthreadWorker: null,
+        requiresCrossOriginIsolation: false,
+        coiServiceWorker: "ducknng-coi-service-worker.js",
+      };
+      try {
+        const response = await fetch(resourceUrl("ducknng-wasm-config.json"), { cache: "no-store" });
+        if (!response.ok) return fallback;
+        return { ...fallback, ...(await response.json()) };
+      } catch (_e) {
+        return fallback;
+      }
+    }
+
+    async function ensureCrossOriginIsolationIfNeeded(config) {
+      coiPill.textContent = `crossOriginIsolated: ${globalThis.crossOriginIsolated ? "true" : "false"}`;
+      if (!config?.requiresCrossOriginIsolation || globalThis.crossOriginIsolated) return;
+      if (!("serviceWorker" in navigator)) {
+        throw new Error("wasm_threads requires cross-origin isolation, but this browser does not expose service workers");
+      }
+      const reloadKey = "ducknng-coi-service-worker-reload";
+      if (sessionStorage.getItem(reloadKey) === "1") {
+        throw new Error("wasm_threads requires cross-origin isolation; the service worker reload completed but crossOriginIsolated is still false");
+      }
+      log("Installing COI service worker for static hosting and reloading once...");
+      await navigator.serviceWorker.register(resourceUrl(config.coiServiceWorker ?? "ducknng-coi-service-worker.js"), {
+        scope: resourceUrl(""),
+      });
+      await navigator.serviceWorker.ready;
+      sessionStorage.setItem(reloadKey, "1");
+      sessionStorage.setItem("ducknng-auto-start-after-coi", "1");
+      location.reload();
+      await new Promise(() => {});
+    }
+
+    async function runSQL(sql, timeoutMs = 0) {
+      if (!conn) return null;
+      log(`> ${sql}`);
+      let queryPromise = conn.query(sql);
+      if (timeoutMs > 0) {
+        queryPromise = Promise.race([
+          queryPromise,
+          new Promise((_resolve, reject) => {
+            setTimeout(() => reject(new Error(`query timed out after ${timeoutMs} ms`)), timeoutMs);
+          }),
+        ]);
+      }
+      const result = await queryPromise;
+      try {
+        log(formatResult(result));
+      } catch (e) {
+        log(`Query succeeded; result rendering failed: ${e?.message ?? String(e)}`);
+        log({ numRows: result?.numRows, schema: result?.schema?.fields?.map((f) => f.name) });
+      }
+      return resultRows(result);
+    }
+
+    async function withTimeout(promise, label, timeoutMs) {
+      if (!timeoutMs || timeoutMs <= 0) return await promise;
+      return await Promise.race([
+        promise,
+        new Promise((_resolve, reject) => {
+          setTimeout(() => reject(new Error(`${label} timed out after ${timeoutMs} ms`)), timeoutMs);
+        }),
+      ]);
+    }
+
+    function sqlQuote(value) {
+      return `'${String(value).replaceAll("'", "''")}'`;
+    }
+
+    function asBool(value) {
+      return value === true || value === 1 || value === 1n || value === "true";
+    }
+
+    function sleep(ms) {
+      return new Promise((resolve) => setTimeout(resolve, ms));
+    }
+
+    function isQueryTimeout(errorOrMessage) {
+      return String(errorOrMessage?.message ?? errorOrMessage ?? "").includes("query timed out after");
+    }
+
+    function requireRows(rows, label) {
+      if (!rows || rows.length === 0) {
+        throw new Error(`${label} returned no rows`);
+      }
+      return rows;
+    }
+
+    async function closeSocketIfOpened(socketId) {
+      if (!socketId) return;
+      try {
+        await runSQL(`SELECT (ducknng_close_socket(${socketId}::UBIGINT)).ok AS closed`, 5000);
+      } catch (e) {
+        log(`WARN failed to close socket ${socketId}: ${e?.message ?? String(e)}`);
+      }
+    }
+
+    async function runInprocUrlRawAioSmoke() {
+      const suffix = `${Date.now()}_${Math.floor(Math.random() * 1000000)}`;
+      const url = `inproc://ducknng_wasm_url_raw_${suffix}`;
+      let repId = 0;
+      let reqAio = 0;
+      let repRecvAio = 0;
+      let repSendAio = 0;
+      let timedOut = false;
+
+      log(`Probing low-level inproc:// URL raw request AIO: ${url}`);
+      try {
+        let rows = requireRows(await runSQL("SELECT (ducknng_open_socket('rep')).socket_id AS socket_id", nngSetupTimeoutMs),
+          "open URL raw rep socket");
+        repId = Number(rows[0].socket_id);
+        await runSQL("SELECT 1 AS after_open_socket", nngSetupTimeoutMs);
+        rows = requireRows(await runSQL(`SELECT (ducknng_listen_socket(
+          ${repId}::UBIGINT, ${sqlQuote(url)}, 1048576, 0::UBIGINT)).ok AS ok`, nngSetupTimeoutMs),
+          "listen URL raw rep socket");
+        if (!asBool(rows[0].ok)) throw new Error("URL raw rep listener returned ok=false");
+        await runSQL("SELECT 1 AS after_listen_socket", nngSetupTimeoutMs);
+
+        rows = requireRows(await runSQL(`SELECT ducknng_request_raw_aio(
+          ${sqlQuote(url)}, from_hex('75726c'), 0, 0::UBIGINT) AS aio`, nngSetupTimeoutMs),
+          "launch URL raw request aio");
+        reqAio = Number(rows[0].aio);
+
+        rows = requireRows(await runSQL(`SELECT ducknng_recv_socket_raw_aio(
+          ${repId}::UBIGINT, 0) AS aio`, nngSetupTimeoutMs), "launch URL raw rep recv aio");
+        repRecvAio = Number(rows[0].aio);
+
+        rows = requireRows(await runSQL(`SELECT ok, error, upper(hex(frame)) AS payload_hex
+          FROM ducknng_aio_collect(list_value(${repRecvAio}::UBIGINT), 5000)`, 10000),
+          "collect URL raw rep recv aio");
+        if (!asBool(rows[0].ok)) throw new Error(`URL raw rep recv aio failed: ${rows[0].error ?? "unknown"}`);
+        if (rows[0].payload_hex !== "75726c".toUpperCase()) {
+          throw new Error(`URL raw rep recv payload mismatch: ${rows[0].payload_hex}`);
+        }
+
+        rows = requireRows(await runSQL(`SELECT ducknng_send_socket_raw_aio(
+          ${repId}::UBIGINT, from_hex('6f6b'), 0) AS aio`, nngSetupTimeoutMs),
+          "launch URL raw rep reply send aio");
+        repSendAio = Number(rows[0].aio);
+
+        rows = requireRows(await runSQL(`SELECT ok, error, frame IS NULL AS no_frame
+          FROM ducknng_aio_collect(list_value(${repSendAio}::UBIGINT), 5000)`, 10000),
+          "collect URL raw rep reply send aio");
+        if (!asBool(rows[0].ok)) throw new Error(`URL raw rep reply send aio failed: ${rows[0].error ?? "unknown"}`);
+
+        rows = requireRows(await runSQL(`SELECT ok, error, upper(hex(frame)) AS payload_hex
+          FROM ducknng_aio_collect(list_value(${reqAio}::UBIGINT), 5000)`, 10000),
+          "collect URL raw request aio");
+        if (!asBool(rows[0].ok)) throw new Error(`URL raw request aio failed: ${rows[0].error ?? "unknown"}`);
+        if (rows[0].payload_hex !== "6f6b".toUpperCase()) {
+          throw new Error(`URL raw reply payload mismatch: ${rows[0].payload_hex}`);
+        }
+        log("low-level inproc:// URL raw request AIO passed");
+        return true;
+      } catch (e) {
+        const detail = e?.message ?? String(e);
+        timedOut = isQueryTimeout(e);
+        log("low-level inproc:// URL raw request AIO failed:", detail);
+        if (timedOut) {
+          log("Skipping follow-up SQL after timeout because duckdb-wasm does not cancel the still-running query.");
+        }
+        if (!timedOut && reqAio) {
+          try {
+            await runSQL(`SELECT aio_id, kind, state, phase, send_done, recv_done,
+              send_ok, recv_ok, has_reply_frame, error
+              FROM ducknng_aio_status(${reqAio}::UBIGINT)`, 5000);
+          } catch (statusError) {
+            log(`WARN failed to read request aio status: ${statusError?.message ?? String(statusError)}`);
+          }
+        }
+        if (!timedOut && repRecvAio) {
+          try {
+            await runSQL(`SELECT aio_id, kind, state, phase, send_done, recv_done,
+              send_ok, recv_ok, has_reply_frame, error
+              FROM ducknng_aio_status(${repRecvAio}::UBIGINT)`, 5000);
+          } catch (statusError) {
+            log(`WARN failed to read rep recv aio status: ${statusError?.message ?? String(statusError)}`);
+          }
+        }
+        if (!timedOut && repSendAio) {
+          try {
+            await runSQL(`SELECT aio_id, kind, state, phase, send_done, recv_done,
+              send_ok, recv_ok, has_reply_frame, error
+              FROM ducknng_aio_status(${repSendAio}::UBIGINT)`, 5000);
+          } catch (statusError) {
+            log(`WARN failed to read rep send aio status: ${statusError?.message ?? String(statusError)}`);
+          }
+        }
+        if (runtimeConfig?.platform === "wasm_threads") {
+          throw new Error(`inproc:// URL raw request AIO failed under wasm_threads: ${detail}`);
+        }
+        return false;
+      } finally {
+        if (!timedOut) await closeSocketIfOpened(repId);
+      }
+    }
+
+    async function runInprocSmoke() {
+      const suffix = `${Date.now()}_${Math.floor(Math.random() * 1000000)}`;
+      const serviceName = `wasm_inproc_${suffix}`;
+      const url = `inproc://ducknng_wasm_${suffix}`;
+      let started = false;
+      let timedOut = false;
+
+      log(`Probing inproc:// RPC smoke: ${url}`);
+      try {
+        let startRows;
+        try {
+          startRows = await runSQL(`SELECT ducknng_start_server(
+            ${sqlQuote(serviceName)}, ${sqlQuote(url)},
+            1, 1048576, 30000, 0::UBIGINT) AS started`, nngSetupTimeoutMs);
+        } catch (e) {
+          const detail = e?.message ?? String(e);
+          log("inproc:// probe unavailable in this wasm runtime:", detail);
+          if (runtimeConfig?.platform === "wasm_threads") {
+            throw new Error(`inproc:// failed under wasm_threads runtime: ${detail}`);
+          }
+          log("This usually means the current EH runtime lacks usable pthread support for NNG worker/task threads.");
+          return false;
+        }
+        if (!asBool(startRows?.[0]?.started)) {
+          const detail = "ducknng_start_server returned false";
+          log("inproc:// probe unavailable:", detail);
+          if (runtimeConfig?.platform === "wasm_threads") {
+            throw new Error(`inproc:// failed under wasm_threads runtime: ${detail}`);
+          }
+          return false;
+        }
+        started = true;
+        if (runtimeConfig?.platform === "wasm_threads") {
+          log("Yielding to let wasm pthread workers start before dialing inproc://");
+          await sleep(1000);
+        }
+
+        let manifestRows;
+        let manifestAio = 0;
+        try {
+          manifestRows = requireRows(await runSQL(`SELECT ducknng_get_rpc_manifest_raw_aio(
+            ${sqlQuote(url)}, 0, 0::UBIGINT) AS aio`, nngSetupTimeoutMs),
+            "launch manifest aio");
+          manifestAio = Number(manifestRows[0].aio);
+          manifestRows = requireRows(await runSQL(`SELECT ok, frame_ok, frame_error,
+              type_name, name,
+              payload_text LIKE '%"methods"%' AS has_methods,
+              length(payload_text) AS payload_text_bytes,
+              substr(payload_text, 1, 160) AS payload_preview
+            FROM ducknng_aio_collect_decoded(list_value(${manifestAio}::UBIGINT), 15000)`, 20000),
+            "collect manifest aio");
+        } catch (e) {
+          timedOut = String(e?.message ?? e).includes("timed out");
+          throw e;
+        }
+        const manifest = manifestRows?.[0];
+        if (!asBool(manifest?.ok) || !asBool(manifest?.frame_ok) || manifest?.frame_error) {
+          throw new Error(`inproc:// manifest AIO failed: ${manifest?.error ?? manifest?.frame_error ?? "unknown"}`);
+        }
+        if (manifest?.type_name !== "result" || manifest?.name !== "manifest" ||
+            !asBool(manifest?.has_methods)) {
+          throw new Error("inproc:// manifest AIO returned an unexpected frame");
+        }
+        log("inproc:// framed RPC manifest AIO passed");
+        return true;
+      } finally {
+        if (started && !timedOut) {
+          try {
+            await runSQL(`SELECT ducknng_stop_server(${sqlQuote(serviceName)}) AS stopped`);
+          } catch (e) {
+            log(`WARN failed to stop ${serviceName}: ${e?.message ?? String(e)}`);
+          }
+        }
+      }
+    }
+
+    async function runSmokeTests() {
+      await runSQL("SELECT ducknng_nng_version() AS nng_version");
+      await runSQL(`SELECT ducknng_frame_version(
+        from_hex('01010000000000000000000000000000000000000000')) AS frame_version`);
+      await runSQL(`SELECT COUNT(*) AS codecs FROM ducknng_list_codecs()`);
+      await runSQL(`SELECT (ducknng_listen_socket(
+        999::UBIGINT,
+        'inproc://ducknng_wasm_missing_socket_probe',
+        1048576,
+        0::UBIGINT)).ok AS missing_socket_listen_ok`, nngSetupTimeoutMs);
+      const urlRawOk = await runInprocUrlRawAioSmoke();
+      return urlRawOk ? await runInprocSmoke() : false;
+    }
+
+    async function setupDucknng() {
+      runtimeConfig = await loadRuntimeConfig();
+      runtimePill.textContent = `runtime: ${runtimeConfig.platform}${runtimeConfig.sourceCommit ? ` @ ${runtimeConfig.sourceCommit}` : ""}`;
+      coiPill.textContent = `crossOriginIsolated: ${globalThis.crossOriginIsolated ? "true" : "false"}`;
+      log("Runtime config:", runtimeConfig);
+      if (runtimeConfig.extensionReleaseUrl) {
+        log("CI release asset:", runtimeConfig.extensionReleaseUrl);
+      }
+      await ensureCrossOriginIsolationIfNeeded(runtimeConfig);
+      sessionStorage.removeItem("ducknng-coi-service-worker-reload");
+
+      const worker = new Worker(resourceUrl(runtimeConfig.worker));
+      const logger = new duckdb.ConsoleLogger();
+      db = new duckdb.AsyncDuckDB(logger, worker);
+      await db.instantiate(resourceUrl(runtimeConfig.wasm), runtimeConfig.pthreadWorker ? resourceUrl(runtimeConfig.pthreadWorker) : null);
+      await db.open({ allowUnsignedExtensions: true });
+      conn = await db.connect();
+      await runSQL("SELECT version() AS duckdb_version");
+
+      const extUrl = resourceUrl(duckdbExtensionRelativePath);
+      const extPath = new URL(duckdbExtensionRelativePath, siteBaseUrl).pathname;
+      await db.registerFileURL(extPath, extUrl, duckdb.DuckDBDataProtocol.HTTP, false);
+      log("Loading extension:", extUrl);
+      await withTimeout(conn.query(`LOAD '${extPath}'`), "extension load", extensionLoadTimeoutMs);
+      log("Loaded extension:", extUrl);
+      setupDone = true;
+      setShellEnabled(true);
+    }
+
+    async function main() {
+      setStatus("Preparing");
+      runButton.disabled = true;
+      setShellEnabled(false);
+      logNode.textContent = "";
+
+      try {
+        if (!setupDone) await setupDucknng();
+        setStatus("Running smoke tests");
+        const inprocOk = await runSmokeTests();
+        setStatus(inprocOk ? "Passed" : "Passed; inproc unavailable", "ok");
+      } catch (e) {
+        setStatus("Failed", "failed");
+        log("ERROR", e?.message ?? String(e));
+      } finally {
+        runButton.disabled = false;
+        setShellEnabled(setupDone);
+      }
+    }
+
+    async function runShellSQL() {
+      if (!conn) return;
+      const sql = sqlNode.value;
+      shellStatus.textContent = "Running";
+      runSqlButton.disabled = true;
+      try {
+        log(`shell> ${sql}`);
+        const started = performance.now();
+        const result = await conn.query(sql);
+        const elapsedMs = Math.round(performance.now() - started);
+        renderResult(result);
+        log(formatResult(result));
+        shellStatus.textContent = `Ready (${elapsedMs} ms)`;
+      } catch (e) {
+        shellStatus.textContent = "Query failed";
+        resultMeta.textContent = "Error";
+        resultTable.innerHTML = `<div class="empty">${String(e?.message ?? e)}</div>`;
+        log("SHELL ERROR", e?.message ?? String(e));
+      } finally {
+        runSqlButton.disabled = false;
+      }
+    }
+
+    runButton.addEventListener("click", () => { void main(); });
+    smokeAgainButton.addEventListener("click", () => { void (async () => {
+      smokeAgainButton.disabled = true;
+      try {
+        setStatus("Running smoke tests");
+        const inprocOk = await runSmokeTests();
+        setStatus(inprocOk ? "Passed" : "Passed; inproc unavailable", "ok");
+      } catch (e) {
+        setStatus("Failed", "failed");
+        log("ERROR", e?.message ?? String(e));
+      } finally {
+        smokeAgainButton.disabled = false;
+      }
+    })(); });
+    clearLogButton.addEventListener("click", () => { logNode.textContent = ""; });
+    runSqlButton.addEventListener("click", () => { void runShellSQL(); });
+    clearResultButton.addEventListener("click", () => {
+      resultMeta.textContent = "No query has run yet.";
+      resultTable.innerHTML = '<div class="empty">Results will appear here.</div>';
+    });
+    loadExampleButton.addEventListener("click", () => {
+      sqlNode.value = examples[examplesNode.value] ?? examples.codecs;
+    });
+
+    if (sessionStorage.getItem("ducknng-auto-start-after-coi") === "1") {
+      sessionStorage.removeItem("ducknng-auto-start-after-coi");
+      queueMicrotask(() => { void main(); });
+    }
+  </script>
+</body>
+</html>

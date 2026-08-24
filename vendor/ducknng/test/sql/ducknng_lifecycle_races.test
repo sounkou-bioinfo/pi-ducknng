@@ -1,0 +1,117 @@
+# name: test/sql/ducknng_lifecycle_races.test
+# group: [ducknng]
+
+require ducknng
+
+# Stopping a service with live query sessions must release the service cleanly.
+query I
+SELECT CASE
+  WHEN ducknng_start_server('stop_live', 'ipc:///tmp/ducknng_lifecycle_stop_live.ipc', 1, 134217728, 300000, 0::UBIGINT)
+  THEN 1 ELSE 0 END
+----
+1
+
+statement ok
+CREATE TEMP TABLE stop_live_session AS
+SELECT *
+FROM ducknng_open_query('ipc:///tmp/ducknng_lifecycle_stop_live.ipc', 'SELECT 1 AS i', 0::UBIGINT, 0::UBIGINT, 0::UBIGINT)
+
+query I
+SELECT sessions
+FROM ducknng_list_servers()
+WHERE name = 'stop_live'
+----
+1
+
+query I
+SELECT CASE WHEN ducknng_stop_server('stop_live') THEN 1 ELSE 0 END
+----
+1
+
+query I
+SELECT count(*)
+FROM ducknng_list_servers()
+WHERE name = 'stop_live'
+----
+0
+
+query I
+SELECT CASE
+  WHEN ducknng_start_server('stop_live', 'ipc:///tmp/ducknng_lifecycle_stop_live.ipc', 1, 134217728, 300000, 0::UBIGINT)
+  THEN 1 ELSE 0 END
+----
+1
+
+query I
+SELECT CASE WHEN ducknng_stop_server('stop_live') THEN 1 ELSE 0 END
+----
+1
+
+statement ok
+DROP TABLE stop_live_session
+
+# While the service-owned DuckDB lane is actively authorizing a request,
+# lifecycle stop of that same service is rejected rather than destroying state
+# under an in-flight request.  Once the AIO drains, stop succeeds.
+query I
+SELECT CASE
+  WHEN ducknng_start_server('stop_auth_active', 'tcp://127.0.0.1:0', 2, 134217728, 300000, 0::UBIGINT)
+  THEN 1 ELSE 0 END
+----
+1
+
+statement ok
+SET VARIABLE stop_auth_active_url = (
+  SELECT listen FROM ducknng_list_servers() WHERE name = 'stop_auth_active'
+)
+
+query I
+SELECT CASE
+  WHEN ducknng_set_service_authorizer('stop_auth_active', 'SELECT true AS allow, sleep_ms(500) AS slept')
+  THEN 1 ELSE 0 END
+----
+1
+
+statement ok
+SET VARIABLE stop_auth_active_aio = (
+  SELECT ducknng_get_rpc_manifest_raw_aio(getvariable('stop_auth_active_url')::VARCHAR, 2000, 0::UBIGINT)
+)
+
+# Wait until the server has picked up the AIO request (inflight_request_count > 0)
+# before attempting stop, so the false-return path is deterministically triggered.
+query I
+WITH RECURSIVE poll(i, c) AS (
+  SELECT 1, COALESCE((SELECT inflight_requests FROM ducknng_list_servers() WHERE name = 'stop_auth_active'), 0)
+  UNION ALL
+  SELECT i + 1, (
+    COALESCE(CASE WHEN c < 1 THEN sleep_ms(10) ELSE 0 END, 0) * 0 +
+    COALESCE((SELECT inflight_requests FROM ducknng_list_servers() WHERE name = 'stop_auth_active'), 0)
+  )
+  FROM poll WHERE c < 1 AND i < 500
+) SELECT c FROM poll ORDER BY i DESC LIMIT 1
+----
+1
+
+query I
+SELECT CASE WHEN ducknng_stop_server('stop_auth_active') THEN 1 ELSE 0 END
+----
+0
+
+statement ok
+CREATE TEMP TABLE stop_auth_active_result AS
+SELECT *
+FROM ducknng_aio_collect(list_value(getvariable('stop_auth_active_aio')::UBIGINT), 3000)
+
+query III
+SELECT aio_id = getvariable('stop_auth_active_aio')::UBIGINT, ok, octet_length(frame) > 0
+FROM stop_auth_active_result
+----
+1	1	1
+
+query I
+SELECT CASE WHEN ducknng_stop_server('stop_auth_active') THEN 1 ELSE 0 END
+----
+1
+
+statement ok
+DROP TABLE stop_auth_active_result

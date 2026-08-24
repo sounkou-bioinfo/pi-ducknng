@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+#
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+if [ -z "${EXTRA_CMAKE_CONFIGURE}" ]; then
+    EXTRA_CMAKE_CONFIGURE=""
+fi
+
+if [ -z "${EXTRA_CMAKE_INSTALL}" ]; then
+    EXTRA_CMAKE_INSTALL=""
+fi
+
+set -exuo pipefail
+
+# Build nanoarrow
+cmake -S ../.. -B scratch/nanoarrow_build/ \
+    -DCMAKE_INSTALL_PREFIX=scratch/nanoarrow_install/ \
+    -DNANOARROW_IPC=ON -DNANOARROW_DEVICE=ON -DNANOARROW_TESTING=ON \
+    $EXTRA_CMAKE_CONFIGURE
+cmake --build scratch/nanoarrow_build/
+cmake --install scratch/nanoarrow_build/ $EXTRA_CMAKE_INSTALL
+
+for nanoarrow_build_type in static shared auto; do
+    # Build the project against the built nanoarrow.
+    cmake -S . -B scratch/build_${nanoarrow_build_type}/ \
+        -Dnanoarrow_ROOT=scratch/nanoarrow_build \
+        -DTEST_BUILD_TYPE=${nanoarrow_build_type}
+    cmake --build scratch/build_${nanoarrow_build_type}/
+
+    # Build the project against the installed nanoarrow.
+    cmake -S . -B scratch/build_against_install_${nanoarrow_build_type}/ \
+        -Dnanoarrow_ROOT=scratch/nanoarrow_install \
+        -DTEST_BUILD_TYPE=${nanoarrow_build_type}
+    cmake --build scratch/build_against_install_${nanoarrow_build_type}/
+
+    # Now try using FetchContent to get nanoarrow from remote.
+    cmake -S . -B scratch/build_against_fetched_${nanoarrow_build_type}/ \
+        -DFIND_NANOARROW=OFF \
+        -DTEST_BUILD_TYPE=${nanoarrow_build_type}
+    cmake --build scratch/build_against_fetched_${nanoarrow_build_type}/
+done
+
+# Test that the nanoarrow::nanoarrow alias uses BUILD_SHARED_LIBS from nanoarrow's
+# build time, not the consumer's. Build nanoarrow as static-only, then configure
+# the consumer with BUILD_SHARED_LIBS=ON. The alias should resolve to static.
+# See: https://github.com/apache/arrow-nanoarrow/issues/875
+cmake -S ../.. -B scratch/nanoarrow_build_static_only/ \
+    -DCMAKE_INSTALL_PREFIX=scratch/nanoarrow_install_static_only/ \
+    -DNANOARROW_IPC=ON -DNANOARROW_DEVICE=ON -DNANOARROW_TESTING=ON \
+    -DBUILD_SHARED_LIBS=OFF \
+    $EXTRA_CMAKE_CONFIGURE
+cmake --build scratch/nanoarrow_build_static_only/
+cmake --install scratch/nanoarrow_build_static_only/ $EXTRA_CMAKE_INSTALL
+
+# Consumer uses BUILD_SHARED_LIBS=ON but nanoarrow only has static libs.
+# With the fix, this should work because nanoarrow::nanoarrow aliases to _static.
+cmake -S . -B scratch/build_mismatched_shared_libs/ \
+    -Dnanoarrow_ROOT=scratch/nanoarrow_install_static_only \
+    -DTEST_BUILD_TYPE=auto \
+    -DBUILD_SHARED_LIBS=ON
+cmake --build scratch/build_mismatched_shared_libs/

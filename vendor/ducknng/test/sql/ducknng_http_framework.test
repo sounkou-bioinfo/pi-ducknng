@@ -1,0 +1,394 @@
+# name: test/sql/ducknng_http_framework.test
+# group: [ducknng]
+
+require ducknng
+
+query I
+SELECT CASE
+  WHEN ducknng_start_server('http_route_api', 'http://127.0.0.1:0/_ducknng', 1, 134217728, 300000, 0::UBIGINT)
+  THEN 1 ELSE 0 END
+----
+1
+
+statement ok
+SET VARIABLE http_route_mount = (
+  SELECT listen FROM ducknng_list_servers() WHERE name = 'http_route_api'
+)
+
+statement ok
+SET VARIABLE http_route_base = replace(getvariable('http_route_mount')::VARCHAR, '/_ducknng', '')
+
+statement ok
+SET VARIABLE http_route_health_sql = 'SELECT 200 AS status, ''text/plain; charset=utf-8'' AS content_type, ''ok'' AS body_text'
+
+query I
+SELECT CASE WHEN ducknng_register_http_route(
+  'http_route_api',
+  'GET',
+  '/healthz',
+  getvariable('http_route_health_sql')::VARCHAR
+) THEN 1 ELSE 0 END
+----
+1
+
+query II
+SELECT count(*), max(path = '/healthz')
+FROM ducknng_list_http_routes()
+WHERE service_name = 'http_route_api'
+----
+1	1
+
+query IIT
+SELECT ok, status = 200, body_text
+FROM ducknng_ncurl(
+  getvariable('http_route_base')::VARCHAR || '/healthz',
+  'GET',
+  NULL,
+  NULL,
+  2000,
+  0::UBIGINT
+)
+----
+1	1	ok
+
+statement ok
+SET VARIABLE http_route_echo_sql =
+'SELECT 201 AS status,
+        ''text/plain; charset=utf-8'' AS content_type,
+        (
+          SELECT method || '' '' || path || ''?'' || coalesce(query_string, '''') ||
+                 '' '' || coalesce(content_type, '''') ||
+                 '' '' || coalesce(body_text, '''')
+          FROM ducknng_http_request(), ducknng_http_request_body()
+        ) AS body_text'
+
+query I
+SELECT CASE WHEN ducknng_register_http_route(
+  'http_route_api',
+  'POST',
+  '/echo',
+  getvariable('http_route_echo_sql')::VARCHAR
+) THEN 1 ELSE 0 END
+----
+1
+
+query IIT
+SELECT ok, status = 201, body_text
+FROM ducknng_ncurl(
+  getvariable('http_route_base')::VARCHAR || '/echo?x=1',
+  'POST',
+  '[{"name":"Content-Type","value":"text/plain"}]',
+  'hello'::BLOB,
+  2000,
+  0::UBIGINT
+)
+----
+1	1	POST /echo?x=1 text/plain hello
+
+statement ok
+SET VARIABLE http_route_gateway_sql =
+'WITH req AS (
+   SELECT json_extract_string(body_text::JSON, ''$.sql'') AS requested_sql
+   FROM ducknng_http_request_body()
+ )
+ SELECT 200 AS status,
+        ''application/json; charset=utf-8'' AS content_type,
+        CAST(to_json(list(struct_pack(requested_sql := requested_sql, answer := 7))) AS VARCHAR) AS body_text
+ FROM req'
+
+query I
+SELECT CASE WHEN ducknng_register_http_route(
+  'http_route_api',
+  'POST',
+  '/v1/sql',
+  getvariable('http_route_gateway_sql')::VARCHAR,
+  4096::UBIGINT
+) THEN 1 ELSE 0 END
+----
+1
+
+query III
+SELECT ok, status = 200, position('"requested_sql":"SELECT 7 AS answer"' IN body_text) > 0 AND position('"answer":7' IN body_text) > 0
+FROM ducknng_ncurl(
+  getvariable('http_route_base')::VARCHAR || '/v1/sql',
+  'POST',
+  '[{"name":"Content-Type","value":"application/json"}]',
+  '{"sql":"SELECT 7 AS answer"}'::BLOB,
+  2000,
+  0::UBIGINT
+)
+----
+1	1	1
+
+statement ok
+SET VARIABLE http_route_prefix_sql =
+'SELECT 202 AS status,
+        ''text/plain; charset=utf-8'' AS content_type,
+        (
+          SELECT route_match_kind || '' '' || route_path || '' -> '' || path
+          FROM ducknng_http_request()
+        ) AS body_text'
+
+query I
+SELECT CASE WHEN ducknng_register_http_route_pattern(
+  'http_route_api',
+  'GET',
+  'prefix',
+  '/prefix',
+  getvariable('http_route_prefix_sql')::VARCHAR
+) THEN 1 ELSE 0 END
+----
+1
+
+query IIT
+SELECT ok, status = 202, body_text
+FROM ducknng_ncurl(
+  getvariable('http_route_base')::VARCHAR || '/prefix/deeper',
+  'GET',
+  NULL,
+  NULL,
+  2000,
+  0::UBIGINT
+)
+----
+1	1	prefix /prefix -> /prefix/deeper
+
+statement ok
+SET VARIABLE http_route_template_sql =
+'SELECT 203 AS status,
+        ''text/plain; charset=utf-8'' AS content_type,
+        (
+          SELECT route_match_kind || '' '' ||
+                 json_extract_string(path_params_json::JSON, ''$.tenant_id'') || '':'' ||
+                 json_extract_string(path_params_json::JSON, ''$.item_id'')
+          FROM ducknng_http_request()
+        ) AS body_text'
+
+query I
+SELECT CASE WHEN ducknng_register_http_route_pattern(
+  'http_route_api',
+  'GET',
+  'template',
+  '/tenant/{tenant_id}/items/{item_id}',
+  getvariable('http_route_template_sql')::VARCHAR
+) THEN 1 ELSE 0 END
+----
+1
+
+query IIT
+SELECT ok, status = 203, body_text
+FROM ducknng_ncurl(
+  getvariable('http_route_base')::VARCHAR || '/tenant/alice/items/42',
+  'GET',
+  NULL,
+  NULL,
+  2000,
+  0::UBIGINT
+)
+----
+1	1	template alice:42
+
+query T
+SELECT ducknng_http_headers_get(
+  ducknng_http_headers_build(
+    list_value('X-Test', 'Content-Type'),
+    list_value('alpha', 'text/plain; charset=utf-8')
+  ),
+  'content-type'
+)
+----
+text/plain; charset=utf-8
+
+query T
+SELECT ducknng_http_headers_get(
+  ducknng_http_headers_build(
+    list_value('X-Test'),
+    list_value('a"b')
+  ),
+  'X-Test'
+)
+----
+a"b
+
+statement error
+SELECT ducknng_http_headers_build(list_value('Bad Header'), list_value('x'))
+----
+ducknng: headers_build requires header names to be HTTP tokens
+
+query T
+SELECT ducknng_http_path_params_get('{"tenant_id":"al' || chr(92) || '"ice"}', 'tenant_id')
+----
+al"ice
+
+statement error
+SELECT ducknng_http_headers_get(
+  ducknng_http_headers_build(
+    list_value('X-User', 'X-User'),
+    list_value('alice', 'mallory')
+  ),
+  'X-User'
+)
+----
+ducknng: duplicate HTTP header 'X-User'
+
+statement error
+SELECT ducknng_http_query_param_get('role=user&role=admin', 'role')
+----
+ducknng: duplicate query parameter 'role'
+
+statement error
+SELECT ducknng_http_query_param_get('auth%00=1', 'auth')
+----
+ducknng: query parameter name contains NUL after percent decoding
+
+statement error
+SELECT ducknng_http_cookie_get('theme=light; theme=dark', 'theme')
+----
+ducknng: duplicate cookie 'theme'
+
+statement ok
+SET VARIABLE http_route_helpers_sql =
+'SELECT * FROM ducknng_http_text(
+   200,
+   (
+     SELECT coalesce(ducknng_http_query_param(''x''), '''') || ''|'' ||
+            coalesce(ducknng_http_header(''X-Test''), '''') || ''|'' ||
+            coalesce(ducknng_http_cookie(''theme''), '''') || ''|'' ||
+            coalesce(ducknng_http_path_param(''tenant_id''), '''')
+   )
+ )'
+
+query I
+SELECT CASE WHEN ducknng_register_http_route_pattern(
+  'http_route_api',
+  'GET',
+  'template',
+  '/inspect/{tenant_id}',
+  getvariable('http_route_helpers_sql')::VARCHAR
+) THEN 1 ELSE 0 END
+----
+1
+
+query IIT
+SELECT ok, status = 200, body_text
+FROM ducknng_ncurl(
+  getvariable('http_route_base')::VARCHAR || '/inspect/alice?x=1%202',
+  'GET',
+  ducknng_http_headers_build(
+    list_value('Cookie', 'X-Test'),
+    list_value('session=abc; theme=dark', 'beta')
+  ),
+  NULL,
+  2000,
+  0::UBIGINT
+)
+----
+1	1	1 2|beta|dark|alice
+
+statement ok
+SET VARIABLE http_route_json_sql =
+'SELECT * FROM ducknng_http_json(200, ''{"ok":true}'')'
+
+query I
+SELECT CASE WHEN ducknng_register_http_route(
+  'http_route_api',
+  'GET',
+  '/json',
+  getvariable('http_route_json_sql')::VARCHAR
+) THEN 1 ELSE 0 END
+----
+1
+
+query IIIT
+SELECT ok,
+       status = 200,
+       ducknng_http_headers_get(headers_json, 'Content-Type') = 'application/json; charset=utf-8',
+       body_text
+FROM ducknng_ncurl(
+  getvariable('http_route_base')::VARCHAR || '/json',
+  'GET',
+  NULL,
+  NULL,
+  2000,
+  0::UBIGINT
+)
+----
+1	1	1	{"ok":true}
+
+statement ok
+SET VARIABLE http_route_binary_sql =
+'SELECT * FROM ducknng_http_binary(200, from_hex(''0102''))'
+
+query I
+SELECT CASE WHEN ducknng_register_http_route(
+  'http_route_api',
+  'GET',
+  '/bin',
+  getvariable('http_route_binary_sql')::VARCHAR
+) THEN 1 ELSE 0 END
+----
+1
+
+query IIII
+SELECT ok, status = 200, octet_length(body), body_text IS NULL
+FROM ducknng_ncurl(
+  getvariable('http_route_base')::VARCHAR || '/bin',
+  'GET',
+  NULL,
+  NULL,
+  2000,
+  0::UBIGINT
+)
+----
+1	1	2	1
+
+query IIII
+SELECT count(*)::INTEGER,
+       sum(CASE WHEN match_kind = 'exact' THEN 1 ELSE 0 END)::INTEGER,
+       sum(CASE WHEN match_kind = 'prefix' THEN 1 ELSE 0 END)::INTEGER,
+       sum(CASE WHEN match_kind = 'template' THEN 1 ELSE 0 END)::INTEGER
+FROM ducknng_list_http_routes()
+WHERE service_name = 'http_route_api'
+----
+8	5	1	2
+
+query III
+SELECT ok, status = 413, error IS NULL
+FROM ducknng_ncurl(
+  getvariable('http_route_base')::VARCHAR || '/v1/sql',
+  'POST',
+  '[{"name":"Content-Type","value":"application/json"}]',
+  repeat('x', 5000)::BLOB,
+  2000,
+  0::UBIGINT
+)
+----
+1	1	1
+
+query I
+SELECT CASE WHEN ducknng_unregister_http_route_pattern('http_route_api', 'GET', 'template', '/tenant/{tenant_id}/items/{item_id}') THEN 1 ELSE 0 END
+----
+1
+
+query I
+SELECT CASE WHEN ducknng_unregister_http_route('http_route_api', 'GET', '/healthz') THEN 1 ELSE 0 END
+----
+1
+
+query III
+SELECT ok, status = 404, error IS NULL
+FROM ducknng_ncurl(
+  getvariable('http_route_base')::VARCHAR || '/healthz',
+  'GET',
+  NULL,
+  NULL,
+  2000,
+  0::UBIGINT
+)
+----
+1	1	1
+
+query I
+SELECT CASE WHEN ducknng_stop_server('http_route_api') THEN 1 ELSE 0 END
+----
+1
