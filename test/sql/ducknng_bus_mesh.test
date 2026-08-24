@@ -1,0 +1,360 @@
+# name: test/sql/ducknng_bus_mesh.test
+# description: Three-peer bus mesh: broadcast, spoke-to-hub, and fully-connected all-pairs
+# group: [ducknng]
+
+require ducknng
+
+# ── Open three bus peers ──────────────────────────────────────────────────────
+
+query I
+SELECT (ducknng_open_socket('bus')).socket_id
+----
+1
+
+query I
+SELECT (ducknng_open_socket('bus')).socket_id
+----
+2
+
+query I
+SELECT (ducknng_open_socket('bus')).socket_id
+----
+3
+
+# ── Hub-and-spoke topology: A listens, B and C dial A ────────────────────────
+# In NNG bus, a node only forwards to its directly-connected peers.
+# With this topology: A→{B,C} works; B→{A} works; C→{A} works; B↔C does NOT.
+
+query I
+SELECT (ducknng_listen_socket(1::UBIGINT, 'inproc://ducknng_bus_mesh_test_hub', 134217728, 0::UBIGINT)).ok
+----
+1
+
+query I
+SELECT (ducknng_dial_socket(2::UBIGINT, 'inproc://ducknng_bus_mesh_test_hub', 1000, 0::UBIGINT)).ok
+----
+1
+
+query I
+SELECT (ducknng_dial_socket(3::UBIGINT, 'inproc://ducknng_bus_mesh_test_hub', 1000, 0::UBIGINT)).ok
+----
+1
+
+# ── Test 1: broadcast from A — B and C both receive ──────────────────────────
+
+statement ok
+CREATE TEMP TABLE bus_t1_recv_b AS
+SELECT ducknng_recv_socket_raw_aio(2::UBIGINT, 2000) AS recv_aio
+
+statement ok
+CREATE TEMP TABLE bus_t1_recv_c AS
+SELECT ducknng_recv_socket_raw_aio(3::UBIGINT, 2000) AS recv_aio
+
+query I
+SELECT (ducknng_send_socket_raw(1::UBIGINT, from_hex('6275732d62726f616463617374'), 1000)).ok
+----
+1
+
+query II
+SELECT ok, hex(frame) = '6275732D62726F616463617374'
+FROM ducknng_aio_collect((SELECT list_value(recv_aio) FROM bus_t1_recv_b), 2000)
+----
+1	1
+
+query II
+SELECT ok, hex(frame) = '6275732D62726F616463617374'
+FROM ducknng_aio_collect((SELECT list_value(recv_aio) FROM bus_t1_recv_c), 2000)
+----
+1	1
+
+query I
+SELECT ducknng_aio_drop(recv_aio) FROM bus_t1_recv_b
+----
+1
+
+query I
+SELECT ducknng_aio_drop(recv_aio) FROM bus_t1_recv_c
+----
+1
+
+statement ok
+DROP TABLE bus_t1_recv_b
+
+statement ok
+DROP TABLE bus_t1_recv_c
+
+# ── Test 2: spoke-to-hub — B sends to mesh, only A receives ──────────────────
+
+statement ok
+CREATE TEMP TABLE bus_t2_recv_a AS
+SELECT ducknng_recv_socket_raw_aio(1::UBIGINT, 2000) AS recv_aio
+
+query I
+SELECT (ducknng_send_socket_raw(2::UBIGINT, from_hex('66726f6d2d62'), 1000)).ok
+----
+1
+
+query II
+SELECT ok, hex(frame) = '66726F6D2D62'
+FROM ducknng_aio_collect((SELECT list_value(recv_aio) FROM bus_t2_recv_a), 2000)
+----
+1	1
+
+query I
+SELECT ducknng_aio_drop(recv_aio) FROM bus_t2_recv_a
+----
+1
+
+statement ok
+DROP TABLE bus_t2_recv_a
+
+# ── Test 3: spoke-to-hub — C sends to mesh, only A receives ──────────────────
+
+statement ok
+CREATE TEMP TABLE bus_t3_recv_a AS
+SELECT ducknng_recv_socket_raw_aio(1::UBIGINT, 2000) AS recv_aio
+
+query I
+SELECT (ducknng_send_socket_raw(3::UBIGINT, from_hex('66726f6d2d63'), 1000)).ok
+----
+1
+
+query II
+SELECT ok, hex(frame) = '66726F6D2D63'
+FROM ducknng_aio_collect((SELECT list_value(recv_aio) FROM bus_t3_recv_a), 2000)
+----
+1	1
+
+query I
+SELECT ducknng_aio_drop(recv_aio) FROM bus_t3_recv_a
+----
+1
+
+statement ok
+DROP TABLE bus_t3_recv_a
+
+# ── Teardown hub-and-spoke sockets ────────────────────────────────────────────
+
+query I
+SELECT (ducknng_close_socket(3::UBIGINT)).ok
+----
+1
+
+query I
+SELECT (ducknng_close_socket(2::UBIGINT)).ok
+----
+1
+
+query I
+SELECT (ducknng_close_socket(1::UBIGINT)).ok
+----
+1
+
+# ── Fully-connected mesh: A↔B↔C↔A ───────────────────────────────────────────
+# Each node sends to every other node.
+# Topology: A listens on addr_ab, B dials addr_ab (A↔B).
+#           B listens on addr_bc, C dials addr_bc (B↔C).
+#           A listens on addr_ac, C dials addr_ac (A↔C).
+
+query I
+SELECT (ducknng_open_socket('bus')).socket_id
+----
+4
+
+query I
+SELECT (ducknng_open_socket('bus')).socket_id
+----
+5
+
+query I
+SELECT (ducknng_open_socket('bus')).socket_id
+----
+6
+
+query I
+SELECT (ducknng_listen_socket(4::UBIGINT, 'inproc://ducknng_bus_mesh_test_ab', 134217728, 0::UBIGINT)).ok
+----
+1
+
+query I
+SELECT (ducknng_dial_socket(5::UBIGINT, 'inproc://ducknng_bus_mesh_test_ab', 1000, 0::UBIGINT)).ok
+----
+1
+
+query I
+SELECT (ducknng_listen_socket(5::UBIGINT, 'inproc://ducknng_bus_mesh_test_bc', 134217728, 0::UBIGINT)).ok
+----
+1
+
+query I
+SELECT (ducknng_dial_socket(6::UBIGINT, 'inproc://ducknng_bus_mesh_test_bc', 1000, 0::UBIGINT)).ok
+----
+1
+
+query I
+SELECT (ducknng_listen_socket(6::UBIGINT, 'inproc://ducknng_bus_mesh_test_ca', 134217728, 0::UBIGINT)).ok
+----
+1
+
+query I
+SELECT (ducknng_dial_socket(4::UBIGINT, 'inproc://ducknng_bus_mesh_test_ca', 1000, 0::UBIGINT)).ok
+----
+1
+
+# ── Test 4: A broadcasts to fully-connected mesh — B and C both receive ───────
+
+statement ok
+CREATE TEMP TABLE bus_t4_recv_b AS
+SELECT ducknng_recv_socket_raw_aio(5::UBIGINT, 2000) AS recv_aio
+
+statement ok
+CREATE TEMP TABLE bus_t4_recv_c AS
+SELECT ducknng_recv_socket_raw_aio(6::UBIGINT, 2000) AS recv_aio
+
+query I
+SELECT (ducknng_send_socket_raw(4::UBIGINT, from_hex('6d657368'), 1000)).ok
+----
+1
+
+query II
+SELECT ok, hex(frame) = '6D657368'
+FROM ducknng_aio_collect((SELECT list_value(recv_aio) FROM bus_t4_recv_b), 2000)
+----
+1	1
+
+query II
+SELECT ok, hex(frame) = '6D657368'
+FROM ducknng_aio_collect((SELECT list_value(recv_aio) FROM bus_t4_recv_c), 2000)
+----
+1	1
+
+query I
+SELECT ducknng_aio_drop(recv_aio) FROM bus_t4_recv_b
+----
+1
+
+query I
+SELECT ducknng_aio_drop(recv_aio) FROM bus_t4_recv_c
+----
+1
+
+statement ok
+DROP TABLE bus_t4_recv_b
+
+statement ok
+DROP TABLE bus_t4_recv_c
+
+# ── Test 5: B broadcasts — A and C both receive ───────────────────────────────
+
+statement ok
+CREATE TEMP TABLE bus_t5_recv_a AS
+SELECT ducknng_recv_socket_raw_aio(4::UBIGINT, 2000) AS recv_aio
+
+statement ok
+CREATE TEMP TABLE bus_t5_recv_c AS
+SELECT ducknng_recv_socket_raw_aio(6::UBIGINT, 2000) AS recv_aio
+
+query I
+SELECT (ducknng_send_socket_raw(5::UBIGINT, from_hex('66726f6d2d62'), 1000)).ok
+----
+1
+
+query II
+SELECT ok, hex(frame) = '66726F6D2D62'
+FROM ducknng_aio_collect((SELECT list_value(recv_aio) FROM bus_t5_recv_a), 2000)
+----
+1	1
+
+query II
+SELECT ok, hex(frame) = '66726F6D2D62'
+FROM ducknng_aio_collect((SELECT list_value(recv_aio) FROM bus_t5_recv_c), 2000)
+----
+1	1
+
+query I
+SELECT ducknng_aio_drop(recv_aio) FROM bus_t5_recv_a
+----
+1
+
+query I
+SELECT ducknng_aio_drop(recv_aio) FROM bus_t5_recv_c
+----
+1
+
+statement ok
+DROP TABLE bus_t5_recv_a
+
+statement ok
+DROP TABLE bus_t5_recv_c
+
+# ── Test 6: C broadcasts — A and B both receive ───────────────────────────────
+
+statement ok
+CREATE TEMP TABLE bus_t6_recv_a AS
+SELECT ducknng_recv_socket_raw_aio(4::UBIGINT, 2000) AS recv_aio
+
+statement ok
+CREATE TEMP TABLE bus_t6_recv_b AS
+SELECT ducknng_recv_socket_raw_aio(5::UBIGINT, 2000) AS recv_aio
+
+query I
+SELECT (ducknng_send_socket_raw(6::UBIGINT, from_hex('66726f6d2d63'), 1000)).ok
+----
+1
+
+query II
+SELECT ok, hex(frame) = '66726F6D2D63'
+FROM ducknng_aio_collect((SELECT list_value(recv_aio) FROM bus_t6_recv_a), 2000)
+----
+1	1
+
+query II
+SELECT ok, hex(frame) = '66726F6D2D63'
+FROM ducknng_aio_collect((SELECT list_value(recv_aio) FROM bus_t6_recv_b), 2000)
+----
+1	1
+
+query I
+SELECT ducknng_aio_drop(recv_aio) FROM bus_t6_recv_a
+----
+1
+
+query I
+SELECT ducknng_aio_drop(recv_aio) FROM bus_t6_recv_b
+----
+1
+
+statement ok
+DROP TABLE bus_t6_recv_a
+
+statement ok
+DROP TABLE bus_t6_recv_b
+
+# ── ducknng_list_sockets() shows the three fully-connected mesh sockets ───────
+
+query T
+SELECT protocol
+FROM ducknng_list_sockets()
+WHERE protocol = 'bus'
+ORDER BY socket_id
+----
+bus
+bus
+bus
+
+# ── Teardown fully-connected mesh sockets ─────────────────────────────────────
+
+query I
+SELECT (ducknng_close_socket(6::UBIGINT)).ok
+----
+1
+
+query I
+SELECT (ducknng_close_socket(5::UBIGINT)).ok
+----
+1
+
+query I
+SELECT (ducknng_close_socket(4::UBIGINT)).ok
+----
+1

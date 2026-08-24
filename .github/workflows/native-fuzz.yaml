@@ -1,0 +1,42 @@
+name: Native parser fuzzing
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      runs:
+        description: Inputs per sanitizer
+        required: false
+        default: "250000"
+  schedule:
+    - cron: "17 4 * * 1"
+
+permissions: read-all
+
+jobs:
+  native-parsers:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      # The top-level Makefile unconditionally includes
+      # extension-ci-tools/makefiles/c_api_extensions/c_cpp.Makefile, so every
+      # target here needs the submodule present.
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install native fuzz toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential clang llvm
+
+      - name: Enforce pure-core MC/DC
+        run: make quack-mcdc-check
+
+      - name: Run shrinking properties under sanitizers
+        run: make prop-sanitize PROP_TRIALS=10000
+
+      - name: Fuzz frame, upload, and Quack parsers
+        run: make fuzz FUZZ_RUNS=${{ github.event.inputs.runs || '250000' }}

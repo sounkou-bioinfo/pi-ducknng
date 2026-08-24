@@ -1,0 +1,95 @@
+# name: test/sql/ducknng_peer_allowlist.test
+# group: [ducknng]
+
+require ducknng
+
+query I
+SELECT ducknng_self_signed_tls_config('127.0.0.1', 365, 2) > 0
+----
+1
+
+statement ok
+SET VARIABLE allowlist_tls_config_id = (
+  SELECT max(tls_config_id) FROM ducknng_list_tls_configs()
+)
+
+query I
+SELECT ducknng_set_tls_peer_allowlist(
+  getvariable('allowlist_tls_config_id')::UBIGINT,
+  '["tls:san:127.0.0.1","tls:cn:127.0.0.1"]'
+)
+----
+true
+
+query II
+SELECT peer_allowlist_active, peer_allowlist_count = 2
+FROM ducknng_list_tls_configs()
+WHERE tls_config_id = getvariable('allowlist_tls_config_id')::UBIGINT
+----
+true	1
+
+query I
+SELECT CASE
+  WHEN ducknng_start_server(
+    'allowlist_rpc',
+    'tls+tcp://127.0.0.1:0',
+    1,
+    134217728,
+    300000,
+    getvariable('allowlist_tls_config_id')::UBIGINT
+  )
+  THEN 1 ELSE 0 END
+----
+1
+
+statement ok
+SET VARIABLE allowlist_rpc_url = (
+  SELECT listen FROM ducknng_list_servers() WHERE name = 'allowlist_rpc'
+)
+
+query III
+SELECT peer_identity_required, peer_allowlist_active, peer_allowlist_count = 2
+FROM ducknng_list_servers()
+WHERE name = 'allowlist_rpc'
+----
+true	true	1
+
+query III
+SELECT ok,
+       position('"peer_allowlist_active":true' IN manifest) > 0,
+       json_extract(manifest::JSON, '$.server.security.peer_allowlist_count')::UBIGINT = 2
+FROM ducknng_get_rpc_manifest(getvariable('allowlist_rpc_url')::VARCHAR, getvariable('allowlist_tls_config_id')::UBIGINT)
+----
+1	1	1
+
+query I
+SELECT ducknng_set_service_peer_allowlist('allowlist_rpc', '["tls:san:not-this-client"]')
+----
+true
+
+query II
+SELECT ok, error IS NOT NULL
+FROM ducknng_get_rpc_manifest(getvariable('allowlist_rpc_url')::VARCHAR, getvariable('allowlist_tls_config_id')::UBIGINT)
+----
+0	1
+
+query I
+SELECT ducknng_set_service_peer_allowlist('allowlist_rpc', NULL)
+----
+true
+
+query I
+SELECT ok
+FROM ducknng_get_rpc_manifest(getvariable('allowlist_rpc_url')::VARCHAR, getvariable('allowlist_tls_config_id')::UBIGINT)
+----
+1
+
+query I
+SELECT CASE WHEN ducknng_stop_server('allowlist_rpc') THEN 1 ELSE 0 END
+----
+1
+
+query I
+SELECT ducknng_drop_tls_config(getvariable('allowlist_tls_config_id')::UBIGINT)
+----
+true

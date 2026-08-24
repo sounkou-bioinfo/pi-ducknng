@@ -1,0 +1,273 @@
+# name: test/sql/ducknng_parameter_binding.test
+# group: [ducknng]
+
+require ducknng
+
+statement ok
+SELECT ducknng_start_server(
+  'parameter_binding',
+  'ipc:///tmp/ducknng_parameter_binding.ipc',
+  1,
+  134217728,
+  300000,
+  0::UBIGINT
+)
+
+query II
+SELECT
+  contains(manifest,
+    '"methods":["query_open","query_prepare"]')::INTEGER,
+  contains(manifest, '"name":"exec"')::INTEGER
+FROM ducknng_get_rpc_manifest(
+  'ipc:///tmp/ducknng_parameter_binding.ipc',
+  0::UBIGINT
+)
+----
+1	0
+
+statement ok
+SELECT ducknng_register_exec_method(false)
+
+query IIIII
+SELECT
+  (json_extract_string(manifest,
+    '$.capabilities.parameter_binding.encoding') = 'arrow_struct')::INTEGER,
+  (json_extract(manifest,
+    '$.capabilities.parameter_binding.positional')::BOOLEAN)::INTEGER,
+  (json_extract(manifest,
+    '$.capabilities.parameter_binding.max_parameters')::INTEGER = 65535)::INTEGER,
+  contains(manifest,
+    '"methods":["exec","query_open","query_prepare"]')::INTEGER,
+  (json_extract_string(manifest, '$.server.version') = '0.1.2.9000')::INTEGER
+FROM ducknng_get_rpc_manifest(
+  'ipc:///tmp/ducknng_parameter_binding.ipc',
+  0::UBIGINT
+)
+----
+1	1	1	1	1
+
+# Registry policy is locally inspectable and truthful: query_open can execute
+# arbitrary DuckDB SQL, whereas query_prepare is stateless and non-mutating.
+query TTIIII
+SELECT name, session_behavior, opens_session, mutates_state, idempotent, disabled
+FROM ducknng_list_methods()
+WHERE name IN ('query_open', 'query_prepare')
+ORDER BY name
+----
+query_open	opens_session	true	true	false	false
+query_prepare	stateless	false	false	false	false
+
+# The params STRUCT is a typed positional tuple. Child names are descriptive;
+# child order determines ? binding order.
+query IIITT
+SELECT null_ok, list_ok, struct_ok, blob_hex, decimal_text
+FROM ducknng_query_rpc_params(
+  'ipc:///tmp/ducknng_parameter_binding.ipc',
+  'SELECT ?::INTEGER IS NULL AS null_ok,
+          ?::INTEGER[] = [1, NULL, 3]::INTEGER[] AS list_ok,
+          (?::STRUCT(a INTEGER, b VARCHAR)).a = 7 AS struct_ok,
+          hex(?::BLOB) AS blob_hex,
+          CAST(?::DECIMAL(18,3) AS VARCHAR) AS decimal_text',
+  struct_pack(
+    p1 := NULL::INTEGER,
+    p2 := [1, NULL, 3]::INTEGER[],
+    p3 := struct_pack(a := 7, b := 'bee'),
+    p4 := from_hex('00ff10'),
+    p5 := 12345.678::DECIMAL(18,3)
+  ),
+  0::UBIGINT
+)
+----
+true	true	true	00FF10	12345.678
+
+query IIT
+SELECT map_b, array_2, union_tag
+FROM ducknng_query_rpc_params(
+  'ipc:///tmp/ducknng_parameter_binding.ipc',
+  'SELECT map_extract_value(?::MAP(VARCHAR, INTEGER), ''b'') AS map_b,
+          (?::INTEGER[3])[2] AS array_2,
+          union_tag(?::UNION(i INTEGER, s VARCHAR)) AS union_tag',
+  struct_pack(
+    p1 := map(['a', 'b'], [1, 2]),
+    p2 := [10, 20, 30]::INTEGER[3],
+    p3 := union_value(s := 'yes')
+  ),
+  0::UBIGINT
+)
+----
+2	20	s
+
+# Preserve fixed-size-list values in the remote Arrow result, not only while
+# decoding request parameters.
+query I
+SELECT remote_array[2]
+FROM ducknng_query_rpc_params(
+  'ipc:///tmp/ducknng_parameter_binding.ipc',
+  'SELECT ?::INTEGER[3] AS remote_array',
+  struct_pack(p1 := [10, 20, 30]::INTEGER[3]),
+  0::UBIGINT
+)
+----
+20
+
+# A nullable params field means no parameters when the STRUCT row is NULL.
+query I
+SELECT answer
+FROM ducknng_query_rpc_params(
+  'ipc:///tmp/ducknng_parameter_binding.ipc',
+  'SELECT 42::INTEGER AS answer',
+  NULL::STRUCT(p1 INTEGER),
+  0::UBIGINT
+)
+----
+42
+
+# Binding is not interpolation. SQL-looking text remains one VARCHAR value.
+query T
+SELECT supplied
+FROM ducknng_query_rpc_params(
+  'ipc:///tmp/ducknng_parameter_binding.ipc',
+  'SELECT ?::VARCHAR AS supplied',
+  struct_pack(p1 := '''; DROP TABLE important; --'),
+  0::UBIGINT
+)
+----
+'; DROP TABLE important; --
+
+statement error
+SELECT *
+FROM ducknng_query_rpc_params(
+  'ipc:///tmp/ducknng_parameter_binding.ipc',
+  'SELECT ?::INTEGER AS a, ?::INTEGER AS b',
+  struct_pack(p1 := 1),
+  0::UBIGINT
+)
+----
+ducknng: SQL expects 2 parameter(s), request supplied 1
+
+# A positional tuple belongs to one prepared statement. Reject a parameterized
+# multi-statement session before any leading statement executes.
+statement error
+SELECT *
+FROM ducknng_query_rpc_params(
+  'ipc:///tmp/ducknng_parameter_binding.ipc',
+  'CREATE TABLE parameterized_open_must_not_run(i INTEGER);
+   SELECT ?::INTEGER AS i',
+  struct_pack(p1 := 1),
+  0::UBIGINT
+)
+----
+ducknng: parameterized query_open requires exactly one SQL statement
+
+query I
+SELECT n
+FROM ducknng_query_rpc(
+  'ipc:///tmp/ducknng_parameter_binding.ipc',
+  'SELECT count(*)::INTEGER AS n
+   FROM duckdb_tables()
+   WHERE table_name = ''parameterized_open_must_not_run''',
+  0::UBIGINT
+)
+----
+0
+
+# query_prepare returns a zero-row Arrow stream carrying the remote schema.
+query TT
+SELECT column_name, column_type
+FROM (DESCRIBE SELECT * FROM ducknng_prepare_query(
+  'ipc:///tmp/ducknng_parameter_binding.ipc',
+  'SELECT 42::INTEGER AS answer, ''x''::VARCHAR AS label',
+  0::UBIGINT
+))
+----
+answer	INTEGER
+label	VARCHAR
+
+query TT
+SELECT column_name, column_type
+FROM (DESCRIBE SELECT * FROM ducknng_prepare_query_params(
+  'ipc:///tmp/ducknng_parameter_binding.ipc',
+  'SELECT ?::BIGINT AS answer',
+  struct_pack(p1 := 42::BIGINT),
+  0::UBIGINT
+))
+----
+answer	BIGINT
+
+# Preparing multiple statements must fail before any leading statement runs.
+statement error
+SELECT *
+FROM ducknng_prepare_query(
+  'ipc:///tmp/ducknng_parameter_binding.ipc',
+  'CREATE TABLE prepare_must_not_run(i INTEGER); SELECT 1 AS i',
+  0::UBIGINT
+)
+----
+ducknng: query_prepare requires exactly one SQL statement
+
+query I
+SELECT n
+FROM ducknng_query_rpc(
+  'ipc:///tmp/ducknng_parameter_binding.ipc',
+  'SELECT count(*)::INTEGER AS n
+   FROM duckdb_tables()
+   WHERE table_name = ''prepare_must_not_run''',
+  0::UBIGINT
+)
+----
+0
+
+# The fixed-schema exec helper performs network I/O during scan, not bind.
+# EXPLAIN may bind the function but must not execute the remote mutation.
+query I
+SELECT ok
+FROM ducknng_run_rpc(
+  'ipc:///tmp/ducknng_parameter_binding.ipc',
+  'CREATE TABLE parameterized_write(i INTEGER)',
+  0::UBIGINT
+)
+----
+true
+
+statement ok
+EXPLAIN SELECT *
+FROM ducknng_run_rpc_params(
+  'ipc:///tmp/ducknng_parameter_binding.ipc',
+  'INSERT INTO parameterized_write VALUES (?)',
+  struct_pack(p1 := 7),
+  0::UBIGINT
+)
+
+query I
+SELECT n
+FROM ducknng_query_rpc(
+  'ipc:///tmp/ducknng_parameter_binding.ipc',
+  'SELECT count(*)::INTEGER AS n FROM parameterized_write',
+  0::UBIGINT
+)
+----
+0
+
+query I
+SELECT rows_changed
+FROM ducknng_run_rpc_params(
+  'ipc:///tmp/ducknng_parameter_binding.ipc',
+  'INSERT INTO parameterized_write VALUES (?)',
+  struct_pack(p1 := 7),
+  0::UBIGINT
+)
+----
+1
+
+query I
+SELECT n
+FROM ducknng_query_rpc(
+  'ipc:///tmp/ducknng_parameter_binding.ipc',
+  'SELECT count(*)::INTEGER AS n FROM parameterized_write',
+  0::UBIGINT
+)
+----
+1
+
+statement ok
+SELECT ducknng_stop_server('parameter_binding')

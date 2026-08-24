@@ -1,0 +1,118 @@
+# name: test/sql/ducknng_upload_roundtrip.test
+# group: [ducknng]
+
+require ducknng
+
+# Start an inproc server and expose the opt-in upload lane.
+statement ok
+SELECT ducknng_start_server('up0', 'inproc://ducknng_upload_rt', 1, 134217728, 300000, 0::UBIGINT);
+
+statement ok
+SELECT ducknng_register_upload_methods();
+
+# Target table (committed, so the server's session connection sees it).
+statement ok
+CREATE TABLE upload_dst(i INTEGER, s VARCHAR);
+
+# Upload a locally-computed query into the remote table. Column names AND types
+# must match the target exactly (the appender is ordinal + strictly typed), so
+# i is cast to INTEGER. Returns one row: {rows_uploaded, bytes_uploaded>0}.
+query II
+SELECT rows_uploaded, (bytes_uploaded > 0)::INTEGER AS ok
+FROM ducknng_upload_table(
+  'inproc://ducknng_upload_rt',
+  'SELECT i::INTEGER AS i, ''v'' || i AS s FROM range(1000) t(i)',
+  'upload_dst')
+----
+1000	1
+
+# The rows landed with the right values (count + checksums).
+query III
+SELECT count(*), sum(i), min(s) FROM upload_dst
+----
+1000	499500	v0
+
+# A second upload appends (mode = append).
+query I
+SELECT rows_uploaded
+FROM ducknng_upload_table(
+  'inproc://ducknng_upload_rt',
+  'SELECT i::INTEGER AS i, ''v'' || i AS s FROM range(5) t(i)',
+  'upload_dst')
+----
+5
+
+query I
+SELECT count(*) FROM upload_dst
+----
+1005
+
+# A column-type mismatch (BIGINT source into an INTEGER column) is rejected
+# before any row is appended; the client sends upload_abort and the server rolls
+# the transaction back.
+statement error
+SELECT rows_uploaded
+FROM ducknng_upload_table(
+  'inproc://ducknng_upload_rt',
+  'SELECT i AS i, ''v'' || i AS s FROM range(3) t(i)',
+  'upload_dst')
+----
+ducknng: quack append column type does not match the target table
+
+# Nothing partial persisted from the rejected upload.
+query I
+SELECT count(*) FROM upload_dst
+----
+1005
+
+# A zero-row source with a matching schema commits 0 rows (the schema is still
+# validated -- an empty result sends one schema-only batch).
+query I
+SELECT rows_uploaded
+FROM ducknng_upload_table(
+  'inproc://ducknng_upload_rt',
+  'SELECT i::INTEGER AS i, ''v'' || i AS s FROM range(0) t(i)',
+  'upload_dst')
+----
+0
+
+# A zero-row source with the WRONG schema is rejected (previously it committed 0
+# rows without ever checking the columns against the target).
+statement error
+SELECT rows_uploaded
+FROM ducknng_upload_table(
+  'inproc://ducknng_upload_rt',
+  'SELECT 1::BIGINT AS wrong FROM range(0) t(i)',
+  'upload_dst')
+----
+ducknng: quack append column
+
+# A malformed target_table is rejected client-side before any upload_open.
+statement error
+SELECT rows_uploaded
+FROM ducknng_upload_table(
+  'inproc://ducknng_upload_rt',
+  'SELECT i::INTEGER AS i, ''v'' || i AS s FROM range(1) t(i)',
+  'bad"table')
+----
+ducknng: upload target_table must be a simple
+
+# A structurally-invalid but charset-clean target (too many parts) is also
+# rejected client-side, before source_query runs.
+statement error
+SELECT rows_uploaded
+FROM ducknng_upload_table(
+  'inproc://ducknng_upload_rt',
+  'SELECT i::INTEGER AS i, ''v'' || i AS s FROM range(1) t(i)',
+  'a.b.c.d')
+----
+ducknng: upload target_table must be a simple
+
+# Still 1005 -- none of the rejected uploads corrupted the target.
+query I
+SELECT count(*) FROM upload_dst
+----
+1005
+
+statement ok
+SELECT ducknng_stop_server('up0');

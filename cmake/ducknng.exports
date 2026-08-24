@@ -1,0 +1,6 @@
+{
+    global:
+        ducknng_init_c_api;
+    local:
+        *;
+};

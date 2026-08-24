@@ -1,0 +1,188 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+name: python-wheels
+
+# Build wheels on commit to main, or when requested
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/python-wheels.yaml'
+      - 'python/meson.build'
+      - 'python/src/nanoarrow/meson.build'
+      - 'python/pyproject.toml'
+      - 'python/bootstrap.py'
+      - 'python/generate_dist.py'
+      - 'python/MANIFEST.in'
+  push:
+    branches:
+      - main
+      - 'maint-**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.repository }}-${{ github.ref }}-${{ github.workflow }}
+  cancel-in-progress: true
+
+jobs:
+  sdist:
+    runs-on: "ubuntu-latest"
+    steps:
+    - uses: actions/checkout@v6
+      with:
+        fetch-depth: 0
+        fetch-tags: true
+
+    - uses: actions/setup-python@v6
+      with:
+        python-version: '3.x'
+
+    - name: Install packaging tools
+      run: |
+        pip install build twine
+
+    - name: Set nanoarrow Python dev version
+      if: github.ref == 'refs/heads/main'
+      run: |
+        python dev/release/release_tools.py set_python_dev_version
+
+    - name: Build sdist
+      run: |
+        cd python
+        python -m build --sdist
+
+    - name: Check install from sdist
+      run: |
+        pip install python/dist/nanoarrow-*.tar.gz
+
+    - name: Test import
+      run: |
+        python -c "import nanoarrow; print(nanoarrow.__version__)"
+
+    - name: Run twine check
+      run: |
+        twine check --strict python/dist/*
+
+    - uses: actions/upload-artifact@v7
+      with:
+        name: release-sdist
+        path: ./python/dist/nanoarrow-*.tar.gz
+
+  wheels:
+    needs: ["sdist"]
+    name: ${{ matrix.config.label }}
+    runs-on: ${{ matrix.config.os }}
+    strategy:
+      matrix:
+        config:
+          - {os: "ubuntu-latest", label: "pyodide", platform: "pyodide", arch: "auto"}
+          - {os: "ubuntu-latest", label: "linux", platform: "auto", arch: "auto"}
+          - {os: "windows-latest", label: "windows-x86", platform: "auto", arch: "x86"}
+          - {os: "windows-latest", label: "windows-amd64", platform: "auto", arch: "AMD64"}
+          - {os: "windows-latest", label: "windows-arm64", platform: "auto", arch: "ARM64"}
+          - {os: "macos-15-intel", label: "macOS", platform: "auto", arch: "x86_64"}
+          - {os: "macOS-14", label: "macOS-arm64", platform: "auto", arch: "auto"}
+          - {os: "ubuntu-24.04-arm", label: "linux-arm64", platform: "auto", arch: "auto"}
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - uses: actions/setup-python@v6
+        if: matrix.config.arch != 'x86'
+        with:
+          python-version: "3.x"
+
+      - name: Setup MSVC (64-bit)
+        if: matrix.config.arch == 'AMD64'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - uses: actions/setup-python@v6
+        if: matrix.config.arch == 'x86'
+        with:
+          python-version: "3.x"
+          architecture: x86
+
+      - name: Setup MSVC (32-bit)
+        if: matrix.config.arch == 'x86'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x86
+
+      - name: Install cibuildwheel
+        run: python -m pip install cibuildwheel==3.4.0
+
+      - name: Set nanoarrow Python dev version
+        if: github.ref == 'refs/heads/main'
+        run: |
+          python dev/release/release_tools.py set_python_dev_version
+
+      - name: Build wheels
+        run: |
+          python -m cibuildwheel --output-dir wheelhouse python
+        env:
+          # The PKG_CONFIG_PATH is set by setup-python; however, its presence causes
+          # an issue for pyodide which picks up the wrong Python headers if this is set.
+          PKG_CONFIG_PATH: ""
+          CIBW_TEST_REQUIRES: pytest
+          CIBW_TEST_COMMAND: pytest {package}/tests -vv
+          CIBW_PLATFORM: ${{ matrix.config.platform }}
+          CIBW_ARCHS: ${{ matrix.config.arch }}
+          CIBW_ENABLE: cpython-freethreading
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-wheels-${{ matrix.config.label }}
+          path: ./wheelhouse/*.whl
+
+
+  upload_nightly:
+    needs: ["sdist", "wheels"]
+    name: Upload nightly packages
+    runs-on: "macos-latest"
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: release-*
+          merge-multiple: true
+          path: dist
+
+      - name: Install gemfury client
+        run: |
+          brew tap gemfury/tap
+          brew install fury-cli
+          fury --version
+
+      - name: Upload packages to Gemfury
+        if: github.repository == 'apache/arrow-nanoarrow' && github.ref == 'refs/heads/main'
+        shell: bash
+        run: |
+          fury push \
+            --api-token=${NANOARROW_GEMFURY_TOKEN} \
+            --as="arrow-nightlies" \
+            dist/*
+        env:
+          NANOARROW_GEMFURY_TOKEN: ${{ secrets.NANOARROW_GEMFURY_TOKEN }}

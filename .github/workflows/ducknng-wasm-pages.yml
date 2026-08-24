@@ -1,0 +1,219 @@
+name: ducknng wasm Pages demo
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/ducknng-wasm-pages.yml'
+      - 'CMakeLists.txt'
+      - 'Makefile'
+      - 'duckdb_capi/**'
+      - 'extension-ci-tools/**'
+      - 'scripts/docker/duckdb-wasm-local.Dockerfile'
+      - 'scripts/duckdb-wasm-local-test.html'
+      - 'scripts/start_duckdb_wasm_local_test.sh'
+      - 'test/browser/**'
+      - 'src/**'
+      - 'third_party/**'
+      - 'patches/nng/**'
+  workflow_dispatch:
+    inputs:
+      duckdb_wasm_platform:
+        description: 'duckdb-wasm runtime platform to stage'
+        required: true
+        default: 'wasm_threads'
+        type: choice
+        options:
+          - wasm_threads
+          - wasm_eh
+      duckdb_wasm_npm_version:
+        description: '@duckdb/duckdb-wasm npm version'
+        required: true
+        default: '1.33.1-dev55.0'
+      duckdb_wasm_duckdb_version:
+        description: 'DuckDB version used for extension headers/build'
+        required: true
+        default: 'v1.5.3'
+
+permissions:
+  contents: write
+
+env:
+  DUCKDB_WASM_PLATFORM: ${{ inputs.duckdb_wasm_platform || 'wasm_threads' }}
+  DUCKDB_WASM_NPM_VERSION: ${{ inputs.duckdb_wasm_npm_version || '1.33.1-dev55.0' }}
+  DUCKDB_WASM_DUCKDB_VERSION: ${{ inputs.duckdb_wasm_duckdb_version || 'v1.5.3' }}
+  DUCKNNG_WASM_INPROC_ONLY: '1'
+  DUCKNNG_WASM_TRACE: '0'
+  DUCKNNG_WASM_SERVE: '0'
+  DUCKNNG_WASM_RELEASE_TAG: ducknng-wasm-demo-latest
+
+concurrency:
+  group: ducknng-wasm-pages-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-release-artifact:
+    name: Build wasm demo artifact
+    runs-on: ubuntu-latest
+    outputs:
+      release_tag: ${{ env.DUCKNNG_WASM_RELEASE_TAG }}
+      extension_asset_name: ${{ steps.names.outputs.extension_asset_name }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Compute artifact names
+        id: names
+        run: |
+          set -euo pipefail
+          echo "extension_asset_name=ducknng-${DUCKDB_WASM_PLATFORM}.duckdb_extension.wasm" >> "$GITHUB_OUTPUT"
+          echo "extension_release_url=https://github.com/${GITHUB_REPOSITORY}/releases/download/${DUCKNNG_WASM_RELEASE_TAG}/ducknng-${DUCKDB_WASM_PLATFORM}.duckdb_extension.wasm" >> "$GITHUB_OUTPUT"
+
+      - name: Build wasm_eh probe artifact
+        # A __multi3 dynamic-link mismatch once shipped a demo artifact that
+        # failed at LOAD with no CI signal. That failure class is
+        # target-independent (same sources, same emsdk), and wasm_eh is the
+        # release-supported browser lane, so the blocking load gate runs on a
+        # wasm_eh build; wasm_threads LOAD is documented as resource-sensitive
+        # in headless CI and stays report-only below.
+        env:
+          DUCKDB_WASM_PLATFORM: wasm_eh
+          DUCKNNG_SOURCE_COMMIT: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          scripts/start_duckdb_wasm_local_test.sh
+          mv .duckdb-wasm-local-artifacts .duckdb-wasm-eh-probe-artifacts
+          # The container writes the work tree as root; reset it so the
+          # wasm_threads build below can recreate it as the runner user.
+          sudo rm -rf .duckdb_wasm_docker_work
+
+      - name: Browser conformance gate on wasm_eh artifact
+        # Capability-gated: reads ducknng_transport_capabilities() and runs
+        # every probe whose capability the wasm_eh backend claims supported,
+        # skipping unsupported ones. Replaces the hand-maintained per-target
+        # probe list; a broken artifact or a claim/behavior drift fails here
+        # before anything is packaged or published.
+        run: |
+          set -euo pipefail
+          cd test/browser
+          npm ci
+          npx playwright install --with-deps chromium
+          ok=0
+          for attempt in 1 2 3; do
+            if node run_smoke.mjs "$GITHUB_WORKSPACE/.duckdb-wasm-eh-probe-artifacts/site" --probes=conformance; then
+              ok=1
+              break
+            fi
+            echo "conformance gate attempt ${attempt} failed; retrying"
+            sleep 5
+          done
+          [ "$ok" = "1" ]
+
+      - name: Build static ducknng wasm demo site
+        env:
+          DUCKNNG_SOURCE_COMMIT: ${{ github.sha }}
+          DUCKNNG_WASM_EXTENSION_RELEASE_URL: ${{ steps.names.outputs.extension_release_url }}
+        run: scripts/start_duckdb_wasm_local_test.sh
+
+      - name: Browser load probe on wasm_threads artifact (report-only)
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          cd test/browser
+          node run_smoke.mjs "$GITHUB_WORKSPACE/.duckdb-wasm-local-artifacts/site" --probes=load
+
+      - name: Package release artifacts
+        run: |
+          set -euo pipefail
+          mkdir -p duckdb-wasm-release
+          cp .duckdb-wasm-local-artifacts/site/duckdb-wasm/ducknng.duckdb_extension.wasm \
+            "duckdb-wasm-release/${{ steps.names.outputs.extension_asset_name }}"
+          cp .duckdb-wasm-local-artifacts/site/ducknng-wasm-config.json \
+            duckdb-wasm-release/ducknng-wasm-config.json
+          tar -C .duckdb-wasm-local-artifacts/site -czf \
+            duckdb-wasm-release/ducknng-wasm-pages-site.tar.gz .
+          (cd duckdb-wasm-release && sha256sum * > SHA256SUMS)
+
+      - name: Upload staged demo site artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ducknng-wasm-pages-site
+          path: .duckdb-wasm-local-artifacts/site
+          if-no-files-found: error
+
+      - name: Upload wasm release bundle artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ducknng-wasm-release-bundle
+          path: duckdb-wasm-release
+          if-no-files-found: error
+
+      # The ref is moved through the API rather than `git push -f`. GITHUB_TOKEN
+      # is refused any push whose commit touches .github/workflows/**, so a
+      # commit that adds or edits a workflow file made the tag push fail with
+      # "refusing to allow a GitHub App to create or update workflow ...".
+      # Pointing a ref at an already-pushed SHA is not subject to that rule.
+      - name: Move rolling demo release tag
+        if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          ref="repos/${GITHUB_REPOSITORY}/git/refs/tags/${DUCKNNG_WASM_RELEASE_TAG}"
+          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${DUCKNNG_WASM_RELEASE_TAG}" >/dev/null 2>&1; then
+            gh api -X PATCH "$ref" -f sha="${GITHUB_SHA}" -F force=true >/dev/null
+          else
+            gh api -X POST "repos/${GITHUB_REPOSITORY}/git/refs" \
+              -f ref="refs/tags/${DUCKNNG_WASM_RELEASE_TAG}" \
+              -f sha="${GITHUB_SHA}" >/dev/null
+          fi
+          echo "rolling tag ${DUCKNNG_WASM_RELEASE_TAG} -> ${GITHUB_SHA}"
+
+      - name: Publish rolling demo release assets
+        if: github.event_name != 'pull_request'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.DUCKNNG_WASM_RELEASE_TAG }}
+          name: ducknng wasm demo latest
+          body: |
+            Rolling ducknng browser wasm demo artifacts built by CI from `${{ github.sha }}`.
+
+            The Pages demo mirrors the wasm side module into same-origin GitHub Pages
+            because the threaded browser runtime needs COOP/COEP and direct release-asset
+            fetches may not provide the CORS/CORP headers required by cross-origin isolation.
+          prerelease: true
+          make_latest: false
+          overwrite_files: true
+          files: |
+            duckdb-wasm-release/${{ steps.names.outputs.extension_asset_name }}
+            duckdb-wasm-release/ducknng-wasm-config.json
+            duckdb-wasm-release/ducknng-wasm-pages-site.tar.gz
+            duckdb-wasm-release/SHA256SUMS
+
+  deploy-pages-branch:
+    name: Publish gh-pages from CI artifact
+    needs: build-release-artifact
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download staged demo site artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ducknng-wasm-pages-site
+          path: .duckdb-wasm-pages-site
+
+      # The demo publishes into the wasm/ subdirectory so the documentation site
+      # (.github/workflows/pages.yml) can own the gh-pages root. force_orphan is
+      # deliberately absent: it rewrites the branch to a single commit and would
+      # delete the docs on every demo build.
+      - name: Publish gh-pages branch
+        if: github.event_name != 'pull_request'
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_branch: gh-pages
+          publish_dir: .duckdb-wasm-pages-site
+          destination_dir: wasm
+          commit_message: Deploy ducknng wasm demo for ${{ github.sha }}
