@@ -33,7 +33,7 @@ The first and primary target is a persistent R session.
 
 The complete ducknng source tree is pinned under `vendor/ducknng` as a Git subtree. The subtree is implementation authority, not reference material. Transport, TLS, identity, framing, manifest, session, AIO, cancellation, and codec changes land in ducknng first and are then refreshed here. `pi-duckdnng` must not carry a divergent reimplementation.
 
-[`DEPENDENCIES`](DEPENDENCIES) is the single version authority. The initial tuple pins DuckDB 1.5.0, `@duckdb/node-api` 1.5.0-r.1, and ducknng `v0.1.1-duckdb1.5.0` at its exact release commit. Tests and compatibility claims apply only to the pinned tuple.
+[`DEPENDENCIES`](DEPENDENCIES) is the single version authority. The initial tuple pins DuckDB 1.5.4, `@duckdb/node-api` 1.5.4-r.1, and ducknng `v0.1.1-duckdb1.5.4` at its exact release commit. Tests and compatibility claims apply only to the pinned tuple.
 
 DuckDB v2 and duckdb-quack are expected convergence paths that may remove version-specific compatibility and marshalling work. They will replace proven pieces when they provide real producer/consumer paths; v1 will not emulate hypothetical interfaces.
 
@@ -162,7 +162,7 @@ This proves persistence, reachability, interoperability, and cancellation withou
 ## Settled initial design
 
 - The repository is an R package composing nanonext and mirai.
-- DuckDB 1.5.0, its exact DuckDB API package, and its matching ducknng release are pinned as one tuple.
+- DuckDB 1.5.4, its exact DuckDB API package, and its matching ducknng release are pinned as one tuple.
 - `duckdnng_describe` is the only new stable Pi discovery tool; execution stays on the DuckDB API surface.
 - Mirai owns R process topology and scheduling; nanonext owns R-side NNG and AIO.
 - Both current Pi and Harness v2 are adapters over the same ducknng-facing semantics.
