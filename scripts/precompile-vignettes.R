@@ -9,7 +9,7 @@ specs <- list(
   list(
     source = "agent-product-path.Rmd.orig",
     output = "agent-product-path.Rmd",
-    receipt = "AGENT_VERIFIED_PI_DUCKNNG_42"
+    receipt = "AGENT_VERIFIED_MTCARS_PERSISTENCE"
   ),
   list(
     source = "agent-active-binding.Rmd.orig",
@@ -93,6 +93,8 @@ tryCatch(
         quiet = FALSE,
         envir = new.env(parent = globalenv())
       )
+      lines <- readLines(staged[[index]], warn = FALSE, encoding = "UTF-8")
+      writeLines(sub("[[:blank:]]+$", "", lines), staged[[index]], useBytes = TRUE)
       validate_output(staged[[index]], spec$receipt)
     }
     for (index in seq_along(specs)) {

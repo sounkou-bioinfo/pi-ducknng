@@ -40,56 +40,46 @@ Python, and a C/C++ toolchain.
 ## Pi-to-R proof
 
 The evaluated cell below loads the package extension into an OpenAI
-Codex agent. The model starts the R adapter, obtains its URL, fetches
-the ducknng RPC manifest, and invokes only methods declared by that
-manifest. The final evaluation reads an active binding from an
-environment whose parent the agent selected.
+Codex agent. The model discovers the endpoint’s methods and request
+examples, then performs an `mtcars` analysis whose intermediate table
+survives across fresh DuckDB clients.
 
 ``` sh
 pi --model gpt-5.4 -e ./extensions/pi-ducknng/index.ts -p \
-  "Use only persistent_r_start, ducknng_describe, and " \
-  "ducknng_call; do not use shell or file tools. Start the " \
-  "persistent R adapter and keep its URL. Fetch the ducknng " \
-  "RPC manifest for that URL and inspect the declared " \
-  "methods and eval request schema. Call eval to assign `x " \
-  "<- 41L`. Call eval again to create `e <- new.env(parent " \
-  "= baseenv())` and a read-only active binding `answer` in " \
-  "`e` whose getter returns `x + 1L`; finish that call by " \
-  "checking `identical(parent.env(e), baseenv())`. Call " \
-  "eval a third time with `code = "answer"` and `envir = " \
-  ""e"`. Call eval once more with `code = "data.frame(a = " \
-  "1:2, b = c('x', 'y'))"` and inspect the two decoded " \
-  "rows. Call the declared close method. Only if the " \
-  "manifest used ducknng protocol version 1, all eval calls " \
-  "used the same endpoint process, the parent check " \
-  "returned true, the active binding returned 42, the data " \
-  "frame returned rows `(1, x)` and `(2, y)`, and close " \
-  "succeeded, begin the final reply with the exact line " \
-  "`AGENT_DUCKNNG_MANIFEST_CALL_OK`. Then report the " \
-  "observed manifest method names and results. Otherwise " \
-  "report the failure without that line."
+  "Using the package tools, start the R adapter and follow " \
+  "its ducknng manifest. In one eval call, create and " \
+  "return `mpg_by_cyl <- aggregate(mpg ~ cyl, data = " \
+  "datasets::mtcars, FUN = mean)`. In a separate eval call, " \
+  "use the persisted `mpg_by_cyl` to return " \
+  "`transform(mpg_by_cyl, delta_from_4cyl = mpg - mpg[cyl " \
+  "== 4])`. Close the endpoint. Report the manifested " \
+  "methods and decoded rows, beginning with " \
+  "`AGENT_DUCKNNG_MANIFEST_CALL_OK` only when both calls " \
+  "used the same endpoint process and succeeded."
 ```
 
-> AGENT_DUCKNNG_MANIFEST_CALL_OK URL: `tcp://127.0.0.1:45663`
+> AGENT_DUCKNNG_MANIFEST_CALL_OK
 >
-> Manifest: - server: `piducknng-r 0.0.0.9000` - protocol_version: `1` -
-> methods: `eval`, `close`
+> Endpoint: - URL: `tcp://127.0.0.1:46767` - endpoint_process: `65052`
 >
-> `eval` request schema: - type: `object` - required: `code` -
-> properties: - `code`: string - `envir`: string, default
-> `.piducknng_session` - `enclos`: string, default `baseenv()` -
-> additionalProperties: `false`
+> Manifested methods: - `eval` — R eval, persistent_process, request
+> `json`, response `arrow` - `close` — stop persistent R endpoint,
+> persistent_process, request `json`, response `json`
 >
-> Observed endpoint process: - start: `21071` - describe: `21071` - eval
-> \#1: `21071` - eval \#2: `21071` - eval \#3: `21071` - eval \#4:
-> `21071`
+> Eval call 1 decoded rows (`mpg_by_cyl`): -
+> `{cyl: 4, mpg: 26.663636363636364}` -
+> `{cyl: 6, mpg: 19.742857142857144}` - `{cyl: 8, mpg: 15.1}`
 >
-> Results: - eval \#1 `x <- 41L` → `41` - eval \#2 create `e`, active
-> binding `answer`, then check parent → `true` - eval \#3
-> `code = "answer", envir = "e"` → `42` - eval \#4 data frame decode →
-> rows: - `(1, x)` - `(2, y)` - close → `{"closed": true}`
+> Eval call 2 decoded rows
+> (`transform(mpg_by_cyl, delta_from_4cyl = mpg - mpg[cyl == 4])`): -
+> `{cyl: 4, mpg: 26.663636363636364, delta_from_4cyl: 0}` -
+> `{cyl: 6, mpg: 19.742857142857144, delta_from_4cyl: -6.92077922077922}` -
+> `{cyl: 8, mpg: 15.1, delta_from_4cyl: -11.563636363636364}`
 >
-> All requested checks passed.
+> Close: - `{closed: true}`
+>
+> Both eval calls succeeded against the same endpoint process `65052`,
+> confirming persisted state across calls.
 
 `persistent_r_start` returns an NNG URL, `ducknng_describe` fetches the
 endpoint’s ducknng RPC manifest, and `ducknng_call` sends declared calls

@@ -13,27 +13,17 @@ decoded by ducknng inside the fresh DuckDB client.
 
 ``` sh
 pi --model gpt-5.4 -e ./extensions/pi-ducknng/index.ts -p \
-  "Use only persistent_r_start, ducknng_describe, and " \
-  "ducknng_call; do not use shell or file tools. Start the " \
-  "persistent R adapter and fetch its ducknng RPC manifest. " \
-  "Invoke eval to set `x <- 41L`. Invoke eval again to " \
-  "create `e <- new.env(parent = baseenv())`, install a " \
-  "read-only active binding named `answer` in `e` whose " \
-  "getter returns `x + 1L`, and return " \
-  "`identical(parent.env(e), baseenv())`. Invoke eval with " \
-  "`code = "answer"` and `envir = "e"`. Close the endpoint " \
-  "through its declared close method. Only if the parent " \
-  "check is true and the active binding returns 42 begin " \
-  "the final reply with exactly " \
-  "`AGENT_VERIFIED_ACTIVE_BINDING`, then summarize the " \
-  "observed calls. If anything fails, omit the receipt."
+  "Using the package tools, start the R adapter and follow " \
+  "its ducknng manifest. Evaluate code that creates " \
+  "`analysis <- new.env(parent = baseenv())`, installs a " \
+  "read-only active binding `mean_mpg` whose getter returns " \
+  "`mean(datasets::mtcars$mpg)`, and returns " \
+  "`identical(parent.env(analysis), baseenv())`. In a fresh " \
+  "call, evaluate `mean_mpg` with `envir = "analysis"`. " \
+  "Close the endpoint. Report the parent check, endpoint " \
+  "process identity, and decoded mean, beginning with " \
+  "`AGENT_VERIFIED_ACTIVE_BINDING` only when all calls " \
+  "succeed."
 ```
 
-> AGENT_VERIFIED_ACTIVE_BINDING
-> 
-> - Started persistent R adapter at `tcp://127.0.0.1:44601`.
-> - Fetched manifest via `ducknng_describe`; declared methods: `eval`, `close`.
-> - Called `eval` with `code: "x <- 41L"` → result `41`.
-> - Called `eval` to create `e <- new.env(parent = baseenv())`, install active binding `answer`, and check `identical(parent.env(e), baseenv())` → result `true`.
-> - Called `eval` with `code: "answer", envir: "e"` → result `42`.
-> - Called declared `close` method → `closed: true`.
+> AGENT_VERIFIED_ACTIVE_BINDING parent_check=true endpoint_process=64342 mean_mpg=20.090625

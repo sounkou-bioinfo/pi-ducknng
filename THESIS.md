@@ -168,7 +168,7 @@ This proves persistence, reachability, interoperability, and cancellation withou
 
 ### Executable evidence
 
-`tools/persistent-r-proof.R` remains the lower-level session-owner test. The top-level `README.qmd` and precomputed vignettes exercise the model-facing path with OpenAI Codex agents. An agent starts the R adapter, fetches its ducknng manifest, chooses `eval`, and sends framed RPC calls through fresh DuckDB clients. The adapter evaluates code in a mirai-owned persistent environment with explicit `envir` and `enclos`, emits nanoarrow IPC, and closes only through its declared method. The rendered case creates an environment with `baseenv()` as parent, installs an active binding, and reads `42` through that binding.
+`tools/persistent-r-proof.R` remains the lower-level session-owner test. The top-level `README.qmd` and precomputed vignettes exercise the model-facing path with OpenAI Codex agents. An agent starts the R adapter, fetches its ducknng manifest, chooses `eval`, and sends framed RPC calls through fresh DuckDB clients. The adapter evaluates code in a mirai-owned persistent environment with explicit `envir` and `enclos`, emits nanoarrow IPC, and closes only through its declared method. The rendered cases persist an `mtcars` aggregation across calls and read mean MPG from an active binding in an environment whose parent is `baseenv()`.
 
 Structured conditions, interruption, and attachment by a second non-Pi client remain subsequent slices.
 

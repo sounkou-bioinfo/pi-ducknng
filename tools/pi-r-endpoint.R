@@ -124,9 +124,28 @@ manifest_payload <- function() {
     type = "object",
     required = "code",
     properties = list(
-      code = list(type = "string"),
-      envir = list(type = "string", default = ".piducknng_session"),
-      enclos = list(type = "string", default = "baseenv()")
+      code = list(
+        type = "string",
+        description = "R source evaluated in the selected persistent environment",
+        examples = list(
+          paste0(
+            "mpg_by_cyl <- aggregate(mpg ~ cyl, ",
+            "data = datasets::mtcars, FUN = mean); mpg_by_cyl"
+          )
+        )
+      ),
+      envir = list(
+        type = "string",
+        description = "R expression resolving to the evaluation environment",
+        default = ".piducknng_session",
+        examples = list(".piducknng_session", "analysis")
+      ),
+      enclos = list(
+        type = "string",
+        description = "R expression resolving to eval()'s enclosure",
+        default = "baseenv()",
+        examples = list("baseenv()", "globalenv()")
+      )
     ),
     additionalProperties = FALSE
   )

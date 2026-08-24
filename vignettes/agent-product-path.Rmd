@@ -14,36 +14,37 @@ The committed `.Rmd` preserves the result for package and pkgdown builds.
 
 ``` sh
 pi --model gpt-5.4 -e ./extensions/pi-ducknng/index.ts -p \
-  "Use only persistent_r_start, ducknng_describe, and " \
-  "ducknng_call; do not use shell or file tools. Start the " \
-  "persistent R adapter. Fetch the ducknng RPC manifest for " \
-  "its URL. From that manifest choose eval, call it with " \
-  "`code = "x <- 41L"`, then call it through a fresh client " \
-  "with `code = "x + 1L"`. Call eval once more with `code = " \
-  ""data.frame(a = 1:2, b = c('x', 'y'))"`. Verify all " \
-  "calls report the same endpoint process, the scalar " \
-  "result is 42, and the Arrow IPC table decodes to rows " \
-  "`(1, x)` and `(2, y)`. Invoke the declared close method. " \
-  "Only after observing those tool results begin the final " \
-  "reply with exactly `AGENT_VERIFIED_PI_DUCKNNG_42`, then " \
-  "summarize the manifest and calls. If anything fails, " \
-  "omit the receipt."
+  "Using the package tools, start the R adapter and follow " \
+  "its ducknng manifest. Evaluate and persist `mpg_by_cyl " \
+  "<- aggregate(mpg ~ cyl, data = datasets::mtcars, FUN = " \
+  "mean)`, returning the table. In a fresh call, use " \
+  "`mpg_by_cyl` to return `transform(mpg_by_cyl, " \
+  "delta_from_4cyl = mpg - mpg[cyl == 4])`. Close the " \
+  "endpoint. Report the manifested methods, endpoint " \
+  "process identity, and decoded rows, beginning with " \
+  "`AGENT_VERIFIED_MTCARS_PERSISTENCE` only when both calls " \
+  "and close succeed."
 ```
 
-> AGENT_VERIFIED_PI_DUCKNNG_42
-> 
-> - Started persistent R adapter at `tcp://127.0.0.1:35263`; endpoint process `7935`.
-> - Manifest:
->   - server: `piducknng-r` `0.0.0.9000`, protocol `1`
->   - methods:
->     - `eval`: R family, JSON request, Arrow IPC stream reply, persistent process, stateful
->     - `close`: R family, JSON request/reply, closes persistent process
-> - Calls via fresh DuckDB clients each time:
->   1. `eval(code = "x <- 41L")` → result `41`, endpoint process `7935`
->   2. `eval(code = "x + 1L")` → result `42`, endpoint process `7935`
->   3. `eval(code = "data.frame(a = 1:2, b = c('x', 'y'))")` → decoded rows `(1, x)`, `(2, y)`, endpoint process `7935`
->   4. `close()` → `closed: true`, endpoint process `7935`
-> - Verified:
->   - same endpoint process on all replies: `7935`
->   - scalar result is `42`
->   - Arrow IPC table decoded to the expected two rows
+> AGENT_VERIFIED_MTCARS_PERSISTENCE
+>
+> - Endpoint URL: `tcp://127.0.0.1:41205`
+> - Endpoint process: `PID 63619`
+> - Manifested methods:
+>   - `eval`: persistent-process R eval, JSON request → Arrow response
+>   - `close`: persistent-process shutdown, JSON request → JSON response
+>
+> First `eval` decoded rows (`mpg_by_cyl`):
+> - `4, 26.663636363636364`
+> - `6, 19.742857142857144`
+> - `8, 15.1`
+>
+> Second fresh `eval` decoded rows (`transform(...)`):
+> - `4, 26.663636363636364, 0`
+> - `6, 19.742857142857144, -6.92077922077922`
+> - `8, 15.1, -11.563636363636364`
+>
+> Close result:
+> - `closed: true`
+>
+> This verified that `mpg_by_cyl` persisted across fresh RPC calls to the same endpoint process.

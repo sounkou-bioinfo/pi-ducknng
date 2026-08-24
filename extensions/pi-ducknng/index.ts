@@ -659,7 +659,7 @@ export default function piDucknngExtension(pi: ExtensionAPI): void {
     name: "persistent_r_start",
     label: "Start persistent R endpoint",
     description:
-      "Start the local persistent R adapter and return its NNG URL for ducknng_describe and ducknng_call.",
+      "Start the local persistent R adapter and return its NNG URL. Describe that URL to obtain endpoint-owned methods, schemas, and examples before calling it.",
     parameters: StartParameters,
     execute: async (_toolCallId, _params, signal) => {
       signal?.throwIfAborted();

@@ -74,6 +74,13 @@ test("model tools discover and call the ducknng manifest", async () => {
       manifestReceipt.manifest.methods.map(({ name }) => name),
       ["eval", "close"],
     );
+    const evalMethod = manifestReceipt.manifest.methods.find(
+      ({ name }) => name === "eval",
+    );
+    assert.match(
+      evalMethod.request_schema.properties.code.examples[0],
+      /datasets::mtcars/,
+    );
 
     const set = await tools.get("ducknng_call").execute(
       "set",
@@ -114,14 +121,39 @@ test("model tools discover and call the ducknng manifest", async () => {
       {
         url,
         method: "eval",
-        arguments: { code: "data.frame(a = 1:2, b = c('x', 'y'))" },
+        arguments: {
+          code: [
+            "mpg_by_cyl <- aggregate(mpg ~ cyl,",
+            "data = datasets::mtcars, FUN = mean); mpg_by_cyl",
+          ].join(" "),
+        },
       },
       signal,
     );
-    assert.deepEqual(table.details.result, [
-      { a: 1, b: "x" },
-      { a: 2, b: "y" },
-    ]);
+    assert.deepEqual(
+      table.details.result.map(({ cyl }) => cyl),
+      [4, 6, 8],
+    );
+    assert.ok(Math.abs(table.details.result[0].mpg - 26.66364) < 1e-5);
+
+    const transformed = await tools.get("ducknng_call").execute(
+      "transform",
+      {
+        url,
+        method: "eval",
+        arguments: {
+          code: [
+            "transform(mpg_by_cyl,",
+            "  delta_from_4cyl = mpg - mpg[cyl == 4])",
+          ].join(" "),
+        },
+      },
+      signal,
+    );
+    assert.equal(transformed.details.result[0].delta_from_4cyl, 0);
+    assert.ok(
+      Math.abs(transformed.details.result[2].delta_from_4cyl + 11.56364) < 1e-5,
+    );
 
     const increments = await Promise.all([
       tools.get("ducknng_call").execute(
