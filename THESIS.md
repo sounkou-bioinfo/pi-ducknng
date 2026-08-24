@@ -25,6 +25,7 @@ The first and primary target is a persistent R session.
 - **Pi and pi-agent-core:** the TUI is already a client of the runtime. Current Pi extensions and SDK sessions are sufficient for an initial adapter. Harness v2 strengthens the contract with lanes, durable operations, recovery, and snapshot-plus-live observation; it is not a prerequisite.
 - **ducknng:** NNG carriers, mbedTLS configuration and identity, framed RPC, manifests, sessions, AIO, cancellation, Arrow IPC, Quack, and native/browser transport distinctions are existing authority.
 - **Rducks:** vendored NNG + mbedTLS, exact native artifact handling, and direct/Quack bridges provide packaging and interoperability precedent.
+- **DuckDB API:** Pi reaches ducknng through DuckDB's supported host API and extension mechanism. It owns the native loading and call boundary; `pi-duckdnng` does not add a direct NNG binding or sidecar.
 - **pi-bio-agent:** resource manifests, receipts, CAS, observations, and the ledger remain the durable evidence plane. They are not the live runtime owner.
 
 `pi-duckdnng` hard-vendors and reuses these authorities rather than reproducing them in TypeScript.
@@ -42,10 +43,21 @@ The complete ducknng source tree is pinned under `vendor/ducknng` as a Git subtr
 | Domain state | The endpoint: R process, DuckDB service, Pi session, or another runtime |
 | Live session ownership | The endpoint's session registry |
 | Projection into Pi | `pi-duckdnng` |
+| Pi-to-native host boundary | DuckDB API and DuckDB extension loading |
 | Durable resources and evidence | pi-bio-agent when used |
 | Placement and lifecycle | A concrete local, container, VM, cluster, or hosted provider |
 
-There must be no second transcript, scheduler, session store, TLS model, or codec authority inside `pi-duckdnng`.
+There must be no second transcript, scheduler, session store, TLS model, codec authority, or native NNG bridge inside `pi-duckdnng`.
+
+## Native path
+
+Pi does not call NNG through a custom native ABI:
+
+```text
+Pi extension -> DuckDB API -> DuckDB -> vendored ducknng -> NNG
+```
+
+DuckDB owns host-language integration and extension loading. Ducknng owns the network substrate. `pi-duckdnng` owns only their projection into Pi.
 
 ## Persistent R as the first proof
 
@@ -102,6 +114,7 @@ The initial project will not:
 
 - replace Pi's existing TUI;
 - design a new TLS, identity, session, AIO, or codec stack;
+- build a separate Node native binding or sidecar for NNG;
 - use transcript files as a wire protocol;
 - require a central orchestrator;
 - require containers or hosted compute;
@@ -128,5 +141,4 @@ This proves persistence, reachability, interoperability, and cancellation withou
 1. **Repository boundary:** does `pi-duckdnng` contain both the Pi adapter and the first R worker, or does the R worker live in a separate R package from the start?
 2. **Tool projection:** should discovered methods become dynamic first-class Pi tools, remain behind one explicit call tool, or support both modes?
 3. **R concurrency:** is one evaluator the sole writer with multiple observing clients, or can ownership be leased between clients?
-4. **Native boundary:** should Pi reach NNG through a small vendored N-API C binding, a sidecar, or another already-proven host bridge?
-5. **Pi exposure:** which current AgentSession operations form the first server manifest, and which should wait for Harness v2 lanes?
+4. **Pi exposure:** which current AgentSession operations form the first server manifest, and which should wait for Harness v2 lanes?
