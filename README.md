@@ -9,10 +9,10 @@ with persistent R sessions.
 
 ![Generic ducknng endpoint architecture](man/figures/architecture.svg)
 
-The generic path starts with a compatible endpoint URL supplied by any
-placement provider. `persistent_r_start` is the first local provider,
-not the endpoint model. The committed SVG is generated from the Mermaid
-source in `man/figures/architecture.mmd`.
+Placement stays outside the generic invocation path and supplies an
+endpoint URL. Endpoint-specific implementations belong in the examples
+below. The committed SVG is generated from the Mermaid source in
+`man/figures/architecture.mmd`.
 
 DuckDB owns native extension loading and host-language calls. The
 hard-vendored ducknng release owns transport, mbedTLS, identity,
@@ -57,24 +57,25 @@ pi --model gpt-5.4 -e ./extensions/pi-ducknng/index.ts -p \
 
 > AGENT_DUCKNNG_MANIFEST_CALL_OK
 >
-> Endpoint: - URL: `tcp://127.0.0.1:40883` - endpoint_process: `100327`
+> Endpoint: - URL: `tcp://127.0.0.1:44495` - endpoint_process: `104730`
 >
-> Manifested methods: - `eval` — R code eval, JSON request, Arrow reply,
-> persistent_process - `close` — stop persistent R endpoint, JSON
-> request/reply, persistent_process
+> Manifested methods: - `eval` — persistent-process R eval, JSON request
+> -\> Arrow response - `close` — persistent-process endpoint shutdown,
+> JSON request -\> JSON response
 >
-> Decoded rows from first `eval`: -
+> Call 1 decoded rows (`mpg_by_cyl <- aggregate(...)`): -
 > `{cyl: 4, mpg: 26.663636363636364}` -
 > `{cyl: 6, mpg: 19.742857142857144}` - `{cyl: 8, mpg: 15.1}`
 >
-> Decoded rows from second `eval`: -
+> Call 2 decoded rows
+> (`transform(mpg_by_cyl, delta_from_4cyl = mpg - mpg[cyl == 4])`): -
 > `{cyl: 4, mpg: 26.663636363636364, delta_from_4cyl: 0}` -
 > `{cyl: 6, mpg: 19.742857142857144, delta_from_4cyl: -6.92077922077922}` -
 > `{cyl: 8, mpg: 15.1, delta_from_4cyl: -11.563636363636364}`
 >
-> Close result: - `{closed: true}`
+> Close: - `{closed: true}`
 >
-> Both eval calls used the same endpoint process: `100327`.
+> Both eval calls succeeded against the same endpoint process: `104730`.
 
 `persistent_r_start` returns an NNG URL, `ducknng_describe` fetches the
 endpoint’s ducknng RPC manifest, and `ducknng_call` sends declared calls
