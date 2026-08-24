@@ -1,0 +1,125 @@
+# pi-ducknng
+
+`pi-ducknng` is a ducknng-backed network substrate for Pi, beginning
+with persistent R sessions.
+
+## Architecture
+
+``` mermaid
+flowchart LR
+    PI["Pi client or extension"] --> API["DuckDB API"]
+    API --> DB["DuckDB 1.5.4"]
+    DB --> DNNG["ducknng"]
+    DNNG <--> FABRIC["NNG fabric"]
+    FABRIC <--> R["Persistent R<br/>nanonext + mirai"]
+    FABRIC <--> PEER["Pi, DuckDB, or other NNG endpoint"]
+```
+
+DuckDB owns native extension loading and host-language calls. The
+hard-vendored ducknng release owns transport, mbedTLS, identity,
+framing, manifests, sessions, AIO, cancellation, and codecs. The R
+package composes `nanonext` and `mirai`; it does not reproduce those
+layers.
+
+## Pi package
+
+Install the repository as a Pi package:
+
+``` sh
+pi install git:github.com/sounkou-bioinfo/pi-ducknng
+```
+
+The package contributes three model tools: `persistent_r_start` places
+the first adapter, `ducknng_describe` reads any compatible endpoint
+manifest, and `ducknng_call` invokes a declared method. On first use it
+builds the pinned ducknng source; this requires Git, Make, CMake,
+Python, and a C/C++ toolchain.
+
+## Pi-to-R proof
+
+The evaluated cell below loads the package extension into an OpenAI
+Codex agent. The model starts the R adapter, obtains its URL, fetches
+the ducknng RPC manifest, and invokes only methods declared by that
+manifest. The final evaluation reads an active binding from an
+environment whose parent the agent selected.
+
+``` sh
+pi --model gpt-5.4 -e ./extensions/pi-ducknng/index.ts -p \
+  "Use only persistent_r_start, ducknng_describe, and " \
+  "ducknng_call; do not use shell or file tools. Start the " \
+  "persistent R adapter and keep its URL. Fetch the ducknng " \
+  "RPC manifest for that URL and inspect the declared " \
+  "methods and eval request schema. Call eval to assign `x " \
+  "<- 41L`. Call eval again to create `e <- new.env(parent " \
+  "= baseenv())` and a read-only active binding `answer` in " \
+  "`e` whose getter returns `x + 1L`; finish that call by " \
+  "checking `identical(parent.env(e), baseenv())`. Call " \
+  "eval a third time with `code = "answer"` and `envir = " \
+  ""e"`. Call eval once more with `code = "data.frame(a = " \
+  "1:2, b = c('x', 'y'))"` and inspect the two decoded " \
+  "rows. Call the declared close method. Only if the " \
+  "manifest used ducknng protocol version 1, all eval calls " \
+  "used the same endpoint process, the parent check " \
+  "returned true, the active binding returned 42, the data " \
+  "frame returned rows `(1, x)` and `(2, y)`, and close " \
+  "succeeded, begin the final reply with the exact line " \
+  "`AGENT_DUCKNNG_MANIFEST_CALL_OK`. Then report the " \
+  "observed manifest method names and results. Otherwise " \
+  "report the failure without that line."
+```
+
+> AGENT_DUCKNNG_MANIFEST_CALL_OK URL: `tcp://127.0.0.1:45663`
+>
+> Manifest: - server: `piducknng-r 0.0.0.9000` - protocol_version: `1` -
+> methods: `eval`, `close`
+>
+> `eval` request schema: - type: `object` - required: `code` -
+> properties: - `code`: string - `envir`: string, default
+> `.piducknng_session` - `enclos`: string, default
+> [`baseenv()`](https://rdrr.io/r/base/environment.html) -
+> additionalProperties: `false`
+>
+> Observed endpoint process: - start: `21071` - describe: `21071` - eval
+> \#1: `21071` - eval \#2: `21071` - eval \#3: `21071` - eval \#4:
+> `21071`
+>
+> Results: - eval \#1 `x <- 41L` → `41` - eval \#2 create `e`, active
+> binding `answer`, then check parent → `true` - eval \#3
+> `code = "answer", envir = "e"` → `42` - eval \#4 data frame decode →
+> rows: - `(1, x)` - `(2, y)` - close → `{"closed": true}`
+>
+> All requested checks passed.
+
+`persistent_r_start` returns an NNG URL, `ducknng_describe` fetches the
+endpoint’s ducknng RPC manifest, and `ducknng_call` sends declared calls
+as ducknng frames. Each tool request opens and closes a fresh DuckDB
+instance. Eval results are Arrow IPC streams produced by nanoarrow and
+decoded by ducknng; the mirai-owned R environment remains in the same
+endpoint process.
+
+Executable documentation uses `piknit`; `make readme` rejects output
+without the agent’s success receipt.
+
+## Agent-backed pkgdown articles
+
+Two pkgdown articles are authored as `vignettes/*.Rmd.orig` and
+precomputed with `openai-codex`/`gpt-5.4` agents. The committed `.Rmd`
+results let package and site builds remain credential-free, following
+the [rOpenSci precomputed-vignette
+pattern](https://ropensci.org/blog/2019/12/08/precompute-vignettes/).
+
+``` sh
+make vignettes
+make site
+```
+
+## Pinned runtime tuple
+
+| Component          | Version              |
+|--------------------|----------------------|
+| DuckDB             | 1.5.4                |
+| `@duckdb/node-api` | 1.5.4-r.1            |
+| ducknng            | `v0.1.1-duckdb1.5.4` |
+
+[`DEPENDENCIES`](https://sounkou-bioinfo.github.io/pi-ducknng/DEPENDENCIES)
+records the exact source commit. \## Design

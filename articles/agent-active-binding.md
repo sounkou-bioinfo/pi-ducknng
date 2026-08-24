@@ -1,0 +1,35 @@
+# An agent evaluates an R active binding in a selected environment
+
+This precomputed case exercises the `envir` and `enclos` controls
+declared by the endpoint’s `eval` method. Returned scalars travel as
+Arrow IPC and are decoded by ducknng inside the fresh DuckDB client.
+
+``` sh
+pi --model gpt-5.4 -e ./extensions/pi-ducknng/index.ts -p \
+  "Use only persistent_r_start, ducknng_describe, and " \
+  "ducknng_call; do not use shell or file tools. Start the " \
+  "persistent R adapter and fetch its ducknng RPC manifest. " \
+  "Invoke eval to set `x <- 41L`. Invoke eval again to " \
+  "create `e <- new.env(parent = baseenv())`, install a " \
+  "read-only active binding named `answer` in `e` whose " \
+  "getter returns `x + 1L`, and return " \
+  "`identical(parent.env(e), baseenv())`. Invoke eval with " \
+  "`code = "answer"` and `envir = "e"`. Close the endpoint " \
+  "through its declared close method. Only if the parent " \
+  "check is true and the active binding returns 42 begin " \
+  "the final reply with exactly " \
+  "`AGENT_VERIFIED_ACTIVE_BINDING`, then summarize the " \
+  "observed calls. If anything fails, omit the receipt."
+```
+
+> AGENT_VERIFIED_ACTIVE_BINDING
+>
+> - Started persistent R adapter at `tcp://127.0.0.1:44601`.
+> - Fetched manifest via `ducknng_describe`; declared methods: `eval`,
+>   `close`.
+> - Called `eval` with `code: "x <- 41L"` → result `41`.
+> - Called `eval` to create `e <- new.env(parent = baseenv())`, install
+>   active binding `answer`, and check
+>   `identical(parent.env(e), baseenv())` → result `true`.
+> - Called `eval` with `code: "answer", envir: "e"` → result `42`.
+> - Called declared `close` method → `closed: true`.

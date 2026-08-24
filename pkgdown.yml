@@ -1,0 +1,10 @@
+pandoc: 3.8.3
+pkgdown: 2.2.1
+pkgdown_sha: ~
+articles:
+  agent-active-binding: agent-active-binding.html
+  agent-product-path: agent-product-path.html
+last_built: 2026-08-24T21:44Z
+urls:
+  reference: https://sounkou-bioinfo.github.io/pi-ducknng/reference
+  article: https://sounkou-bioinfo.github.io/pi-ducknng/articles

@@ -1,0 +1,47 @@
+# An OpenAI Codex agent calls persistent R through ducknng
+
+This is the authored source for a precomputed vignette. The agent starts
+the local R adapter, receives its NNG URL, discovers methods from the
+endpoint’s ducknng RPC manifest, and invokes those methods through fresh
+DuckDB clients. The committed `.Rmd` preserves the result for package
+and pkgdown builds.
+
+``` sh
+pi --model gpt-5.4 -e ./extensions/pi-ducknng/index.ts -p \
+  "Use only persistent_r_start, ducknng_describe, and " \
+  "ducknng_call; do not use shell or file tools. Start the " \
+  "persistent R adapter. Fetch the ducknng RPC manifest for " \
+  "its URL. From that manifest choose eval, call it with " \
+  "`code = "x <- 41L"`, then call it through a fresh client " \
+  "with `code = "x + 1L"`. Call eval once more with `code = " \
+  ""data.frame(a = 1:2, b = c('x', 'y'))"`. Verify all " \
+  "calls report the same endpoint process, the scalar " \
+  "result is 42, and the Arrow IPC table decodes to rows " \
+  "`(1, x)` and `(2, y)`. Invoke the declared close method. " \
+  "Only after observing those tool results begin the final " \
+  "reply with exactly `AGENT_VERIFIED_PI_DUCKNNG_42`, then " \
+  "summarize the manifest and calls. If anything fails, " \
+  "omit the receipt."
+```
+
+> AGENT_VERIFIED_PI_DUCKNNG_42
+>
+> - Started persistent R adapter at `tcp://127.0.0.1:35263`; endpoint
+>   process `7935`.
+> - Manifest:
+>   - server: `piducknng-r` `0.0.0.9000`, protocol `1`
+>   - methods:
+>     - `eval`: R family, JSON request, Arrow IPC stream reply,
+>       persistent process, stateful
+>     - `close`: R family, JSON request/reply, closes persistent process
+> - Calls via fresh DuckDB clients each time:
+>   1.  `eval(code = "x <- 41L")` → result `41`, endpoint process `7935`
+>   2.  `eval(code = "x + 1L")` → result `42`, endpoint process `7935`
+>   3.  `eval(code = "data.frame(a = 1:2, b = c('x', 'y'))")` → decoded
+>       rows `(1, x)`, `(2, y)`, endpoint process `7935`
+>   4.  [`close()`](https://rdrr.io/r/base/connections.html) →
+>       `closed: true`, endpoint process `7935`
+> - Verified:
+>   - same endpoint process on all replies: `7935`
+>   - scalar result is `42`
+>   - Arrow IPC table decoded to the expected two rows
