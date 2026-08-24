@@ -21,7 +21,18 @@
   },
   "files": [
     "extensions/pi-ducknng",
-    "tools/persistent-r-proof.R",
+    "tools",
+    "vendor/ducknng/CMakeLists.txt",
+    "vendor/ducknng/Makefile",
+    "vendor/ducknng/description.yml",
+    "vendor/ducknng/functions.yaml",
+    "vendor/ducknng/duckdb_capi",
+    "vendor/ducknng/function_catalog",
+    "vendor/ducknng/patches",
+    "vendor/ducknng/scripts",
+    "vendor/ducknng/src",
+    "vendor/ducknng/third_party",
+    "vendor/ducknng/tools",
     "DESCRIPTION",
     "Makefile",
     "README.md",
@@ -30,8 +41,9 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "node --test test/*.test.js",
+    "test:pi-rpc": "node scripts/pi-rpc-proof.mjs",
     "readme:qmd": "quarto render README.qmd --to gfm --output README.md",
-    "check": "npm run typecheck && npm test"
+    "check": "npm run typecheck && npm test && npm run test:pi-rpc"
   },
   "pi": {
     "extensions": [
@@ -50,5 +62,8 @@
     "@earendil-works/pi-coding-agent": "^0.78.0",
     "@types/node": "^24.0.0",
     "typescript": "^5.8.3"
+  },
+  "dependencies": {
+    "@duckdb/node-api": "1.5.4-r.1"
   }
 }

@@ -4,7 +4,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import piDucknngExtension, {
-  runPersistentRProof,
+  runDucknngProof,
 } from "../extensions/pi-ducknng/index.ts";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
@@ -17,9 +17,23 @@ test("package manifest declares the Pi extension", async () => {
   assert.deepEqual(manifest.pi.extensions, ["./extensions/pi-ducknng/index.ts"]);
 });
 
-test("persistent R proof runner uses its requested package root", async () => {
-  const output = await runPersistentRProof(root);
-  assert.match(output, /persistent R daemon reconnected with x \+ 1 = 42/);
+test("proof traverses DuckDB and ducknng into persistent R", async () => {
+  const output = await runDucknngProof(root);
+  assert.match(output, /Pi client A: set x = 41 through DuckDB -> ducknng -> NNG -> R/);
+  assert.match(output, /Pi client B: evaluated x \+ 1 = 42 in the same persistent R session/);
+});
+
+test("proof fails promptly when Rscript cannot spawn", async () => {
+  const previous = process.env.RSCRIPT;
+  process.env.RSCRIPT = "pi-ducknng-missing-rscript";
+  const started = Date.now();
+  try {
+    await assert.rejects(runDucknngProof(root), /ENOENT|spawn/);
+    assert.ok(Date.now() - started < 5000);
+  } finally {
+    if (previous === undefined) delete process.env.RSCRIPT;
+    else process.env.RSCRIPT = previous;
+  }
 });
 
 test("Pi extension registers an executable proof command", async () => {
@@ -43,7 +57,7 @@ test("Pi extension registers an executable proof command", async () => {
 
   assert.match(
     notifications.at(-1).message,
-    /persistent R daemon reconnected with x \+ 1 = 42/,
+    /Pi client B: evaluated x \+ 1 = 42 in the same persistent R session/,
   );
   assert.equal(notifications.at(-1).level, "info");
 });

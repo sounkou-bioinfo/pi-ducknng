@@ -34,19 +34,19 @@ Install the repository as a Pi package:
 pi install git:github.com/sounkou-bioinfo/pi-ducknng
 ```
 
-The package contributes `/ducknng-proof`, which runs the persistent-R reconnect proof from the installed package root.
+The package contributes `/ducknng-proof`, which runs the persistent-R reconnect proof from the installed package root. On first use it builds the pinned ducknng source; this requires Git, Make, CMake, Python, and a C/C++ toolchain.
 
-## Persistent R proof
+## Pi-to-R proof
 
 The command below is an evaluated Quarto cell; a nonzero exit stops rendering:
 
 ```{pish}
-make persistent-r-proof
+make pi-proof
 ```
 
-The proof launches an independent mirai daemon, stores `x <- 41`, ends its first host session, reconnects a second host at the same resolved NNG URL, evaluates `x + 1`, and requires `42` before explicit shutdown.
+The proof starts Pi in headless RPC mode, confirms that the local package contributed `/ducknng-proof`, and invokes that extension command without an LLM call. The extension opens DuckDB through `@duckdb/node-api`, loads the vendored ducknng extension, and sends a request through NNG to a nanonext gateway backed by one mirai R daemon. It then closes the first DuckDB instance, opens a fresh instance, reconnects, and requires `x + 1 == 42` before shutdown.
 
-Executable documentation uses `piknit`: `{pi}` chunks run Pi prompts, while `{pish}` chunks run commands such as `node` or `make` and stop rendering on failure.
+Executable documentation uses `piknit`; its `{pish}` engine stops rendering on command failure.
 
 ## Pinned runtime tuple
 

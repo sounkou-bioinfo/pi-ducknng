@@ -4,6 +4,8 @@
 
 [`DEPENDENCIES`](DEPENDENCIES) is the version authority for the DuckDB, DuckDB API, and ducknng tuple. The `git-subtree-split` trailer on each vendoring commit records the exact imported upstream commit.
 
+The vendored tree retains ducknng's `extension-ci-tools` gitlink. `make ducknng-extension` materializes that build-only checkout at `DUCKDB_EXTENSION_CI_TOOLS_COMMIT`, then builds the local DuckDB extension artifact.
+
 Transport, TLS, identity, framing, manifest, session, AIO, cancellation, and codec changes belong in ducknng first. `pi-ducknng` then refreshes the pinned subtree; it does not maintain a divergent implementation.
 
 Refresh only after intentionally updating `DEPENDENCIES`:

@@ -166,11 +166,11 @@ The smallest proof should demonstrate one semantic claim: a persistent R session
 
 This proves persistence, reachability, interoperability, and cancellation without first building an orb product or multi-agent framework.
 
-### R-side evidence
+### Executable evidence
 
-`tools/persistent-r-proof.R` proves the session-owner half today. Host A binds an ephemeral NNG URL and launches an independent mirai daemon with `autoexit = FALSE` and `cleanup = FALSE`. The daemon retains `x <- 41` after Host A exits, reconnects to Host B at the resolved URL, returns `42` for `x + 1`, and then receives explicit shutdown. Neither host owns the R workspace.
+`tools/persistent-r-proof.R` remains the lower-level session-owner test. The product-path proof is `scripts/pi-rpc-proof.mjs`: it starts Pi in RPC mode, verifies package command discovery, and invokes `/ducknng-proof` without an LLM call. The extension uses the pinned DuckDB Node API to load vendored ducknng and sends fixed proof requests over NNG to a nanonext gateway. The gateway delegates state mutation and evaluation to one mirai daemon. A fresh DuckDB instance reconnects and receives `42` for `x + 1` before explicit shutdown.
 
-The model-facing Pi endpoint extension, ducknng manifest projection, structured conditions, and interruption remain subsequent slices. The current Pi command only executes this evidence from the installed package root.
+The fixed proof messages are not a public evaluator protocol. Ducknng manifest projection, structured conditions, interruption, and attachment by a second non-Pi client remain subsequent slices.
 
 ## Settled initial design
 

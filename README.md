@@ -31,27 +31,38 @@ pi install git:github.com/sounkou-bioinfo/pi-ducknng
 ```
 
 The package contributes `/ducknng-proof`, which runs the persistent-R
-reconnect proof from the installed package root.
+reconnect proof from the installed package root. On first use it builds
+the pinned ducknng source; this requires Git, Make, CMake, Python, and a
+C/C++ toolchain.
 
-## Persistent R proof
+## Pi-to-R proof
 
 The command below is an evaluated Quarto cell; a nonzero exit stops
 rendering:
 
 ``` sh
-make persistent-r-proof
+make pi-proof
 ```
 
-    Rscript --vanilla tools/persistent-r-proof.R
-    persistent R daemon reconnected with x + 1 = 42
+    node scripts/pi-rpc-proof.mjs
+    Pi RPC: discovered and invoked the local /ducknng-proof command
+    Pi extension: loaded DuckDB API and ducknng
+    Pi client A: set x = 41 through DuckDB -> ducknng -> NNG -> R
+    Pi client A: disconnected
+    Pi client B: reconnected through a fresh DuckDB instance
+    Pi client B: evaluated x + 1 = 42 in the same persistent R session
+    R endpoint: stopped
 
-The proof launches an independent mirai daemon, stores `x <- 41`, ends
-its first host session, reconnects a second host at the same resolved
-NNG URL, evaluates `x + 1`, and requires `42` before explicit shutdown.
+The proof starts Pi in headless RPC mode, confirms that the local
+package contributed `/ducknng-proof`, and invokes that extension command
+without an LLM call. The extension opens DuckDB through
+`@duckdb/node-api`, loads the vendored ducknng extension, and sends a
+request through NNG to a nanonext gateway backed by one mirai R daemon.
+It then closes the first DuckDB instance, opens a fresh instance,
+reconnects, and requires `x + 1 == 42` before shutdown.
 
-Executable documentation uses `piknit`: `{pi}` chunks run Pi prompts,
-while `{pish}` chunks run commands such as `node` or `make` and stop
-rendering on failure.
+Executable documentation uses `piknit`; its `{pish}` engine stops
+rendering on command failure.
 
 ## Pinned runtime tuple
 
