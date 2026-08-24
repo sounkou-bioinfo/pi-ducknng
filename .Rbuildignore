@@ -1,0 +1,10 @@
+AGENTS.md
+DEPENDENCIES
+README.qmd
+THESIS.md
+VENDORING.md
+\.git/
+\.github/
+Makefile
+.pi/
+vendor/
