@@ -1,19 +1,20 @@
 # Vendoring ducknng
 
-`vendor/ducknng` is a hard-vendored source subtree of:
+`vendor/ducknng` is a hard-vendored source subtree of <https://github.com/RGenomicsETL/ducknng>.
 
-- upstream: <https://github.com/RGenomicsETL/ducknng>
-- branch: `main`
+[`DEPENDENCIES`](DEPENDENCIES) is the version authority for the DuckDB, DuckDB API, and ducknng tuple. The `git-subtree-split` trailer on each vendoring commit records the exact imported upstream commit.
 
-The `git-subtree-split` trailer on each vendoring commit records the exact upstream commit.
+Transport, TLS, identity, framing, manifest, session, AIO, cancellation, and codec changes belong in ducknng first. `pi-duckdnng` then refreshes the pinned subtree; it does not maintain a divergent implementation.
 
-Transport, TLS, identity, framing, manifest, session, AIO, cancellation, and codec changes belong in ducknng first. `pi-duckdnng` then refreshes the subtree; it does not maintain a divergent implementation.
-
-Refresh from upstream with:
+Refresh only after intentionally updating `DEPENDENCIES`:
 
 ```sh
+set -a
+. ./DEPENDENCIES
+set +a
+
 git subtree pull \
   --prefix=vendor/ducknng \
   https://github.com/RGenomicsETL/ducknng.git \
-  main --squash
+  "$DUCKNNG_REF" --squash
 ```
