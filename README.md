@@ -7,10 +7,12 @@ with persistent R sessions.
 
 ## Architecture
 
-![Implemented Pi-to-R path](man/figures/architecture.svg)
+![Generic ducknng endpoint architecture](man/figures/architecture.svg)
 
-The committed SVG is generated from the Mermaid source in
-`man/figures/architecture.mmd`.
+The generic path starts with a compatible endpoint URL supplied by any
+placement provider. `persistent_r_start` is the first local provider,
+not the endpoint model. The committed SVG is generated from the Mermaid
+source in `man/figures/architecture.mmd`.
 
 DuckDB owns native extension loading and host-language calls. The
 hard-vendored ducknng release owns transport, mbedTLS, identity,
@@ -55,24 +57,24 @@ pi --model gpt-5.4 -e ./extensions/pi-ducknng/index.ts -p \
 
 > AGENT_DUCKNNG_MANIFEST_CALL_OK
 >
-> Endpoint: - URL: `tcp://127.0.0.1:37821` - endpoint_process: `82690`
+> Endpoint: - URL: `tcp://127.0.0.1:40883` - endpoint_process: `100327`
 >
-> Manifested methods: - `eval` — persistent-process R eval, JSON request
-> → Arrow response - `close` — stop persistent R endpoint
+> Manifested methods: - `eval` — R code eval, JSON request, Arrow reply,
+> persistent_process - `close` — stop persistent R endpoint, JSON
+> request/reply, persistent_process
 >
-> Decoded rows from eval \#1 (`mpg_by_cyl <- aggregate(...)`): -
+> Decoded rows from first `eval`: -
 > `{cyl: 4, mpg: 26.663636363636364}` -
 > `{cyl: 6, mpg: 19.742857142857144}` - `{cyl: 8, mpg: 15.1}`
 >
-> Decoded rows from eval \#2 (`transform(mpg_by_cyl, ...)` using
-> persisted state): -
+> Decoded rows from second `eval`: -
 > `{cyl: 4, mpg: 26.663636363636364, delta_from_4cyl: 0}` -
 > `{cyl: 6, mpg: 19.742857142857144, delta_from_4cyl: -6.92077922077922}` -
 > `{cyl: 8, mpg: 15.1, delta_from_4cyl: -11.563636363636364}`
 >
-> Close: - `{closed: true}`
+> Close result: - `{closed: true}`
 >
-> Both eval calls used the same endpoint process: `82690`.
+> Both eval calls used the same endpoint process: `100327`.
 
 `persistent_r_start` returns an NNG URL, `ducknng_describe` fetches the
 endpoint’s ducknng RPC manifest, and `ducknng_call` sends declared calls

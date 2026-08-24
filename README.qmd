@@ -14,9 +14,11 @@ piknit::register_engines()
 
 ## Architecture
 
-![Implemented Pi-to-R path](man/figures/architecture.svg)
+![Generic ducknng endpoint architecture](man/figures/architecture.svg)
 
-The committed SVG is generated from the Mermaid source in
+The generic path starts with a compatible endpoint URL supplied by any
+placement provider. `persistent_r_start` is the first local provider, not the
+endpoint model. The committed SVG is generated from the Mermaid source in
 `man/figures/architecture.mmd`.
 
 DuckDB owns native extension loading and host-language calls. The hard-vendored ducknng release owns transport, mbedTLS, identity, framing, manifests, sessions, AIO, cancellation, and codecs. The R package composes `nanonext` and `mirai`; it does not reproduce those layers.

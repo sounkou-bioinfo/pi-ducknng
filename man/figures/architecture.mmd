@@ -1,11 +1,14 @@
 flowchart TB
-    accTitle: Implemented Pi-to-R path
-    accDescr: Pi starts a persistent R endpoint separately from generic manifested calls made through fresh DuckDB clients and ducknng.
-    PI["Pi agent"] --> PLACE["persistent_r_start()"]
-    PI --> RPC["ducknng_describe() / ducknng_call()"]
-    PLACE -->|"starts; returns URL"| NANO["nanonext REP endpoint"]
+    accTitle: Generic ducknng endpoint architecture
+    accDescr: Pi discovers and calls a compatible endpoint selected by URL; the persistent R adapter is one local placement implementation.
+    PI["Pi agent"] --> RPC["ducknng_describe() / ducknng_call()"]
+    PI --> START["persistent_r_start()"]
+    PROVIDER["other placement provider"] -->|"returns"| URL["ducknng endpoint URL"]
+    START -->|"returns"| URL
+    URL -->|"input"| RPC
     RPC --> API["@duckdb/node-api"]
     API --> DB["fresh DuckDB client"]
     DB --> DNNG["vendored ducknng"]
-    DNNG <-->|"NNG framed RPC"| NANO
-    NANO --> R["persistent mirai R process"]
+    DNNG <-->|"NNG framed RPC"| ENDPOINT["compatible ducknng endpoint<br/>manifest + endpoint-owned state"]
+    START -->|"starts first adapter"| R["R endpoint<br/>nanonext + mirai"]
+    R -. "one endpoint implementation" .-> ENDPOINT
