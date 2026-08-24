@@ -159,6 +159,12 @@ The smallest proof should demonstrate one semantic claim: a persistent R session
 
 This proves persistence, reachability, interoperability, and cancellation without first building an orb product or multi-agent framework.
 
+### R-side evidence
+
+`tools/persistent-r-proof.R` proves the session-owner half today. Host A binds an ephemeral NNG URL and launches an independent mirai daemon with `autoexit = FALSE` and `cleanup = FALSE`. The daemon retains `x <- 41` after Host A exits, reconnects to Host B at the resolved URL, returns `42` for `x + 1`, and then receives explicit shutdown. Neither host owns the R workspace.
+
+The Pi extension, ducknng manifest projection, structured conditions, and interruption remain subsequent slices.
+
 ## Settled initial design
 
 - The repository is an R package composing nanonext and mirai.

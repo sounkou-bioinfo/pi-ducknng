@@ -33,6 +33,18 @@ Pi adds one stable discovery tool, `duckdnng_describe`. It returns
 endpoint methods and descriptions. Calls continue through the existing
 DuckDB API surface, keeping the Pi tool schema cache-stable.
 
+## Persistent R proof
+
+The R-side session owner is already executable:
+
+``` sh
+make persistent-r-proof
+```
+
+The proof launches an independent mirai daemon, stores `x <- 41`, ends
+its first host session, reconnects a second host at the same resolved
+NNG URL, evaluates `x + 1`, and requires `42` before explicit shutdown.
+
 ## Pinned runtime tuple
 
 | Component          | Version              |

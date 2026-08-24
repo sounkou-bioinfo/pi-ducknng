@@ -1,4 +1,4 @@
-.PHONY: readme check-readme
+.PHONY: readme check-readme persistent-r-proof
 
 readme:
 	quarto render README.qmd --to gfm
@@ -11,3 +11,6 @@ check-readme:
 	status=$$?; \
 	rm -f "$$tmp"; \
 	exit $$status
+
+persistent-r-proof:
+	Rscript --vanilla tools/persistent-r-proof.R
