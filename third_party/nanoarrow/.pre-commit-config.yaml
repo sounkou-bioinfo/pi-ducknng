@@ -1,0 +1,76 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# To use this, install the python package `pre-commit` and
+# run once `pre-commit install`. This will setup a git pre-commit-hook
+# that is executed on each commit and will report the linting problems.
+# To run all hooks on all files use `pre-commit run -a`
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v2.3.0
+    hooks:
+    - id: check-yaml
+    - id: end-of-file-fixer
+      exclude: "^r/.*?/_snaps/.*?.md$"
+    - id: trailing-whitespace
+      exclude: "^r/.*?/_snaps/.*?.md$"
+  - repo: https://github.com/pre-commit/mirrors-clang-format
+    rev: v16.0.6
+    hooks:
+    - id: clang-format
+      types_or: [c, c++]
+      exclude: "(^thirdparty/.*$)|(flatcc_generated.h)"
+  - repo: https://github.com/cheshirekow/cmake-format-precommit
+    rev: v0.6.13
+    hooks:
+    - id: cmake-format
+      args: [--in-place]
+  - repo: https://github.com/psf/black
+    rev: 22.3.0
+    hooks:
+    - id: black
+      types_or: [pyi, python]
+  - repo: https://github.com/PyCQA/flake8
+    rev: 7.1.1
+    hooks:
+    - id: flake8
+      types_or: [python]
+  - repo: https://github.com/PyCQA/isort
+    rev: 5.12.0
+    hooks:
+    - id: isort
+      types_or: [python]
+      exclude: "__init__.py$"
+  - repo: https://github.com/codespell-project/codespell
+    rev: v2.2.5
+    hooks:
+    -   id: codespell
+        types_or: [rst, markdown, c, c++]
+        additional_dependencies: [tomli]
+        exclude: |
+            (?x)
+            ^thirdparty
+            |flatcc_generated.h
+  - repo: local
+    hooks:
+    -  id: meson-format
+       name: meson-format
+       language: python
+       additional_dependencies: ['meson==1.6.0']
+       entry: meson format -i
+       files: meson.build

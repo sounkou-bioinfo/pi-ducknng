@@ -1,0 +1,1079 @@
+# name: test/sql/ducknng_rpc_client_smoke.test
+# group: [ducknng]
+
+require ducknng
+
+query I
+SELECT CASE
+  WHEN ducknng_start_server('rpc_smoke', 'ipc:///tmp/ducknng_rpc_client_smoke.ipc', 1, 134217728, 300000, 0::UBIGINT)
+  THEN 1 ELSE 0 END
+----
+1
+
+query II
+SELECT ok, position('"name":"exec"' IN manifest) > 0
+FROM ducknng_get_rpc_manifest('ipc:///tmp/ducknng_rpc_client_smoke.ipc', 0::UBIGINT)
+----
+1	0
+
+query I
+SELECT ducknng_register_exec_method()
+----
+1
+
+query TI
+SELECT name, requires_auth
+FROM ducknng_list_methods()
+WHERE name = 'exec'
+----
+exec	false
+
+query II
+SELECT ok, position('"name":"exec"' IN manifest) > 0
+FROM ducknng_get_rpc_manifest('ipc:///tmp/ducknng_rpc_client_smoke.ipc', 0::UBIGINT)
+----
+1	1
+
+query IIIIT
+SELECT position('"session_token"' IN manifest) > 0,
+       position('"idle_timeout_ms"' IN manifest) > 0,
+       json_extract_string(manifest::JSON, '$.server.execution.model'),
+       json_extract(manifest::JSON, '$.server.session_policy.idle_timeout_ms')::UBIGINT = 300000,
+       json_extract_string(manifest::JSON, '$.server.session_policy.idle_timeout_owner')
+FROM ducknng_get_rpc_manifest('ipc:///tmp/ducknng_rpc_client_smoke.ipc', 0::UBIGINT)
+----
+1	1	shared_serialized_connection	1	server
+
+query IIIIIII
+SELECT ok, version, type, flags, type_name, name, position('"name":"exec"' IN payload_text) > 0
+FROM ducknng_decode_frame(ducknng_get_rpc_manifest_raw('ipc:///tmp/ducknng_rpc_client_smoke.ipc', 0::UBIGINT))
+----
+1	1	2	4	result	manifest	1
+
+query III
+SELECT ok, type_name, name
+FROM ducknng_decode_frame(ducknng_run_rpc_raw('ipc:///tmp/ducknng_rpc_client_smoke.ipc', 'DROP TABLE IF EXISTS remote_t', 0::UBIGINT))
+----
+1	result	exec
+
+query IIII
+SELECT ok, rows_changed, statement_type, result_type
+FROM ducknng_run_rpc('ipc:///tmp/ducknng_rpc_client_smoke.ipc', 'CREATE TABLE IF NOT EXISTS remote_t(i INTEGER)', 0::UBIGINT)
+----
+1	0	7	2
+
+query IIII
+SELECT ok, rows_changed, statement_type, result_type
+FROM ducknng_run_rpc('ipc:///tmp/ducknng_rpc_client_smoke.ipc', 'DELETE FROM remote_t', 0::UBIGINT)
+----
+1	0	5	1
+
+query III
+SELECT ok, type_name, name
+FROM ducknng_decode_frame(ducknng_run_rpc_raw('ipc:///tmp/ducknng_rpc_client_smoke.ipc', 'INSERT INTO remote_t VALUES (7), (8)', 0::UBIGINT))
+----
+1	result	exec
+
+query II
+SELECT * FROM ducknng_query_rpc('ipc:///tmp/ducknng_rpc_client_smoke.ipc', 'SELECT DISTINCT i, i > 7 AS gt_7 FROM remote_t WHERE i IN (7, 8) ORDER BY i', 0::UBIGINT)
+----
+7	false
+8	true
+
+query I
+SELECT sessions
+FROM ducknng_list_servers()
+WHERE name = 'rpc_smoke'
+----
+0
+
+query T
+SELECT execution_model
+FROM ducknng_list_servers()
+WHERE name = 'rpc_smoke'
+----
+shared_serialized_connection
+
+query II
+SELECT count(*)::INTEGER, sum(i) IS NULL
+FROM ducknng_query_rpc(
+  'ipc:///tmp/ducknng_rpc_client_smoke.ipc',
+  'SELECT i FROM remote_t WHERE 1 = 0',
+  0::UBIGINT
+)
+----
+0	1
+
+query IIII
+SELECT d = DATE '2024-01-02',
+       t = TIME '03:04:05.123456',
+       ts = TIMESTAMP '2024-01-02 03:04:05.123456',
+       dec = 123.45::DECIMAL(10,2)
+FROM ducknng_query_rpc(
+  'ipc:///tmp/ducknng_rpc_client_smoke.ipc',
+  'SELECT DATE ''2024-01-02'' AS d,
+          TIME ''03:04:05.123456'' AS t,
+          TIMESTAMP ''2024-01-02 03:04:05.123456'' AS ts,
+          123.45::DECIMAL(10,2) AS dec',
+  0::UBIGINT
+)
+----
+1	1	1	1
+
+query TTTIII
+SELECT typeof(ts_s), typeof(ts_ms), typeof(ts_ns),
+       ts_s = '2024-01-02 03:04:05'::TIMESTAMP_S,
+       ts_ms = '2024-01-02 03:04:05.123'::TIMESTAMP_MS,
+       ts_ns = '2024-01-02 03:04:05.123456789'::TIMESTAMP_NS
+FROM ducknng_query_rpc(
+  'ipc:///tmp/ducknng_rpc_client_smoke.ipc',
+  'SELECT ''2024-01-02 03:04:05''::TIMESTAMP_S AS ts_s,
+          ''2024-01-02 03:04:05.123''::TIMESTAMP_MS AS ts_ms,
+          ''2024-01-02 03:04:05.123456789''::TIMESTAMP_NS AS ts_ns',
+  0::UBIGINT
+)
+----
+TIMESTAMP_S	TIMESTAMP_MS	TIMESTAMP_NS	1	1	1
+
+query TI
+SELECT typeof(t_ns), t_ns = '03:04:05.123456789'::TIME_NS
+FROM ducknng_query_rpc(
+  'ipc:///tmp/ducknng_rpc_client_smoke.ipc',
+  'SELECT ''03:04:05.123456789''::TIME_NS AS t_ns',
+  0::UBIGINT
+)
+----
+TIME_NS	1
+
+query IIIII
+SELECT xs[1] = 1, xs[2] IS NULL, xs[3] = 3, st.a = 7, st.b = 'bee'
+FROM ducknng_query_rpc(
+  'ipc:///tmp/ducknng_rpc_client_smoke.ipc',
+  'SELECT [1, NULL, 3]::INTEGER[] AS xs,
+          {''a'': 7::INTEGER, ''b'': ''bee''} AS st',
+  0::UBIGINT
+)
+----
+1	1	1	1	1
+
+query IIIII
+SELECT st IS NULL, st.a IS NULL, xs[1] IS NULL, xs[1].a IS NULL, xs[2].b IS NULL
+FROM ducknng_query_rpc(
+  'ipc:///tmp/ducknng_rpc_client_smoke.ipc',
+  'SELECT NULL::STRUCT(a INTEGER, b VARCHAR) AS st,
+          [NULL::STRUCT(a INTEGER, b VARCHAR),
+           {''a'': 2::INTEGER, ''b'': NULL}] AS xs',
+  0::UBIGINT
+)
+----
+1	1	1	1	1
+
+query III
+SELECT id, xs[2], st.a
+FROM ducknng_query_rpc(
+  'ipc:///tmp/ducknng_rpc_client_smoke.ipc',
+  'SELECT 1 AS id, [1, 2]::INTEGER[] AS xs,
+          {''a'': 10::INTEGER, ''b'': ''x''} AS st
+   UNION ALL
+   SELECT 2 AS id, [3, 4]::INTEGER[] AS xs,
+          {''a'': 20::INTEGER, ''b'': ''y''} AS st
+   ORDER BY id',
+  0::UBIGINT
+)
+----
+1	2	10
+2	4	20
+
+query II
+SELECT typeof(tsz), tsz = TIMESTAMPTZ '2024-01-02 03:04:05+00'
+FROM ducknng_query_rpc(
+  'ipc:///tmp/ducknng_rpc_client_smoke.ipc',
+  'SET TimeZone = ''UTC''; SELECT TIMESTAMPTZ ''2024-01-02 03:04:05+00'' AS tsz',
+  0::UBIGINT
+)
+----
+TIMESTAMP WITH TIME ZONE	1
+
+# HUGEINT is emitted as Arrow decimal128(38, 0) and decoded back as DECIMAL(38, 0);
+# values cast to HUGEINT recover the original int128 range.
+query III
+SELECT typeof(h),
+       h::HUGEINT = (-170141183460469231731687303715884105728)::HUGEINT,
+       big_pos::HUGEINT = 170141183460469231731687303715884105727::HUGEINT
+FROM ducknng_query_rpc(
+  'ipc:///tmp/ducknng_rpc_client_smoke.ipc',
+  'SELECT (-170141183460469231731687303715884105728)::HUGEINT AS h,
+          170141183460469231731687303715884105727::HUGEINT AS big_pos',
+  0::UBIGINT
+)
+----
+DECIMAL(38,0)	1	1
+
+# UUID is emitted as Arrow utf8 (canonical 36-char form) per types.md, so the
+# client receives a VARCHAR. Cast back to UUID for value comparison.
+query III
+SELECT typeof(u), u, u::UUID = '12345678-1234-5678-1234-567812345678'::UUID
+FROM ducknng_query_rpc(
+  'ipc:///tmp/ducknng_rpc_client_smoke.ipc',
+  'SELECT ''12345678-1234-5678-1234-567812345678''::UUID AS u',
+  0::UBIGINT
+)
+----
+VARCHAR	12345678-1234-5678-1234-567812345678	1
+
+# ENUM is emitted as the resolved utf8 string per types.md (no dictionary
+# round-trip is promised for the current type contract).
+query III
+SELECT typeof(e), e, e = 'happy'
+FROM ducknng_query_rpc(
+  'ipc:///tmp/ducknng_rpc_client_smoke.ipc',
+  'CREATE TYPE IF NOT EXISTS mood AS ENUM (''sad'', ''ok'', ''happy'');
+   SELECT ''happy''::mood AS e',
+  0::UBIGINT
+)
+----
+VARCHAR	happy	1
+
+# MAP roundtrips as a DuckDB MAP through Arrow's MAP layout. Inspect with
+# map_keys / map_values to keep the assertion independent of DuckDB's
+# version-specific MAP indexing return type.
+query IIIII
+SELECT typeof(m),
+       map_keys(m)[1], map_keys(m)[2],
+       map_values(m)[1], map_values(m)[2]
+FROM ducknng_query_rpc(
+  'ipc:///tmp/ducknng_rpc_client_smoke.ipc',
+  'SELECT MAP {''a'': 1, ''b'': 2}::MAP(VARCHAR, INTEGER) AS m',
+  0::UBIGINT
+)
+----
+MAP(VARCHAR, INTEGER)	a	b	1	2
+
+# UNION is emitted as Arrow dense_union and decoded back to DuckDB UNION type.
+query I
+SELECT uv
+FROM ducknng_query_rpc(
+  'ipc:///tmp/ducknng_rpc_client_smoke.ipc',
+  'SELECT union_value(num := 42::INTEGER) AS uv',
+  0::UBIGINT
+)
+----
+42
+
+# INTERVAL roundtrips through Arrow INTERVAL_MONTH_DAY_NANO.
+query I
+SELECT iv
+FROM ducknng_query_rpc(
+  'ipc:///tmp/ducknng_rpc_client_smoke.ipc',
+  'SELECT INTERVAL 1 DAY AS iv',
+  0::UBIGINT
+)
+----
+1 day
+
+statement ok
+CREATE TEMP TABLE rpc_open AS
+SELECT *
+FROM ducknng_open_query('ipc:///tmp/ducknng_rpc_client_smoke.ipc', 'SELECT i FROM remote_t ORDER BY i', 0::UBIGINT, 0::UBIGINT, 0::UBIGINT)
+
+query IIIITT
+SELECT ok, session_id > 0, length(session_token) = 32, idle_timeout_ms, state, next_method
+FROM rpc_open
+----
+1	1	1	300000	open	fetch
+
+statement ok
+SET VARIABLE rpc_session_id = (
+  SELECT session_id FROM rpc_open
+)
+
+statement ok
+SET VARIABLE rpc_session_token = (
+  SELECT session_token FROM rpc_open
+)
+
+query I
+SELECT sessions
+FROM ducknng_list_servers()
+WHERE name = 'rpc_smoke'
+----
+1
+
+query IT
+SELECT ok, error
+FROM ducknng_fetch_query('ipc:///tmp/ducknng_rpc_client_smoke.ipc', getvariable('rpc_session_id')::UBIGINT, '00000000000000000000000000000000', 0::UBIGINT, 0::UBIGINT, 0::UBIGINT)
+----
+0	ducknng: session owner token mismatch
+
+query IT
+SELECT ok, error
+FROM ducknng_close_query('ipc:///tmp/ducknng_rpc_client_smoke.ipc', getvariable('rpc_session_id')::UBIGINT, '00000000000000000000000000000000', 0::UBIGINT)
+----
+0	ducknng: session owner token mismatch
+
+query IT
+SELECT ok, error
+FROM ducknng_fetch_query('ipc:///tmp/ducknng_rpc_client_smoke.ipc', 999::UBIGINT, '00000000000000000000000000000000', 0::UBIGINT, 0::UBIGINT, 0::UBIGINT)
+----
+0	ducknng: session not found
+
+query IT
+SELECT ok, error
+FROM ducknng_close_query('ipc:///tmp/ducknng_rpc_client_smoke.ipc', 999::UBIGINT, '00000000000000000000000000000000', 0::UBIGINT)
+----
+0	ducknng: session not found
+
+query IT
+SELECT ok, error
+FROM ducknng_cancel_query('ipc:///tmp/ducknng_rpc_client_smoke.ipc', 999::UBIGINT, '00000000000000000000000000000000', 0::UBIGINT)
+----
+0	ducknng: session not found
+
+statement ok
+CREATE TEMP TABLE rpc_fetch_payload AS
+SELECT *
+FROM ducknng_fetch_query('ipc:///tmp/ducknng_rpc_client_smoke.ipc', getvariable('rpc_session_id')::UBIGINT, getvariable('rpc_session_token')::VARCHAR, 0::UBIGINT, 0::UBIGINT, 0::UBIGINT)
+
+query IIIII
+SELECT ok, session_id = getvariable('rpc_session_id')::UBIGINT, state IS NULL, octet_length(payload) > 0, end_of_stream
+FROM rpc_fetch_payload
+----
+1	1	1	1	0
+
+statement ok
+SET VARIABLE rpc_fetch_payload_blob = (
+  SELECT payload FROM rpc_fetch_payload
+)
+
+query II
+SELECT count(*)::INTEGER, sum(i)::INTEGER
+FROM ducknng_parse_body(getvariable('rpc_fetch_payload_blob')::BLOB, 'application/vnd.apache.arrow.stream')
+----
+6	45
+
+statement ok
+DROP TABLE rpc_fetch_payload
+
+query IITII
+SELECT ok, session_id = getvariable('rpc_session_id')::UBIGINT, state, payload IS NULL, end_of_stream
+FROM ducknng_fetch_query('ipc:///tmp/ducknng_rpc_client_smoke.ipc', getvariable('rpc_session_id')::UBIGINT, getvariable('rpc_session_token')::VARCHAR, 0::UBIGINT, 0::UBIGINT, 0::UBIGINT)
+----
+1	1	exhausted	1	1
+
+query IIT
+SELECT ok, session_id = getvariable('rpc_session_id')::UBIGINT, state
+FROM ducknng_close_query('ipc:///tmp/ducknng_rpc_client_smoke.ipc', getvariable('rpc_session_id')::UBIGINT, getvariable('rpc_session_token')::VARCHAR, 0::UBIGINT)
+----
+1	1	closed
+
+query IT
+SELECT ok, error
+FROM ducknng_fetch_query('ipc:///tmp/ducknng_rpc_client_smoke.ipc', getvariable('rpc_session_id')::UBIGINT, getvariable('rpc_session_token')::VARCHAR, 0::UBIGINT, 0::UBIGINT, 0::UBIGINT)
+----
+0	ducknng: session not found
+
+query IT
+SELECT ok, error
+FROM ducknng_close_query('ipc:///tmp/ducknng_rpc_client_smoke.ipc', getvariable('rpc_session_id')::UBIGINT, getvariable('rpc_session_token')::VARCHAR, 0::UBIGINT)
+----
+0	ducknng: session not found
+
+query IT
+SELECT ok, error
+FROM ducknng_cancel_query('ipc:///tmp/ducknng_rpc_client_smoke.ipc', getvariable('rpc_session_id')::UBIGINT, getvariable('rpc_session_token')::VARCHAR, 0::UBIGINT)
+----
+0	ducknng: session not found
+
+statement ok
+DROP TABLE rpc_open
+
+query I
+SELECT sessions
+FROM ducknng_list_servers()
+WHERE name = 'rpc_smoke'
+----
+0
+
+statement ok
+CREATE TEMP TABLE rpc_open_cancel AS
+SELECT *
+FROM ducknng_open_query('ipc:///tmp/ducknng_rpc_client_smoke.ipc', 'SELECT i FROM remote_t ORDER BY i', 0::UBIGINT, 0::UBIGINT, 0::UBIGINT)
+
+query IIIITT
+SELECT ok, session_id > 0, length(session_token) = 32, idle_timeout_ms, state, next_method
+FROM rpc_open_cancel
+----
+1	1	1	300000	open	fetch
+
+statement ok
+SET VARIABLE rpc_cancel_session_id = (
+  SELECT session_id FROM rpc_open_cancel
+)
+
+statement ok
+SET VARIABLE rpc_cancel_session_token = (
+  SELECT session_token FROM rpc_open_cancel
+)
+
+query IT
+SELECT ok, error
+FROM ducknng_cancel_query('ipc:///tmp/ducknng_rpc_client_smoke.ipc', getvariable('rpc_cancel_session_id')::UBIGINT, '00000000000000000000000000000000', 0::UBIGINT)
+----
+0	ducknng: session owner token mismatch
+
+query IIT
+SELECT ok, session_id = getvariable('rpc_cancel_session_id')::UBIGINT, state
+FROM ducknng_cancel_query('ipc:///tmp/ducknng_rpc_client_smoke.ipc', getvariable('rpc_cancel_session_id')::UBIGINT, getvariable('rpc_cancel_session_token')::VARCHAR, 0::UBIGINT)
+----
+1	1	cancelled
+
+statement ok
+DROP TABLE rpc_open_cancel
+
+query I
+SELECT sessions
+FROM ducknng_list_servers()
+WHERE name = 'rpc_smoke'
+----
+0
+
+statement ok
+CREATE TEMP TABLE rpc_open_table AS
+SELECT *
+FROM ducknng_open_query('ipc:///tmp/ducknng_rpc_client_smoke.ipc', 'SELECT i FROM remote_t ORDER BY i', 0::UBIGINT, 0::UBIGINT, 0::UBIGINT)
+
+statement ok
+SET VARIABLE rpc_table_session_id = (
+  SELECT session_id FROM rpc_open_table
+)
+
+statement ok
+SET VARIABLE rpc_table_session_token = (
+  SELECT session_token FROM rpc_open_table
+)
+
+query II
+SELECT count(*)::INTEGER, sum(i)::INTEGER
+FROM ducknng_fetch_query_table(
+  'ipc:///tmp/ducknng_rpc_client_smoke.ipc',
+  getvariable('rpc_table_session_id')::UBIGINT,
+  getvariable('rpc_table_session_token')::VARCHAR,
+  0::UBIGINT,
+  0::UBIGINT,
+  0::UBIGINT
+)
+----
+6	45
+
+query IITII
+SELECT ok, session_id = getvariable('rpc_table_session_id')::UBIGINT, state, payload IS NULL, end_of_stream
+FROM ducknng_fetch_query(
+  'ipc:///tmp/ducknng_rpc_client_smoke.ipc',
+  getvariable('rpc_table_session_id')::UBIGINT,
+  getvariable('rpc_table_session_token')::VARCHAR,
+  0::UBIGINT,
+  0::UBIGINT,
+  0::UBIGINT
+)
+----
+1	1	exhausted	1	1
+
+query IIT
+SELECT ok, session_id = getvariable('rpc_table_session_id')::UBIGINT, state
+FROM ducknng_close_query(
+  'ipc:///tmp/ducknng_rpc_client_smoke.ipc',
+  getvariable('rpc_table_session_id')::UBIGINT,
+  getvariable('rpc_table_session_token')::VARCHAR,
+  0::UBIGINT
+)
+----
+1	1	closed
+
+statement ok
+DROP TABLE rpc_open_table
+
+query I
+SELECT (ducknng_open_socket('req')).socket_id
+----
+1
+
+query I
+SELECT CASE WHEN (ducknng_dial_socket(1, 'ipc:///tmp/ducknng_rpc_client_smoke.ipc', 1000, 0::UBIGINT)).ok THEN 1 ELSE 0 END
+----
+1
+
+query ITTII
+SELECT socket_id, protocol, url, open, connected
+FROM ducknng_list_sockets()
+----
+1	req	ipc:///tmp/ducknng_rpc_client_smoke.ipc	true	true
+
+query I
+SELECT substr(hex(ducknng_request_socket_raw(1, from_hex('01000000000000000000000000000000000000000000'), 1000)), 1, 28) = '0102040000000800000000000000'
+----
+1
+
+query II
+SELECT ok, substr(hex(payload), 1, 28) = '0102040000000800000000000000'
+FROM ducknng_request_socket(1::UBIGINT, from_hex('01000000000000000000000000000000000000000000'), 1000)
+----
+1	1
+
+query I
+SELECT substr(hex(ducknng_request_raw('ipc:///tmp/ducknng_rpc_client_smoke.ipc', from_hex('01000000000000000000000000000000000000000000'), 1000, 0::UBIGINT)), 1, 28) = '0102040000000800000000000000'
+----
+1
+
+query II
+SELECT ok, substr(hex(payload), 1, 28) = '0102040000000800000000000000'
+FROM ducknng_request('ipc:///tmp/ducknng_rpc_client_smoke.ipc', from_hex('01000000000000000000000000000000000000000000'), 1000, 0::UBIGINT)
+----
+1	1
+
+query IIIIIII
+SELECT ok, version, type, flags, type_name, name, position('"name":"exec"' IN payload_text) > 0
+FROM ducknng_decode_frame(ducknng_request_raw('ipc:///tmp/ducknng_rpc_client_smoke.ipc', from_hex('01000000000000000000000000000000000000000000'), 1000, 0::UBIGINT))
+----
+1	1	2	4	result	manifest	1
+
+statement ok
+SET VARIABLE raw_session_open_frame = ducknng_open_query_raw(
+  'ipc:///tmp/ducknng_rpc_client_smoke.ipc',
+  'SELECT i FROM remote_t ORDER BY i',
+  0::UBIGINT,
+  0::UBIGINT,
+  0::UBIGINT
+)
+
+query III
+SELECT ducknng_frame_error_text(getvariable('raw_session_open_frame')::BLOB) IS NULL,
+       position('"session_id":' IN ducknng_frame_payload_text(getvariable('raw_session_open_frame')::BLOB)) > 0,
+       octet_length(ducknng_frame_payload(getvariable('raw_session_open_frame')::BLOB)) > 0
+----
+1	1	1
+
+statement ok
+SET VARIABLE raw_session_id = (
+  SELECT json_extract(ducknng_frame_payload_text(getvariable('raw_session_open_frame')::BLOB)::JSON, '$.session_id')::UBIGINT
+)
+
+statement ok
+SET VARIABLE raw_session_token = (
+  SELECT json_extract_string(ducknng_frame_payload_text(getvariable('raw_session_open_frame')::BLOB)::JSON, '$.session_token')
+)
+
+query I
+SELECT ducknng_frame_error_text(
+  ducknng_fetch_query_raw(
+    'ipc:///tmp/ducknng_rpc_client_smoke.ipc',
+    getvariable('raw_session_id')::UBIGINT,
+    '00000000000000000000000000000000',
+    0::UBIGINT,
+    0::UBIGINT,
+    0::UBIGINT
+  )
+) = 'ducknng: session owner token mismatch'
+----
+1
+
+statement ok
+SET VARIABLE raw_session_fetch_frame = ducknng_fetch_query_raw(
+  'ipc:///tmp/ducknng_rpc_client_smoke.ipc',
+  getvariable('raw_session_id')::UBIGINT,
+  getvariable('raw_session_token')::VARCHAR,
+  0::UBIGINT,
+  0::UBIGINT,
+  0::UBIGINT
+)
+
+query III
+SELECT ducknng_frame_error_text(getvariable('raw_session_fetch_frame')::BLOB) IS NULL,
+       octet_length(ducknng_frame_payload(getvariable('raw_session_fetch_frame')::BLOB)) > 0,
+       ducknng_frame_payload_text(getvariable('raw_session_fetch_frame')::BLOB) IS NULL
+----
+1	1	1
+
+query II
+SELECT count(*)::INTEGER, sum(i)::INTEGER
+FROM ducknng_parse_body(
+  ducknng_frame_payload(getvariable('raw_session_fetch_frame')::BLOB),
+  'application/vnd.apache.arrow.stream'
+)
+----
+6	45
+
+statement ok
+SET VARIABLE raw_session_exhausted_frame = ducknng_fetch_query_raw(
+  'ipc:///tmp/ducknng_rpc_client_smoke.ipc',
+  getvariable('raw_session_id')::UBIGINT,
+  getvariable('raw_session_token')::VARCHAR,
+  0::UBIGINT,
+  0::UBIGINT,
+  0::UBIGINT
+)
+
+query II
+SELECT ducknng_frame_error_text(getvariable('raw_session_exhausted_frame')::BLOB) IS NULL,
+       position('"state":"exhausted"' IN ducknng_frame_payload_text(getvariable('raw_session_exhausted_frame')::BLOB)) > 0
+----
+1	1
+
+statement ok
+SET VARIABLE raw_session_close_frame = ducknng_close_query_raw(
+  'ipc:///tmp/ducknng_rpc_client_smoke.ipc',
+  getvariable('raw_session_id')::UBIGINT,
+  getvariable('raw_session_token')::VARCHAR,
+  0::UBIGINT
+)
+
+query II
+SELECT ducknng_frame_error_text(getvariable('raw_session_close_frame')::BLOB) IS NULL,
+       position('"state":"closed"' IN ducknng_frame_payload_text(getvariable('raw_session_close_frame')::BLOB)) > 0
+----
+1	1
+
+statement ok
+SET VARIABLE raw_cancel_open_frame = ducknng_open_query_raw(
+  'ipc:///tmp/ducknng_rpc_client_smoke.ipc',
+  'SELECT i FROM remote_t ORDER BY i',
+  0::UBIGINT,
+  0::UBIGINT,
+  0::UBIGINT
+)
+
+statement ok
+SET VARIABLE raw_cancel_session_id = (
+  SELECT json_extract(ducknng_frame_payload_text(getvariable('raw_cancel_open_frame')::BLOB)::JSON, '$.session_id')::UBIGINT
+)
+
+statement ok
+SET VARIABLE raw_cancel_session_token = (
+  SELECT json_extract_string(ducknng_frame_payload_text(getvariable('raw_cancel_open_frame')::BLOB)::JSON, '$.session_token')
+)
+
+statement ok
+SET VARIABLE raw_cancel_frame = ducknng_cancel_query_raw(
+  'ipc:///tmp/ducknng_rpc_client_smoke.ipc',
+  getvariable('raw_cancel_session_id')::UBIGINT,
+  getvariable('raw_cancel_session_token')::VARCHAR,
+  0::UBIGINT
+)
+
+query II
+SELECT ducknng_frame_error_text(getvariable('raw_cancel_frame')::BLOB) IS NULL,
+       position('"state":"cancelled"' IN ducknng_frame_payload_text(getvariable('raw_cancel_frame')::BLOB)) > 0
+----
+1	1
+
+statement ok
+CREATE TEMP TABLE aio_prestart_launch AS
+SELECT ducknng_request_raw_aio(
+  'ipc:///tmp/ducknng_rpc_client_smoke_prestart.ipc',
+  from_hex('01000000000000000000000000000000000000000000'),
+  5000,
+  0::UBIGINT
+) AS aio_id
+
+query IIII
+SELECT aio_prestart_launch.aio_id > 0, kind = 'request', state = 'pending', phase = 'send'
+FROM aio_prestart_launch, ducknng_aio_status(aio_prestart_launch.aio_id)
+----
+1	1	1	1
+
+query I
+SELECT CASE
+  WHEN ducknng_start_server('rpc_smoke_prestart', 'ipc:///tmp/ducknng_rpc_client_smoke_prestart.ipc', 1, 134217728, 300000, 0::UBIGINT)
+  THEN 1 ELSE 0 END
+----
+1
+
+query III
+SELECT aio_id = (SELECT aio_id FROM aio_prestart_launch), ok, octet_length(frame) > 0
+FROM ducknng_aio_collect((SELECT list_value(aio_id) FROM aio_prestart_launch), 5000)
+----
+1	1	1
+
+query I
+SELECT ducknng_aio_drop(aio_id)
+FROM aio_prestart_launch
+----
+1
+
+statement ok
+DROP TABLE aio_prestart_launch
+
+query I
+SELECT CASE WHEN ducknng_stop_server('rpc_smoke_prestart') THEN 1 ELSE 0 END
+----
+1
+
+statement ok
+CREATE TEMP TABLE aio_launch AS
+SELECT
+  ducknng_request_raw_aio('ipc:///tmp/ducknng_rpc_client_smoke.ipc', from_hex('01000000000000000000000000000000000000000000'), 1000, 0::UBIGINT) AS aio1,
+  ducknng_request_raw_aio('ipc:///tmp/ducknng_rpc_client_smoke.ipc', from_hex('01000000000000000000000000000000000000000000'), 1000, 0::UBIGINT) AS aio2
+
+query II
+SELECT aio1 > 0, aio2 > aio1
+FROM aio_launch
+----
+1	1
+
+query III
+SELECT aio_id IN (SELECT aio1 FROM aio_launch) OR aio_id IN (SELECT aio2 FROM aio_launch), ok, octet_length(frame) > 0
+FROM ducknng_aio_collect((SELECT list_value(aio1, aio2) FROM aio_launch), 5000)
+ORDER BY aio_id
+----
+1	1	1
+1	1	1
+
+query II
+SELECT ducknng_aio_ready(aio1), ducknng_aio_ready(aio2)
+FROM aio_launch
+----
+1	1
+
+query I
+SELECT COUNT(*)
+FROM ducknng_aio_collect((SELECT list_value(aio1, aio2) FROM aio_launch), 0)
+----
+0
+
+query T
+SELECT state
+FROM aio_launch, ducknng_aio_status(aio1)
+----
+collected
+
+query I
+SELECT ducknng_aio_cancel(aio1)
+FROM aio_launch
+----
+0
+
+query I
+SELECT ducknng_aio_drop(aio1) AND ducknng_aio_drop(aio2)
+FROM aio_launch
+----
+1
+
+query II
+SELECT ducknng_aio_ready(aio1), ducknng_aio_drop(aio1)
+FROM aio_launch
+----
+0	0
+
+statement ok
+DROP TABLE aio_launch
+
+statement ok
+CREATE TEMP TABLE rpc_aio_launch AS
+SELECT
+  ducknng_get_rpc_manifest_raw_aio('ipc:///tmp/ducknng_rpc_client_smoke.ipc', 1000, 0::UBIGINT) AS manifest_aio,
+  ducknng_run_rpc_raw_aio('ipc:///tmp/ducknng_rpc_client_smoke.ipc', 'INSERT INTO remote_t VALUES (9)', 1000, 0::UBIGINT) AS exec_aio
+
+query II
+SELECT manifest_aio > 0, exec_aio > manifest_aio
+FROM rpc_aio_launch
+----
+1	1
+
+statement ok
+CREATE TEMP TABLE rpc_aio_collect AS
+SELECT *
+FROM ducknng_aio_collect((SELECT list_value(manifest_aio, exec_aio) FROM rpc_aio_launch), 1000)
+
+query I
+SELECT COUNT(*)
+FROM rpc_aio_collect
+----
+2
+
+query II
+SELECT ok, hex(frame) = hex(ducknng_get_rpc_manifest_raw('ipc:///tmp/ducknng_rpc_client_smoke.ipc', 0::UBIGINT))
+FROM rpc_aio_collect
+WHERE aio_id = (SELECT manifest_aio FROM rpc_aio_launch)
+----
+1	1
+
+query II
+SELECT ok, hex(frame) = hex(ducknng_run_rpc_raw('ipc:///tmp/ducknng_rpc_client_smoke.ipc', 'INSERT INTO remote_t VALUES (9)', 0::UBIGINT))
+FROM rpc_aio_collect
+WHERE aio_id = (SELECT exec_aio FROM rpc_aio_launch)
+----
+1	1
+
+query I
+SELECT ducknng_aio_drop(manifest_aio) AND ducknng_aio_drop(exec_aio)
+FROM rpc_aio_launch
+----
+1
+
+statement ok
+DROP TABLE rpc_aio_collect
+
+statement ok
+DROP TABLE rpc_aio_launch
+
+statement ok
+CREATE TEMP TABLE rpc_aio_decode_launch AS
+SELECT ducknng_get_rpc_manifest_raw_aio('ipc:///tmp/ducknng_rpc_client_smoke.ipc', 1000, 0::UBIGINT) AS manifest_aio
+
+query TTT
+SELECT type_name, name, payload_text IS NOT NULL
+FROM ducknng_aio_collect_decoded((SELECT list_value(manifest_aio) FROM rpc_aio_decode_launch), 1000)
+----
+result	manifest	1
+
+query I
+SELECT ducknng_aio_drop(manifest_aio)
+FROM rpc_aio_decode_launch
+----
+1
+
+statement ok
+DROP TABLE rpc_aio_decode_launch
+
+query II
+SELECT * FROM ducknng_query_rpc('ipc:///tmp/ducknng_rpc_client_smoke.ipc', 'SELECT DISTINCT i, i > 8 AS gt_8 FROM remote_t WHERE i IN (7, 8, 9) ORDER BY i', 0::UBIGINT)
+----
+7	false
+8	false
+9	true
+
+statement ok
+CREATE TEMP TABLE session_aio_open_launch AS
+SELECT ducknng_open_query_raw_aio(
+  'ipc:///tmp/ducknng_rpc_client_smoke.ipc',
+  'SELECT i FROM remote_t ORDER BY i',
+  0::UBIGINT,
+  0::UBIGINT,
+  1000,
+  0::UBIGINT
+) AS aio_id
+
+query I
+SELECT aio_id > 0
+FROM session_aio_open_launch
+----
+1
+
+statement ok
+CREATE TEMP TABLE session_aio_open_collect AS
+SELECT *
+FROM ducknng_aio_collect((SELECT list_value(aio_id) FROM session_aio_open_launch), 1000)
+
+statement ok
+SET VARIABLE session_aio_open_frame = (
+  SELECT frame FROM session_aio_open_collect
+)
+
+query IIII
+SELECT ok, type_name, name, position('"session_id":' IN payload_text) > 0
+FROM ducknng_decode_frame(getvariable('session_aio_open_frame')::BLOB)
+----
+1	result	query_open	1
+
+statement ok
+SET VARIABLE session_aio_session_id = (
+  SELECT json_extract(payload_text::JSON, '$.session_id')::UBIGINT
+  FROM ducknng_decode_frame(getvariable('session_aio_open_frame')::BLOB)
+)
+
+statement ok
+SET VARIABLE session_aio_session_token = (
+  SELECT json_extract_string(payload_text::JSON, '$.session_token')
+  FROM ducknng_decode_frame(getvariable('session_aio_open_frame')::BLOB)
+)
+
+query I
+SELECT ducknng_aio_drop(aio_id)
+FROM session_aio_open_launch
+----
+1
+
+statement ok
+DROP TABLE session_aio_open_launch
+
+statement ok
+CREATE TEMP TABLE session_aio_fetch_launch AS
+SELECT ducknng_fetch_query_raw_aio(
+  'ipc:///tmp/ducknng_rpc_client_smoke.ipc',
+  getvariable('session_aio_session_id')::UBIGINT,
+  getvariable('session_aio_session_token')::VARCHAR,
+  0::UBIGINT,
+  0::UBIGINT,
+  1000,
+  0::UBIGINT
+) AS aio_id
+
+statement ok
+CREATE TEMP TABLE session_aio_fetch_collect AS
+SELECT *
+FROM ducknng_aio_collect((SELECT list_value(aio_id) FROM session_aio_fetch_launch), 1000)
+
+statement ok
+SET VARIABLE session_aio_fetch_frame = (
+  SELECT frame FROM session_aio_fetch_collect
+)
+
+query IIII
+SELECT ok, type_name, name, octet_length(payload) > 0
+FROM ducknng_decode_frame(getvariable('session_aio_fetch_frame')::BLOB)
+----
+1	result	fetch	1
+
+query I
+SELECT ducknng_aio_drop(aio_id)
+FROM session_aio_fetch_launch
+----
+1
+
+statement ok
+DROP TABLE session_aio_fetch_launch
+
+statement ok
+DROP TABLE session_aio_fetch_collect
+
+statement ok
+CREATE TEMP TABLE session_aio_close_launch AS
+SELECT ducknng_close_query_raw_aio(
+  'ipc:///tmp/ducknng_rpc_client_smoke.ipc',
+  getvariable('session_aio_session_id')::UBIGINT,
+  getvariable('session_aio_session_token')::VARCHAR,
+  1000,
+  0::UBIGINT
+) AS aio_id
+
+statement ok
+CREATE TEMP TABLE session_aio_close_collect AS
+SELECT *
+FROM ducknng_aio_collect((SELECT list_value(aio_id) FROM session_aio_close_launch), 1000)
+
+statement ok
+SET VARIABLE session_aio_close_frame = (
+  SELECT frame FROM session_aio_close_collect
+)
+
+query IIII
+SELECT ok, type_name, name, position('"state":"closed"' IN payload_text) > 0
+FROM ducknng_decode_frame(getvariable('session_aio_close_frame')::BLOB)
+----
+1	result	close	1
+
+query I
+SELECT ducknng_aio_drop(aio_id)
+FROM session_aio_close_launch
+----
+1
+
+statement ok
+DROP TABLE session_aio_open_collect
+
+statement ok
+DROP TABLE session_aio_close_launch
+
+statement ok
+DROP TABLE session_aio_close_collect
+
+statement ok
+CREATE TEMP TABLE session_cancel_aio_open AS
+SELECT *
+FROM ducknng_open_query('ipc:///tmp/ducknng_rpc_client_smoke.ipc', 'SELECT i FROM remote_t ORDER BY i', 0::UBIGINT, 0::UBIGINT, 0::UBIGINT)
+
+statement ok
+SET VARIABLE session_cancel_aio_id = (
+  SELECT session_id FROM session_cancel_aio_open
+)
+
+statement ok
+SET VARIABLE session_cancel_aio_token = (
+  SELECT session_token FROM session_cancel_aio_open
+)
+
+statement ok
+CREATE TEMP TABLE session_cancel_aio_launch AS
+SELECT ducknng_cancel_query_raw_aio(
+  'ipc:///tmp/ducknng_rpc_client_smoke.ipc',
+  getvariable('session_cancel_aio_id')::UBIGINT,
+  getvariable('session_cancel_aio_token')::VARCHAR,
+  1000,
+  0::UBIGINT
+) AS aio_id
+
+statement ok
+CREATE TEMP TABLE session_cancel_aio_collect AS
+SELECT *
+FROM ducknng_aio_collect((SELECT list_value(aio_id) FROM session_cancel_aio_launch), 1000)
+
+statement ok
+SET VARIABLE session_cancel_aio_frame = (
+  SELECT frame FROM session_cancel_aio_collect
+)
+
+query IIII
+SELECT ok, type_name, name, position('"state":"cancelled"' IN payload_text) > 0
+FROM ducknng_decode_frame(getvariable('session_cancel_aio_frame')::BLOB)
+----
+1	result	cancel	1
+
+query I
+SELECT ducknng_aio_drop(aio_id)
+FROM session_cancel_aio_launch
+----
+1
+
+statement ok
+DROP TABLE session_cancel_aio_open
+
+statement ok
+DROP TABLE session_cancel_aio_launch
+
+statement ok
+DROP TABLE session_cancel_aio_collect
+
+statement ok
+CREATE TEMP TABLE aio_socket_launch AS
+SELECT ducknng_request_socket_raw_aio(1::UBIGINT, from_hex('01000000000000000000000000000000000000000000'), 1000) AS aio1
+
+query I
+SELECT aio1 > 0
+FROM aio_socket_launch
+----
+1
+
+query III
+SELECT aio_id = (SELECT aio1 FROM aio_socket_launch), ok, octet_length(frame) > 0
+FROM ducknng_aio_collect((SELECT list_value(aio1) FROM aio_socket_launch), 1000)
+----
+1	1	1
+
+query I
+SELECT ducknng_aio_drop(aio1)
+FROM aio_socket_launch
+----
+1
+
+statement ok
+DROP TABLE aio_socket_launch
+
+query III
+SELECT ducknng_aio_ready(999::UBIGINT), ducknng_aio_cancel(999::UBIGINT), ducknng_aio_drop(999::UBIGINT)
+----
+0	0	0
+
+query II
+SELECT ok, error = 'ducknng: request URL must not be NULL or empty'
+FROM ducknng_request('', from_hex('01000000000000000000000000000000000000000000'), 1000, 0::UBIGINT)
+----
+0	1
+
+query I
+SELECT CASE WHEN (ducknng_close_socket(1)).ok THEN 1 ELSE 0 END
+----
+1
+
+query I
+SELECT CASE WHEN ducknng_stop_server('rpc_smoke') THEN 1 ELSE 0 END
+----
+1

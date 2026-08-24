@@ -1,0 +1,15 @@
+.git
+build
+cmake_build
+configure
+.duckdb-wasm-local-artifacts
+.duckdb_wasm_docker_work
+test/bin
+community-extensions
+.sync
+venv
+*.o
+*.a
+*.so
+*.duckdb_extension
+*.duckdb_extension.wasm

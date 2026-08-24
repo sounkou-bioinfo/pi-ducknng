@@ -1,0 +1,40 @@
+Package: nanoarrow
+Title: Interface to the 'nanoarrow' 'C' Library
+Version: 0.8.0.9000
+Authors@R: c(
+    person(given = "Dewey",
+           family = "Dunnington",
+           role = c("aut", "cre"),
+           email = "dewey@dunnington.ca",
+           comment = c(ORCID = "0000-0002-9415-4582")),
+    person("Apache Arrow", email = "dev@arrow.apache.org", role = c("aut", "cph")),
+    person("Apache Software Foundation", email = "dev@arrow.apache.org", role = c("cph"))
+  )
+Description: Provides an 'R' interface to the 'nanoarrow' 'C' library and the
+  'Apache Arrow' application binary interface. Functions to import and
+  export 'ArrowArray', 'ArrowSchema', and 'ArrowArrayStream' 'C' structures
+  to and from 'R' objects are provided alongside helpers to facilitate zero-copy
+  data transfer among 'R' bindings to libraries implementing the 'Arrow' 'C'
+  data interface.
+License: Apache License (>= 2)
+Encoding: UTF-8
+Roxygen: list(markdown = TRUE)
+RoxygenNote: 7.3.3
+URL: https://arrow.apache.org/nanoarrow/latest/r/, https://github.com/apache/arrow-nanoarrow
+BugReports: https://github.com/apache/arrow-nanoarrow/issues
+Suggests:
+    arrow (>= 9.0.0),
+    bit64,
+    blob,
+    dplyr,
+    hms,
+    jsonlite,
+    reticulate,
+    rlang,
+    testthat (>= 3.0.0),
+    tibble,
+    vctrs,
+    withr
+SystemRequirements: libzstd (optional)
+Config/testthat/edition: 3
+Config/build/bootstrap: TRUE

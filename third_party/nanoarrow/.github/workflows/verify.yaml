@@ -1,0 +1,174 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+name: verify
+
+on:
+  push:
+    branches:
+      - 'maint-**'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to verify"
+        required: false
+        type: string
+        default: ""
+      rc:
+        description: "RC to verify"
+        required: false
+        type: string
+        default: ""
+  schedule:
+    - cron: '5 0 * * 0'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'docker-compose.yaml'
+      - '.github/workflows/verify.yaml'
+      - 'dev/release/verify-release-candidate.sh'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.repository }}-${{ github.ref }}-${{ github.workflow }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: "${{ matrix.config.label }}"
+    runs-on: ${{ matrix.config.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        config:
+          - {os: macOS-latest, label: macos, extra_cmake_config: "-DNANOARROW_BUILD_TESTS_WITH_ARROW=ON"}
+          - {os: windows-latest, label: windows, extra_cmake_config: "-DNANOARROW_ARROW_STATIC=ON -Dgtest_force_shared_crt=ON -DNANOARROW_BUILD_TESTS_WITH_ARROW=ON"}
+          - {os: windows-latest, label: windows-win32, extra_cmake_config: "-A Win32 -Dgtest_force_shared_crt=ON"}
+          - {os: ubuntu-latest, label: ubuntu, extra_cmake_config: "-DNANOARROW_BUILD_TESTS_WITH_ARROW=ON"}
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          path: src
+          fetch-depth: 0
+          persist-credentials: false
+
+      # For R verification
+      - uses: r-lib/actions/setup-tinytex@v2
+      - uses: r-lib/actions/setup-pandoc@v2
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          use-public-rspm: true
+          windows-path-include-rtools: false
+          windows-path-include-mingw: false
+      - uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          needs: check
+          working-directory: src/r
+
+      - name: Cache Arrow C++ Build
+        id: cache-arrow-build
+        uses: actions/cache@v5
+        with:
+          path: arrow
+          # Bump the number at the end of this line to force a new Arrow C++ build
+          key: arrow-${{ runner.os }}-${{ runner.arch }}-3
+
+      - name: Build Arrow C++
+        if: steps.cache-arrow-build.outputs.cache-hit != 'true' && matrix.config.label != 'windows-win32'
+        shell: bash
+        run: |
+          src/ci/scripts/build-arrow-cpp-minimal.sh 21.0.0 arrow
+
+      - name: Set CMake options
+        shell: bash
+        run: |
+          cat << EOF | tr '\n' ' ' >> $GITHUB_ENV
+          NANOARROW_CMAKE_OPTIONS=${NANOARROW_CMAKE_OPTIONS}
+          ${{ matrix.config.extra_cmake_config }}
+          -DCMAKE_PREFIX_PATH=$(pwd)/arrow
+
+      - name: Run dev/release/verify-release-candidate.sh
+        shell: bash
+        env:
+          VERBOSE: "1"
+        run: |
+          mkdir nanoarrow-verify-tmp
+          export NANOARROW_TMPDIR=`pwd`/nanoarrow-verify-tmp
+          cd src/dev/release
+          ./verify-release-candidate.sh ${{ inputs.version }} ${{ inputs.rc }}
+
+      - name: Upload temp directory
+        if: failure()
+        uses: actions/upload-artifact@main
+        with:
+          path: nanoarrow-verify-tmp
+          name: nanoarrow-verify-tmp
+
+  verify-docker:
+    name: "docker-${{ matrix.config.platform }}-${{ matrix.config.arch }}${{ matrix.config.extra_label}}"
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        config:
+          - {platform: "ubuntu", arch: "amd64"}
+          - {platform: "fedora", arch: "amd64"}
+          - {platform: "archlinux", arch: "amd64"}
+          - {platform: "alpine", arch: "amd64"}
+          - {platform: "centos", arch: "amd64"}
+          - {
+              platform: "ubuntu",
+              arch: "amd64",
+              extra_label: "-memcheck",
+              compose_args: "-e TEST_WITH_MEMCHECK=1 -e TEST_C_BUNDLED=0"
+            }
+          - {
+              platform: "ubuntu",
+              arch: "amd64",
+              extra_label: "-c99",
+              compose_args: "-e NANOARROW_CMAKE_OPTIONS=-DCMAKE_C_STANDARD=99"
+            }
+          - {platform: "ubuntu", arch: "arm64", compose_args: "-e TEST_C_BUNDLED=0"}
+          - {platform: "alpine", arch: "s390x", compose_args: "-e TEST_C_BUNDLED=0"}
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          path: src
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up QEMU
+        if: matrix.config.arch != 'amd64'
+        uses: docker/setup-qemu-action@ce360397dd3f832beb865e1373c09c0e9f86d70a # v4.0.0
+
+      - name: Run docker compose verify
+        env:
+          NANOARROW_ARCH: ${{ matrix.config.arch }}
+          NANOARROW_PLATFORM: ${{ matrix.config.platform }}
+          DOCKER_DEFAULT_PLATFORM: linux/${{ matrix.config.arch }}
+          NANOARROW_VERIFY_ARGS: ${{ inputs.version }} ${{ inputs.rc }}
+
+        run: |
+          cd src
+          echo "::group::Docker Pull"
+          docker compose run -e GITHUB_ACTIONS ${{ matrix.config.compose_args }} verify

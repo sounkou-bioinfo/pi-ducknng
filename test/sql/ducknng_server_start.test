@@ -1,0 +1,326 @@
+# name: test/sql/ducknng_server_start.test
+# group: [ducknng]
+
+require ducknng
+
+query IT
+SELECT ok, error
+FROM ducknng_decode_frame(NULL::BLOB)
+----
+0	ducknng: frame blob must not be NULL or empty
+
+statement error
+SELECT ducknng_start_server('bad_contexts', 'ipc:///tmp/ducknng_bad_contexts.ipc', 0, 134217728, 300000, 0)
+----
+ducknng: contexts must be >= 1
+
+statement error
+SELECT ducknng_start_server('bad_http_contexts', 'http://127.0.0.1:45446/_ducknng', 2, 134217728, 300000, 0)
+----
+ducknng: contexts must be 1 for http:// and https:// services
+
+query I
+SELECT CASE
+  WHEN ducknng_start_server('tcp0', 'tcp://0.0.0.0:0', 1, 134217728, 300000, 0)
+  THEN 1 ELSE 0 END
+----
+1
+
+query I
+SELECT CASE WHEN ducknng_stop_server('tcp0') THEN 1 ELSE 0 END
+----
+1
+
+query I
+SELECT CASE
+  WHEN ducknng_start_server('inproc0', 'inproc://ducknng_server_start_test', 1, 134217728, 300000, 0)
+  THEN 1 ELSE 0 END
+----
+1
+
+query I
+SELECT CASE WHEN ducknng_stop_server('inproc0') THEN 1 ELSE 0 END
+----
+1
+
+statement error
+SELECT ducknng_start_server('bad_tls', 'tls+tcp://127.0.0.1:45445', 1, 134217728, 300000, 0)
+----
+ducknng: tls+tcp listeners require TLS configuration
+
+query I
+SELECT ducknng_tls_config_from_pem('-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n', '-----BEGIN PRIVATE KEY-----\nMIIB\n-----END PRIVATE KEY-----\n', '-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n', NULL, 1) > 0
+----
+1
+
+query ITIIIIIII
+SELECT tls_config_id > 0, source, enabled, has_cert_key_file, has_ca_file, has_cert_pem, has_key_pem, has_ca_pem, auth_mode
+FROM ducknng_list_tls_configs()
+----
+1	pem	true	false	false	true	true	true	1
+
+statement error
+SELECT ducknng_start_server('bad_tls_cfg', 'ipc:///tmp/ducknng_bad_tls_cfg.ipc', 1, 134217728, 300000, 1)
+----
+ducknng: TLS configuration requires a tls+tcp:// or wss:// listen URL
+
+statement error
+SELECT ducknng_start_server('bad_http_path', 'https://127.0.0.1:45446', 1, 134217728, 300000, 0)
+----
+ducknng: HTTP listen URL must include an absolute path such as /_ducknng
+
+query I
+SELECT CASE
+  WHEN ducknng_start_server('http0', 'http://127.0.0.1:0/_ducknng', 1, 134217728, 300000, 0)
+  THEN 1 ELSE 0 END
+----
+1
+
+query I
+SELECT position('/_ducknng' IN listen) > 0
+FROM ducknng_list_servers()
+WHERE name = 'http0'
+----
+1
+
+query I
+SELECT CASE WHEN ducknng_stop_server('http0') THEN 1 ELSE 0 END
+----
+1
+
+query I
+SELECT ducknng_drop_tls_config(1)
+----
+1
+
+query I
+SELECT CASE
+  WHEN ducknng_start_server('sql0', 'ipc:///tmp/ducknng_phase1_sql0.ipc', 1, 134217728, 300000, 0)
+  THEN 1 ELSE 0 END
+----
+1
+
+query TTIII
+SELECT name, listen, contexts, running, sessions
+FROM ducknng_list_servers()
+----
+sql0	ipc:///tmp/ducknng_phase1_sql0.ipc	1	true	0
+
+query III
+SELECT tls_enabled, tls_auth_mode, peer_identity_required
+FROM ducknng_list_servers()
+WHERE name = 'sql0'
+----
+false	0	false
+
+query T
+SELECT execution_model
+FROM ducknng_list_servers()
+WHERE name = 'sql0'
+----
+shared_serialized_connection
+
+query TI
+SELECT name, requires_auth
+FROM ducknng_list_methods()
+ORDER BY name
+----
+cancel	false
+close	false
+fetch	false
+manifest	false
+query_open	false
+query_prepare	false
+
+query I
+SELECT ducknng_set_method_auth('manifest', true)
+----
+1
+
+query IT
+SELECT ok, error
+FROM ducknng_get_rpc_manifest('ipc:///tmp/ducknng_phase1_sql0.ipc', 0::UBIGINT)
+----
+0	ducknng: method requires verified peer identity
+
+query I
+SELECT ducknng_set_method_auth('manifest', false)
+----
+1
+
+statement ok
+CREATE TEMP TABLE unregister_live_session AS
+SELECT *
+FROM ducknng_open_query('ipc:///tmp/ducknng_phase1_sql0.ipc', 'SELECT 42 AS i', 0::UBIGINT, 0::UBIGINT, 0::UBIGINT)
+
+statement ok
+SET VARIABLE unregister_live_session_token = (
+  SELECT session_token FROM unregister_live_session
+)
+
+statement error
+SELECT ducknng_unregister_family('query')
+----
+ducknng: cannot unregister sessionful method family while sessions are open
+
+statement error
+SELECT ducknng_unregister_method('fetch')
+----
+ducknng: cannot unregister sessionful method while sessions are open
+
+query I
+SELECT sessions
+FROM ducknng_list_servers()
+WHERE name = 'sql0'
+----
+1
+
+query I
+SELECT ok
+FROM ducknng_close_query('ipc:///tmp/ducknng_phase1_sql0.ipc', 1::UBIGINT, getvariable('unregister_live_session_token')::VARCHAR, 0::UBIGINT)
+----
+1
+
+statement ok
+DROP TABLE unregister_live_session
+
+query I
+SELECT ducknng_register_exec_method()
+----
+1
+
+query T
+SELECT name
+FROM ducknng_list_methods()
+WHERE name = 'exec'
+----
+exec
+
+query I
+SELECT ducknng_unregister_method('exec')
+----
+1
+
+query I
+SELECT ducknng_register_exec_method(true)
+----
+1
+
+query TI
+SELECT name, requires_auth
+FROM ducknng_list_methods()
+WHERE name = 'exec'
+----
+exec	true
+
+query IT
+SELECT ok, error
+FROM ducknng_run_rpc('ipc:///tmp/ducknng_phase1_sql0.ipc', 'CREATE TABLE should_not_run(i INTEGER)', 0::UBIGINT)
+----
+0	ducknng: method requires verified peer identity
+
+query I
+SELECT ducknng_unregister_method('exec')
+----
+1
+
+query T
+SELECT name
+FROM ducknng_list_methods()
+ORDER BY name
+----
+cancel
+close
+fetch
+manifest
+query_open
+query_prepare
+
+query I
+SELECT CASE WHEN ducknng_stop_server('sql0') THEN 1 ELSE 0 END
+----
+1
+
+query I
+SELECT ducknng_self_signed_tls_config('127.0.0.1', 365, 0) > 0
+----
+1
+
+query I
+SELECT CASE
+  WHEN ducknng_start_server(
+    'tls_self',
+    'tls+tcp://127.0.0.1:45443',
+    1,
+    134217728,
+    300000,
+    2
+  )
+  THEN 1 ELSE 0 END
+----
+1
+
+query IIII
+SELECT ok, type_name, name, position('"name":"exec"' IN payload_text) > 0
+FROM ducknng_decode_frame(
+  ducknng_request_raw(
+    'tls+tcp://127.0.0.1:45443',
+    from_hex('01000000000000000000000000000000000000000000'),
+    1000,
+    2
+  )
+)
+----
+1	result	manifest	0
+
+query I
+SELECT CASE WHEN ducknng_stop_server('tls_self') THEN 1 ELSE 0 END
+----
+1
+
+query I
+SELECT ducknng_drop_tls_config(2)
+----
+1
+
+query I
+SELECT ducknng_tls_config_from_files('test/certs/loopback-cert-key.pem', 'test/certs/loopback-ca.pem', NULL, 0) > 0
+----
+1
+
+query I
+SELECT CASE
+  WHEN ducknng_start_server(
+    'tls_file',
+    'tls+tcp://127.0.0.1:45444',
+    1,
+    134217728,
+    300000,
+    3
+  )
+  THEN 1 ELSE 0 END
+----
+1
+
+query IIII
+SELECT ok, type_name, name, position('"name":"exec"' IN payload_text) > 0
+FROM ducknng_decode_frame(
+  ducknng_request_raw(
+    'tls+tcp://127.0.0.1:45444',
+    from_hex('01000000000000000000000000000000000000000000'),
+    1000,
+    3
+  )
+)
+----
+1	result	manifest	0
+
+query I
+SELECT CASE WHEN ducknng_stop_server('tls_file') THEN 1 ELSE 0 END
+----
+1
+
+query I
+SELECT ducknng_drop_tls_config(3)
+----
+1
