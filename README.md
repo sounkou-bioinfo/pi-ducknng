@@ -1,7 +1,5 @@
 
 
-<!-- README.md is generated from README.qmd. Edit README.qmd, then run `make readme`. -->
-
 # pi-ducknng
 
 `pi-ducknng` is a ducknng-backed network substrate for Pi, beginning
@@ -24,23 +22,36 @@ release owns transport, mbedTLS, identity, framing, manifests, sessions,
 AIO, cancellation, and codecs. The R package composes `nanonext` and
 `mirai`; it does not reproduce those layers.
 
-## Discovery
+## Pi package
 
-Pi adds one stable discovery tool, `duckdnng_describe`. It returns
-endpoint methods and descriptions. Calls continue through the existing
-DuckDB API surface, keeping the Pi tool schema cache-stable.
+Install the repository as a Pi package:
+
+``` sh
+pi install git:github.com/sounkou-bioinfo/pi-ducknng
+```
+
+The package contributes `/ducknng-proof`, which runs the persistent-R
+reconnect proof from the installed package root.
 
 ## Persistent R proof
 
-The R-side session owner is already executable:
+The command below is an evaluated Quarto cell; a nonzero exit stops
+rendering:
 
 ``` sh
 make persistent-r-proof
 ```
 
+    Rscript --vanilla tools/persistent-r-proof.R
+    persistent R daemon reconnected with x + 1 = 42
+
 The proof launches an independent mirai daemon, stores `x <- 41`, ends
 its first host session, reconnects a second host at the same resolved
 NNG URL, evaluates `x + 1`, and requires `42` before explicit shutdown.
+
+Executable documentation uses `piknit`: `{pi}` chunks run Pi prompts,
+while `{pish}` chunks run commands such as `node` or `make` and stop
+rendering on failure.
 
 ## Pinned runtime tuple
 
@@ -50,9 +61,5 @@ NNG URL, evaluates `x + 1`, and requires `42` before explicit shutdown.
 | `@duckdb/node-api` | 1.5.4-r.1            |
 | ducknng            | `v0.1.1-duckdb1.5.4` |
 
-[`DEPENDENCIES`](DEPENDENCIES) records the exact source commit. See
-[`VENDORING.md`](VENDORING.md) for the upstream-first update rule.
-
-## Design
-
-The authoritative working design is [`THESIS.md`](THESIS.md).
+[`DEPENDENCIES`](DEPENDENCIES) records the exact source commit. \##
+Design

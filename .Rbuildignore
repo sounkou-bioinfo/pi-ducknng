@@ -8,3 +8,9 @@ VENDORING.md
 Makefile
 .pi/
 vendor/
+^package\.json$
+^package-lock\.json$
+^tsconfig\.json$
+^extensions$
+^test$
+^node_modules$

@@ -11,9 +11,9 @@ Authors@R: c(
     person(given = "The Mbed TLS Contributors", role = "cph",
     comment = "Mbed TLS copyright holders")
   )
-Description: A thin R layer that composes ducknng transport semantics through
-    nanonext and mirai. It intentionally adds only discovery-level composition
-    and package metadata, without re-implementing transport, session scheduler,
+Description: A thin R and Pi integration layer that composes ducknng transport
+    semantics through nanonext and mirai. It provides persistent-session
+    integration evidence without re-implementing transport, session scheduler,
     AIO, transport security, or execution semantics.
 License: GPL (>= 3)
 Encoding: UTF-8
@@ -23,4 +23,7 @@ Imports:
     mirai,
     nanonext
 Suggests:
+    piknit,
     tinytest
+Config/Needs/website:
+    sounkou-bioinfo/piknit

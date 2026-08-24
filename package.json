@@ -1,0 +1,54 @@
+{
+  "name": "pi-ducknng",
+  "version": "0.0.0",
+  "private": false,
+  "description": "Pi integration for persistent R and NNG endpoints through DuckDB and ducknng.",
+  "license": "GPL-3.0-or-later",
+  "type": "module",
+  "engines": {
+    "node": ">=22.6"
+  },
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "duckdb",
+    "nng",
+    "r"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sounkou-bioinfo/pi-ducknng.git"
+  },
+  "files": [
+    "extensions/pi-ducknng",
+    "tools/persistent-r-proof.R",
+    "DESCRIPTION",
+    "Makefile",
+    "README.md",
+    "THESIS.md"
+  ],
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "node --test test/*.test.js",
+    "readme:qmd": "quarto render README.qmd --to gfm --output README.md",
+    "check": "npm run typecheck && npm test"
+  },
+  "pi": {
+    "extensions": [
+      "./extensions/pi-ducknng/index.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "peerDependenciesMeta": {
+    "@earendil-works/pi-coding-agent": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "^0.78.0",
+    "@types/node": "^24.0.0",
+    "typescript": "^5.8.3"
+  }
+}

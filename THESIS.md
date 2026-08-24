@@ -63,7 +63,14 @@ DuckDB owns host-language integration and extension loading. Ducknng owns the ne
 
 ## Package shape
 
-The repository is an R package built primarily by composing `nanonext` and `mirai`. `nanonext` owns R-side NNG and AIO; `mirai` owns persistent R processes and distributed evaluation. The package must not add another socket binding, evaluator scheduler, or process topology.
+The repository has two install surfaces over one implementation:
+
+- an R package built primarily by composing `nanonext` and `mirai`; and
+- a Pi package declared by `package.json`, initially contributing the honest `/ducknng-proof` integration command rather than a placeholder endpoint tool.
+
+`nanonext` owns R-side NNG and AIO; `mirai` owns persistent R processes and distributed evaluation. The package must not add another socket binding, evaluator scheduler, or process topology.
+
+`piknit` owns executable-document integration. `README.qmd` uses its `pish` knitr engine for fail-loud commands and may use its `pi` engine for Pi prompts; this repository does not fork another Quarto execution engine.
 
 ## Persistent R as the first proof
 
@@ -163,7 +170,7 @@ This proves persistence, reachability, interoperability, and cancellation withou
 
 `tools/persistent-r-proof.R` proves the session-owner half today. Host A binds an ephemeral NNG URL and launches an independent mirai daemon with `autoexit = FALSE` and `cleanup = FALSE`. The daemon retains `x <- 41` after Host A exits, reconnects to Host B at the resolved URL, returns `42` for `x + 1`, and then receives explicit shutdown. Neither host owns the R workspace.
 
-The Pi extension, ducknng manifest projection, structured conditions, and interruption remain subsequent slices.
+The model-facing Pi endpoint extension, ducknng manifest projection, structured conditions, and interruption remain subsequent slices. The current Pi command only executes this evidence from the installed package root.
 
 ## Settled initial design
 
