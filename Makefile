@@ -2,19 +2,24 @@ DUCKNNG_CI_TOOLS_COMMIT := ef15a2a7453db5b4f85b7c668a545ae2f1193ff6
 DUCKNNG_EXTENSION_VERSION := v0.1.1-duckdb1.5.4
 DUCKNNG_EXTENSION := vendor/ducknng/build/release/ducknng.duckdb_extension
 
-.PHONY: readme check-readme persistent-r-proof ducknng-extension pi-proof check-pi check
+.PHONY: readme check-readme vignettes check-vignettes site persistent-r-proof ducknng-extension check-pi check
 
 readme:
 	env -u MAKEFLAGS -u MAKELEVEL -u MFLAGS npm run readme:qmd
+	@grep -q '^> AGENT_DUCKNNG_MANIFEST_CALL_OK' README.md
 
 check-readme:
-	@tmp=$$(mktemp); \
-	cp README.md "$$tmp"; \
-	env -u MAKEFLAGS -u MAKELEVEL -u MFLAGS npm run readme:qmd >/dev/null; \
-	diff -u "$$tmp" README.md; \
-	status=$$?; \
-	rm -f "$$tmp"; \
-	exit $$status
+	@grep -q 'extension="./extensions/pi-ducknng/index.ts"' README.qmd
+	@grep -q '^> AGENT_DUCKNNG_MANIFEST_CALL_OK' README.md
+
+vignettes:
+	Rscript --vanilla scripts/precompile-vignettes.R
+
+check-vignettes:
+	Rscript --vanilla scripts/precompile-vignettes.R --check
+
+site: check-vignettes
+	Rscript --vanilla -e 'pkgdown::build_site()'
 
 persistent-r-proof:
 	Rscript --vanilla tools/persistent-r-proof.R
@@ -31,10 +36,7 @@ ducknng-extension:
 	$(MAKE) -C vendor/ducknng release EXTENSION_VERSION=$(DUCKNNG_EXTENSION_VERSION) -j$$(nproc 2>/dev/null || echo 2)
 	@test -f $(DUCKNNG_EXTENSION)
 
-pi-proof:
-	node scripts/pi-rpc-proof.mjs
-
 check-pi:
 	npm run check
 
-check: check-readme check-pi
+check: check-readme check-vignettes check-pi

@@ -1,0 +1,16 @@
+---
+title: "An agent evaluates an R active binding in a selected environment"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{An agent evaluates an R active binding in a selected environment}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+This precomputed case exercises the `envir` and `enclos` controls declared by
+the endpoint's `eval` method. Returned scalars travel as Arrow IPC and are
+decoded by ducknng inside the fresh DuckDB client.
+
+```{pi, provider="openai-codex", model="gpt-5.4", thinking="medium", timeout=900, extension="./extensions/pi-ducknng/index.ts"}
+Use only persistent_r_start, ducknng_describe, and ducknng_call; do not use shell or file tools. Start the persistent R adapter and fetch its ducknng RPC manifest. Invoke eval to set `x <- 41L`. Invoke eval again to create `e <- new.env(parent = baseenv())`, install a read-only active binding named `answer` in `e` whose getter returns `x + 1L`, and return `identical(parent.env(e), baseenv())`. Invoke eval with `code = "answer"` and `envir = "e"`. Close the endpoint through its declared close method. Only if the parent check is true and the active binding returns 42 begin the final reply with exactly `AGENT_VERIFIED_ACTIVE_BINDING`, then summarize the observed calls. If anything fails, omit the receipt.
+```

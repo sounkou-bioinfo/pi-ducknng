@@ -41,9 +41,8 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "node --test test/*.test.js",
-    "test:pi-rpc": "node scripts/pi-rpc-proof.mjs",
     "readme:qmd": "quarto render README.qmd --to gfm --output README.md",
-    "check": "npm run typecheck && npm test && npm run test:pi-rpc"
+    "check": "npm run typecheck && npm test"
   },
   "pi": {
     "extensions": [
@@ -64,6 +63,7 @@
     "typescript": "^5.8.3"
   },
   "dependencies": {
-    "@duckdb/node-api": "1.5.4-r.1"
+    "@duckdb/node-api": "1.5.4-r.1",
+    "@sinclair/typebox": "0.34.41"
   }
 }

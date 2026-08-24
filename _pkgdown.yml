@@ -1,0 +1,22 @@
+url: https://sounkou-bioinfo.github.io/pi-ducknng/
+
+template:
+  bootstrap: 5
+
+development:
+  mode: unreleased
+
+home:
+  title: Reach persistent R from Pi through DuckDB and ducknng
+
+articles:
+  - title: OpenAI Codex agent evidence
+    navbar: Agent evidence
+    contents:
+      - agent-product-path
+      - agent-active-binding
+
+reference:
+  - title: Package
+    contents:
+      - piducknng

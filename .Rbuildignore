@@ -15,3 +15,6 @@ vendor/
 ^test$
 ^node_modules$
 ^scripts$
+^vignettes/.*\.Rmd\.orig$
+^_pkgdown\.yml$
+^docs$

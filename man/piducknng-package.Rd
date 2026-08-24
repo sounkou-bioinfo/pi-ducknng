@@ -3,12 +3,9 @@
 \alias{piducknng}
 \title{piducknng}
 \description{
-Thin R package scaffold for the \pkg{pi-ducknng} design authority. It composes
-existing runtime components (\pkg{nanonext}, \pkg{mirai}) through the DuckDB API
-boundary and does not reimplement transport, scheduling, identity, or AIO
-semantics.
-}
-
-\seealso{
-\code{ducknng description surface}
+Thin R and Pi integration package composing DuckDB, ducknng, \pkg{nanonext},
+\pkg{nanoarrow}, and \pkg{mirai}. DuckDB owns native extension loading and host
+calls; ducknng and NNG own RPC and transport; nanonext owns the R socket;
+nanoarrow owns Arrow IPC conversion; and mirai owns R process scheduling.
+The package does not currently export an R runtime API.
 }

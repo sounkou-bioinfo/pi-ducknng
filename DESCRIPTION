@@ -11,19 +11,29 @@ Authors@R: c(
     person(given = "The Mbed TLS Contributors", role = "cph",
     comment = "Mbed TLS copyright holders")
   )
-Description: A thin R and Pi integration layer that composes ducknng transport
-    semantics through nanonext and mirai. It provides persistent-session
-    integration evidence without re-implementing transport, session scheduler,
-    AIO, transport security, or execution semantics.
+Description: A thin R and Pi integration layer that composes ducknng RPC
+    manifests and calls with nanonext, nanoarrow, and mirai. It provides a
+    persistent R evaluator and generic Pi discovery/call tools without
+    re-implementing NNG transport, process scheduling, AIO, or transport security.
 License: GPL (>= 3)
 Encoding: UTF-8
 Depends:
     R (>= 4.3)
 Imports:
+    jsonlite,
     mirai,
+    nanoarrow,
     nanonext
 Suggests:
+    knitr,
     piknit,
+    pkgdown,
+    rmarkdown,
     tinytest
+VignetteBuilder: knitr
+URL: https://sounkou-bioinfo.github.io/pi-ducknng/,
+    https://github.com/sounkou-bioinfo/pi-ducknng
+BugReports: https://github.com/sounkou-bioinfo/pi-ducknng/issues
 Config/Needs/website:
     sounkou-bioinfo/piknit
+Config/roxygen2/version: 8.0.0

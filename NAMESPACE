@@ -1,2 +1,5 @@
 import(mirai)
 import(nanonext)
+importFrom(jsonlite,fromJSON)
+importFrom(jsonlite,toJSON)
+importFrom(nanoarrow,write_nanoarrow)

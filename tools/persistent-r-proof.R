@@ -92,7 +92,7 @@ main <- function() {
   }
 
   url <- unname(mirai::local_url(tcp = TRUE))
-  profile <- paste0("piducknng-proof-", Sys.getpid())
+  profile <- paste0("piducknng-session-owner-", Sys.getpid())
   locator <- tempfile("piducknng-locator-", fileext = ".txt")
   log_daemon <- tempfile("piducknng-daemon-", fileext = ".log")
   log_a <- tempfile("piducknng-host-a-", fileext = ".log")

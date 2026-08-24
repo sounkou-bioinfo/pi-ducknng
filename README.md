@@ -17,10 +17,11 @@ flowchart LR
     FABRIC <--> PEER["Pi, DuckDB, or other NNG endpoint"]
 ```
 
-DuckDB owns the host-language boundary. The hard-vendored ducknng
-release owns transport, mbedTLS, identity, framing, manifests, sessions,
-AIO, cancellation, and codecs. The R package composes `nanonext` and
-`mirai`; it does not reproduce those layers.
+DuckDB owns native extension loading and host-language calls. The
+hard-vendored ducknng release owns transport, mbedTLS, identity,
+framing, manifests, sessions, AIO, cancellation, and codecs. The R
+package composes `nanonext` and `mirai`; it does not reproduce those
+layers.
 
 ## Pi package
 
@@ -30,39 +31,88 @@ Install the repository as a Pi package:
 pi install git:github.com/sounkou-bioinfo/pi-ducknng
 ```
 
-The package contributes `/ducknng-proof`, which runs the persistent-R
-reconnect proof from the installed package root. On first use it builds
-the pinned ducknng source; this requires Git, Make, CMake, Python, and a
-C/C++ toolchain.
+The package contributes three model tools: `persistent_r_start` places
+the first adapter, `ducknng_describe` reads any compatible endpoint
+manifest, and `ducknng_call` invokes a declared method. On first use it
+builds the pinned ducknng source; this requires Git, Make, CMake,
+Python, and a C/C++ toolchain.
 
 ## Pi-to-R proof
 
-The command below is an evaluated Quarto cell; a nonzero exit stops
-rendering:
+The evaluated cell below loads the package extension into an OpenAI
+Codex agent. The model starts the R adapter, obtains its URL, fetches
+the ducknng RPC manifest, and invokes only methods declared by that
+manifest. The final evaluation reads an active binding from an
+environment whose parent the agent selected.
 
 ``` sh
-make pi-proof
+pi --model gpt-5.4 -e ./extensions/pi-ducknng/index.ts -p \
+  "Use only persistent_r_start, ducknng_describe, and " \
+  "ducknng_call; do not use shell or file tools. Start the " \
+  "persistent R adapter and keep its URL. Fetch the ducknng " \
+  "RPC manifest for that URL and inspect the declared " \
+  "methods and eval request schema. Call eval to assign `x " \
+  "<- 41L`. Call eval again to create `e <- new.env(parent " \
+  "= baseenv())` and a read-only active binding `answer` in " \
+  "`e` whose getter returns `x + 1L`; finish that call by " \
+  "checking `identical(parent.env(e), baseenv())`. Call " \
+  "eval a third time with `code = "answer"` and `envir = " \
+  ""e"`. Call eval once more with `code = "data.frame(a = " \
+  "1:2, b = c('x', 'y'))"` and inspect the two decoded " \
+  "rows. Call the declared close method. Only if the " \
+  "manifest used ducknng protocol version 1, all eval calls " \
+  "used the same endpoint process, the parent check " \
+  "returned true, the active binding returned 42, the data " \
+  "frame returned rows `(1, x)` and `(2, y)`, and close " \
+  "succeeded, begin the final reply with the exact line " \
+  "`AGENT_DUCKNNG_MANIFEST_CALL_OK`. Then report the " \
+  "observed manifest method names and results. Otherwise " \
+  "report the failure without that line."
 ```
 
-    node scripts/pi-rpc-proof.mjs
-    Pi RPC: discovered and invoked the local /ducknng-proof command
-    Pi extension: loaded DuckDB API and ducknng
-    Pi client A: set x = 41 through DuckDB -> ducknng -> NNG -> R
-    Pi client A: disconnected
-    Pi client B: reconnected through a fresh DuckDB instance
-    Pi client B: evaluated x + 1 = 42 in the same persistent R session
-    R endpoint: stopped
+> AGENT_DUCKNNG_MANIFEST_CALL_OK URL: `tcp://127.0.0.1:45663`
+>
+> Manifest: - server: `piducknng-r 0.0.0.9000` - protocol_version: `1` -
+> methods: `eval`, `close`
+>
+> `eval` request schema: - type: `object` - required: `code` -
+> properties: - `code`: string - `envir`: string, default
+> `.piducknng_session` - `enclos`: string, default `baseenv()` -
+> additionalProperties: `false`
+>
+> Observed endpoint process: - start: `21071` - describe: `21071` - eval
+> \#1: `21071` - eval \#2: `21071` - eval \#3: `21071` - eval \#4:
+> `21071`
+>
+> Results: - eval \#1 `x <- 41L` → `41` - eval \#2 create `e`, active
+> binding `answer`, then check parent → `true` - eval \#3
+> `code = "answer", envir = "e"` → `42` - eval \#4 data frame decode →
+> rows: - `(1, x)` - `(2, y)` - close → `{"closed": true}`
+>
+> All requested checks passed.
 
-The proof starts Pi in headless RPC mode, confirms that the local
-package contributed `/ducknng-proof`, and invokes that extension command
-without an LLM call. The extension opens DuckDB through
-`@duckdb/node-api`, loads the vendored ducknng extension, and sends a
-request through NNG to a nanonext gateway backed by one mirai R daemon.
-It then closes the first DuckDB instance, opens a fresh instance,
-reconnects, and requires `x + 1 == 42` before shutdown.
+`persistent_r_start` returns an NNG URL, `ducknng_describe` fetches the
+endpoint’s ducknng RPC manifest, and `ducknng_call` sends declared calls
+as ducknng frames. Each tool request opens and closes a fresh DuckDB
+instance. Eval results are Arrow IPC streams produced by nanoarrow and
+decoded by ducknng; the mirai-owned R environment remains in the same
+endpoint process.
 
-Executable documentation uses `piknit`; its `{pish}` engine stops
-rendering on command failure.
+Executable documentation uses `piknit`; `make readme` rejects output
+without the agent’s success receipt.
+
+## Agent-backed pkgdown articles
+
+Two pkgdown articles are authored as `vignettes/*.Rmd.orig` and
+precomputed with `openai-codex`/`gpt-5.4` agents. The committed `.Rmd`
+results let package and site builds remain credential-free, following
+the [rOpenSci precomputed-vignette
+pattern](https://ropensci.org/blog/2019/12/08/precompute-vignettes/).
+
+``` sh
+make vignettes
+make site
+```
 
 ## Pinned runtime tuple
 
