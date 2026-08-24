@@ -7,15 +7,10 @@ with persistent R sessions.
 
 ## Architecture
 
-``` mermaid
-flowchart LR
-    PI["Pi client or extension"] --> API["DuckDB API"]
-    API --> DB["DuckDB 1.5.4"]
-    DB --> DNNG["ducknng"]
-    DNNG <--> FABRIC["NNG fabric"]
-    FABRIC <--> R["Persistent R<br/>nanonext + mirai"]
-    FABRIC <--> PEER["Pi, DuckDB, or other NNG endpoint"]
-```
+![Implemented Pi-to-R path](man/figures/architecture.svg)
+
+The committed SVG is generated from the Mermaid source in
+`man/figures/architecture.mmd`.
 
 DuckDB owns native extension loading and host-language calls. The
 hard-vendored ducknng release owns transport, mbedTLS, identity,
@@ -60,26 +55,24 @@ pi --model gpt-5.4 -e ./extensions/pi-ducknng/index.ts -p \
 
 > AGENT_DUCKNNG_MANIFEST_CALL_OK
 >
-> Endpoint: - URL: `tcp://127.0.0.1:46767` - endpoint_process: `65052`
+> Endpoint: - URL: `tcp://127.0.0.1:37821` - endpoint_process: `82690`
 >
-> Manifested methods: - `eval` — R eval, persistent_process, request
-> `json`, response `arrow` - `close` — stop persistent R endpoint,
-> persistent_process, request `json`, response `json`
+> Manifested methods: - `eval` — persistent-process R eval, JSON request
+> → Arrow response - `close` — stop persistent R endpoint
 >
-> Eval call 1 decoded rows (`mpg_by_cyl`): -
+> Decoded rows from eval \#1 (`mpg_by_cyl <- aggregate(...)`): -
 > `{cyl: 4, mpg: 26.663636363636364}` -
 > `{cyl: 6, mpg: 19.742857142857144}` - `{cyl: 8, mpg: 15.1}`
 >
-> Eval call 2 decoded rows
-> (`transform(mpg_by_cyl, delta_from_4cyl = mpg - mpg[cyl == 4])`): -
+> Decoded rows from eval \#2 (`transform(mpg_by_cyl, ...)` using
+> persisted state): -
 > `{cyl: 4, mpg: 26.663636363636364, delta_from_4cyl: 0}` -
 > `{cyl: 6, mpg: 19.742857142857144, delta_from_4cyl: -6.92077922077922}` -
 > `{cyl: 8, mpg: 15.1, delta_from_4cyl: -11.563636363636364}`
 >
 > Close: - `{closed: true}`
 >
-> Both eval calls succeeded against the same endpoint process `65052`,
-> confirming persisted state across calls.
+> Both eval calls used the same endpoint process: `82690`.
 
 `persistent_r_start` returns an NNG URL, `ducknng_describe` fetches the
 endpoint’s ducknng RPC manifest, and `ducknng_call` sends declared calls
@@ -112,5 +105,4 @@ make site
 | `@duckdb/node-api` | 1.5.4-r.1            |
 | ducknng            | `v0.1.1-duckdb1.5.4` |
 
-[`DEPENDENCIES`](DEPENDENCIES) records the exact source commit. \##
-Design
+[`DEPENDENCIES`](DEPENDENCIES) records the exact source commit.

@@ -1,8 +1,17 @@
 DUCKNNG_CI_TOOLS_COMMIT := ef15a2a7453db5b4f85b7c668a545ae2f1193ff6
 DUCKNNG_EXTENSION_VERSION := v0.1.1-duckdb1.5.4
 DUCKNNG_EXTENSION := vendor/ducknng/build/release/ducknng.duckdb_extension
+MERMAID_CLI_VERSION := 11.12.0
+MERMAID_PUPPETEER_ARGS ?=
 
-.PHONY: readme check-readme vignettes check-vignettes site persistent-r-proof ducknng-extension check-pi check
+.PHONY: architecture readme check-readme vignettes check-vignettes site persistent-r-proof ducknng-extension check-pi check
+
+architecture:
+	npx --yes -p @mermaid-js/mermaid-cli@$(MERMAID_CLI_VERSION) mmdc \
+		$(MERMAID_PUPPETEER_ARGS) \
+		--input man/figures/architecture.mmd \
+		--output man/figures/architecture.svg \
+		--backgroundColor transparent
 
 readme:
 	env -u MAKEFLAGS -u MAKELEVEL -u MFLAGS npm run readme:qmd
@@ -11,6 +20,10 @@ readme:
 check-readme:
 	@grep -q 'extension="./extensions/pi-ducknng/index.ts"' README.qmd
 	@grep -q '^> AGENT_DUCKNNG_MANIFEST_CALL_OK' README.md
+	@grep -q 'man/figures/architecture.svg' README.qmd README.md
+	@test -s man/figures/architecture.mmd
+	@test -s man/figures/architecture.svg
+	@! grep -q '^``` mermaid' README.md
 
 vignettes:
 	Rscript --vanilla scripts/precompile-vignettes.R

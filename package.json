@@ -35,6 +35,8 @@
     "vendor/ducknng/tools",
     "DESCRIPTION",
     "Makefile",
+    "man/figures/architecture.mmd",
+    "man/figures/architecture.svg",
     "README.md",
     "THESIS.md"
   ],

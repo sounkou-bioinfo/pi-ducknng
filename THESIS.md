@@ -1,182 +1,76 @@
 # pi-ducknng thesis
 
-**Status:** working thesis for design discussion
+## Claim
 
-## Thesis
+`pi-ducknng` projects manifested ducknng RPC endpoints into Pi without adding a
+Node NNG binding, a second wire protocol, or an endpoint-specific Pi tool for
+every method. Its first placement adapter starts a persistent R endpoint; the
+generic discovery and call tools also accept URLs supplied by other providers.
 
-Pi is already a client of an agent runtime. `pi-ducknng` makes that client/runtime interaction addressable through hard-vendored ducknng without replacing Pi's TUI, inventing another orchestration system, or limiting the network to Pi processes.
+## Implemented contract
 
-Anything that speaks NNG can be reached. A ducknng-style manifest makes an endpoint's methods discoverable and importable; endpoint-specific semantics remain with the endpoint.
+The Pi package exposes three tools:
 
-Pi can therefore be all of the following without changing substrate:
+- `persistent_r_start()` starts the local R adapter and returns its NNG URL;
+- `ducknng_describe(url)` returns that endpoint's ducknng version-1 manifest;
+- `ducknng_call(url, method, arguments)` rejects undeclared methods and invokes a
+  declared method through a fresh DuckDB client.
 
-- a client of a persistent R process;
-- a client of DuckDB, C, Python, shell, browser, or domain services;
-- a server exposing its own agent/session operations;
-- a peer of another Pi;
-- a relay, supervisor, or worker in a larger topology.
+The R endpoint currently declares `eval` and `close`. `eval` accepts R source
+plus `envir` and `enclos` selectors. It evaluates in a mirai-owned persistent
+environment and returns supported atomic vectors and data frames as nanoarrow
+IPC. Unsupported R values fail explicitly. `close` stops the endpoint and
+returns a JSON acknowledgement.
 
-The first and primary target is a persistent R session.
-
-## Existing authority
-
-`pi-ducknng` starts from working systems rather than generic transport design:
-
-- **Pi and pi-agent-core:** the TUI is already a client of the runtime. Current Pi extensions and SDK sessions are sufficient for an initial adapter. Harness v2 strengthens the contract with lanes, durable operations, recovery, and snapshot-plus-live observation; it is not a prerequisite.
-- **ducknng:** NNG carriers, mbedTLS configuration and identity, framed RPC, manifests, sessions, AIO, cancellation, Arrow IPC, Quack, and native/browser transport distinctions are existing authority.
-- **Rducks:** vendored NNG + mbedTLS, exact native artifact handling, and direct/Quack bridges provide packaging and interoperability precedent.
-- **DuckDB API:** Pi reaches ducknng through DuckDB's supported host API and extension mechanism. DuckDB owns native extension loading and calls; `pi-ducknng` does not add a direct NNG binding or sidecar.
-
-`pi-ducknng` hard-vendors and reuses these authorities rather than reproducing them in TypeScript.
-
-## Vendoring rule
-
-The complete ducknng source tree is pinned under `vendor/ducknng` as a Git subtree. The subtree is implementation authority, not reference material. Transport, TLS, identity, framing, manifest, session, AIO, cancellation, and codec changes land in ducknng first and are then refreshed here. `pi-ducknng` must not carry a divergent reimplementation.
-
-[`DEPENDENCIES`](DEPENDENCIES) is the single version authority. The initial tuple pins DuckDB 1.5.4, `@duckdb/node-api` 1.5.4-r.1, and ducknng `v0.1.1-duckdb1.5.4` at its exact release commit. Tests and compatibility claims apply only to the pinned tuple.
-
-DuckDB v2 and duckdb-quack are expected convergence paths that may remove version-specific compatibility and marshalling work. They will replace proven pieces when they provide real producer/consumer paths; v1 will not emulate hypothetical interfaces.
-
-## Ownership by layer
-
-| Layer | Semantic owner |
-|---|---|
-| Carrier, TLS, identity, AIO | NNG + mbedTLS using proven ducknng/Rducks patterns |
-| Method discovery and framing | ducknng-style manifest and RPC contract |
-| Domain state | The endpoint: R process, DuckDB service, Pi session, or another runtime |
-| Live session ownership | The endpoint's session registry |
-| Projection into Pi | `pi-ducknng` |
-| Pi-to-native host API | DuckDB API and DuckDB extension loading |
-| Placement and lifecycle | A concrete local, container, VM, cluster, or hosted provider |
-
-There must be no second transcript, scheduler, session store, TLS model, codec authority, or native NNG bridge inside `pi-ducknng`.
-
-## Native path
-
-Pi does not call NNG through a custom native ABI:
+The implemented path is:
 
 ```text
-Pi extension -> DuckDB API -> DuckDB -> vendored ducknng -> NNG
+Pi extension -> @duckdb/node-api -> DuckDB -> vendored ducknng
+             -> NNG -> nanonext endpoint -> one mirai R process
 ```
 
-DuckDB owns host-language integration and extension loading. Ducknng owns the network substrate. `pi-ducknng` owns only their projection into Pi.
+Each describe or call operation opens and closes its own DuckDB instance. R
+state belongs to the endpoint process, so it survives those clients.
 
-## Package shape
+## Authorities and ownership
 
-The repository has two install surfaces over one implementation:
+| Contract | Authority |
+|---|---|
+| Exact DuckDB, Node API, and ducknng versions | `DEPENDENCIES` |
+| RPC frames, manifests, NNG, AIO, TLS, and codecs | hard-vendored ducknng |
+| Native extension loading and calls from Node | DuckDB and `@duckdb/node-api` |
+| R-side NNG endpoint | nanonext |
+| Persistent R process and scheduling | mirai |
+| R table/vector conversion | nanoarrow |
+| Tool projection and local endpoint lifecycle | `pi-ducknng` |
 
-- an R package built primarily by composing `nanonext` and `mirai`; and
-- a Pi package declared by `package.json`, contributing generic ducknng discovery/call tools and a separate local-R placement tool.
+Ducknng changes belong upstream and arrive here through the pinned subtree.
+`pi-ducknng` must not duplicate its framing, transport, session, security, or
+codec implementations.
 
-`nanonext` owns R-side NNG and AIO; `mirai` owns persistent R processes and distributed evaluation. The package must not add another socket binding, evaluator scheduler, or process topology.
+## Invariants
 
-`piknit` owns executable-document integration. `README.qmd` uses its `pish` knitr engine for fail-loud commands and may use its `pi` engine for Pi prompts; this repository does not fork another Quarto execution engine.
+- Endpoint placement is separate from generic discovery and invocation.
+- A call must match a method in the fetched manifest.
+- Complete ducknng responses are parsed before model-facing output is bounded.
+- Only serialized model previews are capped; protocol bytes are not truncated.
+- Requests to the local REP endpoint are serialized.
+- A dead local endpoint invalidates its cached manifest and process record.
+- Explicit close and error cleanup terminate owned processes before removing
+  temporary files.
+- Credential values do not enter tool schemas, manifests, SQL, argv, or results.
 
-## Persistent R as the first proof
+## Executable evidence
 
-An R worker owns a real R process independently of any Pi client. Its session preserves the workspace, loaded packages, options, working directory, RNG state, valid connections, graphics state, and pending work until the owner closes or expires it.
+`README.qmd` runs an OpenAI Codex agent that discovers the manifest, persists an
+`mtcars` aggregate across fresh DuckDB clients, decodes both Arrow tables, and
+closes the endpoint. The precomputed pkgdown articles independently exercise
+state persistence and a selected environment with an active binding.
 
-The first R method family should remain concrete:
+`test/pi-extension.test.js` covers manifest discovery, declared-call
+validation, process persistence, selected environments, active bindings, Arrow
+IPC, request serialization, stale-process handling, and cleanup.
 
-- open a session;
-- evaluate code;
-- inspect session state;
-- interrupt an evaluation;
-- close a session.
-
-Reattachment uses ducknng's existing session identity and ownership contract; it is not a separate R method. Evaluation scheduling and scale-out remain mirai responsibilities.
-
-Evaluation is not merely terminal text. It can emit structured stdout, messages, warnings, errors with calls or tracebacks, visible or invisible values, plots, and completion. Objects remain in R unless explicitly transferred. Data frames can use Arrow IPC or Quack where negotiated.
-
-R is the first-class design target, not an excuse to invent a universal `runtime_type` interface. Shell, Python, and other REPL adapters can follow once a genuinely repeated lifecycle exists.
-
-## Reachability and meaning
-
-NNG supplies reachability. Compatible patterns, framing, and manifests supply meaning.
-
-Pi exposes two stable generic tools. `ducknng_describe(url)` returns the endpoint's ducknng RPC manifest. `ducknng_call(url, method, arguments)` rejects methods absent from the fetched manifest and sends the declared call through a fresh DuckDB client. It does not register one tool per endpoint method.
-
-Placement is separate. `persistent_r_start()` creates the first local adapter and returns its NNG URL; other providers can supply URLs without changing discovery or invocation. Keeping these tool schemas stable preserves provider prompt-cache prefixes.
-
-The reverse direction is equally important: Pi may expose prompt, steering, cancellation, state, and event methods through ducknng. Pi is a node in the network, not a privileged controller above it.
-
-A central broker is optional. Registry, relay, peer, supervisor/worker, and direct attach are topology choices over the same method and session contracts.
-
-## Profiles and credential injection
-
-Requests carry non-secret profile identifiers, never credential values. The trusted consumer process resolves a profile immediately before use, checks the verified peer/session subject and target scope, obtains approval when policy requires it, and injects the secret without returning it to Pi, SQL, argv, manifests, or tool results.
-
-The default extension path receives no ambient credentials. Network or compute capability is explicitly composed by the host. Logs and durable evidence contain only redacted profile receipts or digests, the approved subject and target, and the outcome.
-
-Browser/computer-use injection follows the same rule: a trusted browser adapter injects into an approved origin and field. The adapter must also prevent secret read-back through DOM, script, screenshot, or subsequent tool observations; password-field masking alone does not prevent read-back.
-
-## Orbs are placement
-
-An orb-like product is an endpoint plus placement and lifecycle operations:
-
-- create;
-- start or wake;
-- attach;
-- execute;
-- sleep;
-- destroy.
-
-The live service remains an NNG endpoint. Local processes, containers, remote machines, or hosted environments are provider choices. They do not require a new agent abstraction.
-
-An orb or R worker may produce receipts, artifacts, and observations, but that durable evidence layer is outside `pi-ducknng`.
-
-## Current Pi and Harness v2
-
-Both are supported. Current `AgentSession` and Harness v2 `AgentLane` adapters expose the same ducknng-facing semantics. DuckDB can project current JSONL and Harness v2 SQLite-backed state through its readers and SQLite extension, while live actions remain runtime adapters.
-
-For multi-agent work, storage-indirect coordination is preferred where possible: agents coordinate through durable relations, manifests, receipts, and observations, with NNG providing reachability and wake-up rather than forcing every interaction into a direct agent call.
-
-## Prior art, not dependencies
-
-Pi-bio-agent demonstrates useful profile-injection and storage-indirect coordination patterns. `pi-ducknng` may adapt those ideas, but it does not vendor, import, require, or delegate semantic ownership to pi-bio-agent.
-
-## Non-goals
-
-The initial project will not:
-
-- replace Pi's existing TUI;
-- design a new TLS, identity, session, AIO, or codec stack;
-- build a separate Node native binding or sidecar for NNG;
-- dynamically register one Pi tool for every discovered method;
-- expose raw credentials to Pi, R code, SQL, argv, manifests, logs, or receipts;
-- vendor or depend on pi-bio-agent;
-- use transcript files as a wire protocol;
-- require a central orchestrator;
-- require containers or hosted compute;
-- begin with a universal REPL abstraction;
-- make pi-bio-agent a process supervisor;
-- claim that native execution is sandboxed merely because it is remote.
-
-## First executable proof
-
-The smallest proof should demonstrate one semantic claim: a persistent R session is independent of a Pi client.
-
-1. Start one R worker on a local NNG endpoint.
-2. Load `pi-ducknng` into the ordinary Pi TUI.
-3. Open an R session and evaluate `x <- 41`.
-4. Disconnect and reconnect the Pi client.
-5. Evaluate `x + 1` in the same R session and receive `42`.
-6. Attach a second non-Pi NNG client to the same session.
-7. Stream structured conditions and interrupt one running evaluation.
-
-This proves persistence, reachability, interoperability, and cancellation without first building an orb product or multi-agent framework.
-
-### Executable evidence
-
-`tools/persistent-r-proof.R` remains the lower-level session-owner test. The top-level `README.qmd` and precomputed vignettes exercise the model-facing path with OpenAI Codex agents. An agent starts the R adapter, fetches its ducknng manifest, chooses `eval`, and sends framed RPC calls through fresh DuckDB clients. The adapter evaluates code in a mirai-owned persistent environment with explicit `envir` and `enclos`, emits nanoarrow IPC, and closes only through its declared method. The rendered cases persist an `mtcars` aggregation across calls and read mean MPG from an active binding in an environment whose parent is `baseenv()`.
-
-Structured conditions, interruption, and attachment by a second non-Pi client remain subsequent slices.
-
-## Settled initial design
-
-- The repository is an R package composing nanonext and mirai.
-- DuckDB 1.5.4, its exact DuckDB API package, and its matching ducknng release are pinned as one tuple.
-- `ducknng_describe` and `ducknng_call` are the stable generic Pi tools; endpoint placement remains a separate adapter concern.
-- Mirai owns R process topology and scheduling; nanonext owns R-side NNG and AIO.
-- Both current Pi and Harness v2 are adapters over the same ducknng-facing semantics.
-- Profiles and credential values are resolved and injected by the trusted consumer process immediately before use.
+Structured R conditions, interruption, streaming, and attachment by a second
+non-Pi client are not part of the current contract. Each requires its own
+producer, consumer, ownership rules, and executable proof before being added.
