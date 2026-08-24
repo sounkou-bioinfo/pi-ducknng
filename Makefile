@@ -41,13 +41,13 @@ USE_UNSTABLE_C_API=1
 # vtable layout seen at compile time matches the runtime vtable provided by the
 # host.  Both the Python sqllogictest runner and the R duckdb package in use
 # are v1.5.2, so all three version pins are kept in sync here.
-TARGET_DUCKDB_VERSION=v1.5.0
+TARGET_DUCKDB_VERSION=v1.5.4
 
 # DuckDB version used by the Python sqllogictest runner — must match TARGET_DUCKDB_VERSION
-DUCKDB_TEST_VERSION=1.5.0
+DUCKDB_TEST_VERSION=1.5.4
 
 # Actual DuckDB release to fetch headers from for compilation
-DUCKDB_HEADER_VERSION=v1.5.0
+DUCKDB_HEADER_VERSION=v1.5.4
 
 all: configure release
 
