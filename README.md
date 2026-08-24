@@ -7,9 +7,6 @@
 `pi-ducknng` is a ducknng-backed network substrate for Pi, beginning
 with persistent R sessions.
 
-The project is incubating under `sounkou-bioinfo`. Transfer to
-`RGenomicsETL` requires a separate maturity decision.
-
 ## Architecture
 
 ``` mermaid
