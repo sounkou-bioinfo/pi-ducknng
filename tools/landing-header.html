@@ -1,0 +1,17 @@
+<nav aria-label="Main navigation" class="landing-nav">
+  <a class="brand" href="index.html">pi-ducknng</a>
+  <a href="articles/agent-product-path.html">Get started</a>
+  <a href="articles/index.html">Guides</a>
+  <a href="https://github.com/sounkou-bioinfo/pi-ducknng/blob/main/THESIS.md">Thesis</a>
+  <a href="https://github.com/sounkou-bioinfo/pi-ducknng">GitHub</a>
+</nav>
+<script type="module">
+  import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11.17.2/dist/mermaid.esm.min.mjs';
+  const nodes = [...document.querySelectorAll('pre.mermaid, pre:has(> code.language-mermaid)')];
+  for (const node of nodes) {
+    node.textContent = node.textContent;
+    node.classList.add('mermaid');
+  }
+  mermaid.initialize({startOnLoad: false, securityLevel: 'strict', theme: 'neutral'});
+  await mermaid.run({nodes});
+</script>

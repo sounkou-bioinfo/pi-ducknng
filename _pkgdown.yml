@@ -1,17 +1,47 @@
 url: https://sounkou-bioinfo.github.io/pi-ducknng/
+destination: docs
 
 template:
   bootstrap: 5
+  bootswatch: flatly
+  bslib:
+    primary: '#17675c'
+    link-color: '#17675c'
+  includes:
+    in_header: |
+      <script type="module">
+        import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11.17.2/dist/mermaid.esm.min.mjs';
+        const nodes = [...document.querySelectorAll('pre.mermaid, pre:has(> code.language-mermaid)')];
+        for (const node of nodes) {
+          node.textContent = node.textContent;
+          node.classList.add('mermaid');
+        }
+        mermaid.initialize({startOnLoad: false, securityLevel: 'strict', theme: 'neutral'});
+        await mermaid.run({nodes});
+      </script>
 
 development:
   mode: unreleased
 
 home:
-  title: Manifested ducknng endpoints for Pi agents
+  title: Persistent R and durable coordination for Pi agents
+  description: Give Pi agents a persistent R session and a durable mailbox for handing each other work, fanning questions out, and gathering answers over ducknng.
+
+navbar:
+  structure:
+    left: [intro, articles, thesis]
+    right: [search, github]
+  components:
+    intro:
+      text: Get started
+      href: articles/agent-product-path.html
+    thesis:
+      text: Thesis
+      href: https://github.com/sounkou-bioinfo/pi-ducknng/blob/main/THESIS.md
 
 articles:
-  - title: OpenAI Codex agent evidence
-    navbar: Agent evidence
+  - title: Guides
+    navbar: Guides
     contents:
       - agent-product-path
       - agent-active-binding

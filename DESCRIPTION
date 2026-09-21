@@ -37,5 +37,7 @@ URL: https://sounkou-bioinfo.github.io/pi-ducknng/,
     https://github.com/sounkou-bioinfo/pi-ducknng
 BugReports: https://github.com/sounkou-bioinfo/pi-ducknng/issues
 Config/Needs/website:
+    pkgdown,
+    litedown,
     sounkou-bioinfo/piknit
 Config/roxygen2/version: 8.0.0

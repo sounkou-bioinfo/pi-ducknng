@@ -249,11 +249,16 @@ codec implementations.
 
 ## Executable evidence
 
-`README.qmd` runs an OpenAI Codex agent that discovers the R manifest,
-persists an `mtcars` aggregate across fresh DuckDB clients, decodes both Arrow
-tables, and closes the endpoint. It then runs two Codex agents through a
-coordination endpoint and checks their round trip through the endpoint's own
-methods. Two precomputed pkgdown articles exercise
+`README.qmd` executes every command it shows. An OpenAI Codex agent discovers
+the R manifest and persists an `mtcars` aggregate across fresh DuckDB
+clients. The README then starts a coordination endpoint from the shell, and a
+lead agent fans one question out to three workers. The three workers run as
+concurrent `pi -p` processes, each computing in its own persistent R session
+and replying with `in_reply_to`. The endpoint's own methods confirm the three
+replies before the lead gathers them. Finally the README starts a mutual-TLS
+endpoint with in-memory PEM and a grants file, registers the granted
+certificate, and shows the ungranted one refused. `make readme` rejects output
+that lacks any receipt or that contains a machine-local path. Two precomputed pkgdown articles exercise
 state persistence and an active binding in a selected environment.
 
 `test/pi-extension.test.js` covers the following:

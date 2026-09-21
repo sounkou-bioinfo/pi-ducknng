@@ -1,43 +1,38 @@
 DUCKNNG_CI_TOOLS_COMMIT := ef15a2a7453db5b4f85b7c668a545ae2f1193ff6
 DUCKNNG_EXTENSION_VERSION := v0.1.2-duckdb1.5.4
 DUCKNNG_EXTENSION := vendor/ducknng/build/release/ducknng.duckdb_extension
-MERMAID_CLI_VERSION := 11.12.0
-MERMAID_PUPPETEER_ARGS ?=
-# Executable documentation runs the Pi version pinned in DEPENDENCIES.
-PIKNIT_PI := $(CURDIR)/node_modules/.bin/pi
+# Executable documentation runs the Pi version pinned in DEPENDENCIES, found
+# on PATH so rendered commands read `pi` rather than a machine-local path.
+DOCS_PATH := $(CURDIR)/node_modules/.bin:$(PATH)
 
-.PHONY: architecture readme check-readme vignettes check-vignettes site persistent-r-proof ducknng-extension check-pi check-r check
-
-architecture:
-	npx --yes -p @mermaid-js/mermaid-cli@$(MERMAID_CLI_VERSION) mmdc \
-		$(MERMAID_PUPPETEER_ARGS) \
-		--input man/figures/architecture.mmd \
-		--output man/figures/architecture.svg \
-		--backgroundColor transparent
+.PHONY: readme check-readme vignettes check-vignettes site persistent-r-proof ducknng-extension check-pi check-r check
 
 readme:
-	env -u MAKEFLAGS -u MAKELEVEL -u MFLAGS PIKNIT_PI=$(PIKNIT_PI) npm run readme:qmd
+	env -u MAKEFLAGS -u MAKELEVEL -u MFLAGS PATH="$(DOCS_PATH)" npm run readme:qmd
 	@$(MAKE) --no-print-directory check-readme
 
 check-readme:
 	@grep -q 'extension="./extensions/pi-ducknng/index.ts"' README.qmd
 	@grep -q '^> AGENT_DUCKNNG_MANIFEST_CALL_OK' README.md
-	@grep -q '^> AGENT_COORDINATION_SENT' README.md
-	@grep -q '^> AGENT_COORDINATION_REPLIED' README.md
-	@grep -Eq '^ *COORDINATION_ROUND_TRIP_VERIFIED$$' README.md
-	@grep -q 'man/figures/architecture.svg' README.qmd README.md
-	@test -s man/figures/architecture.mmd
-	@test -s man/figures/architecture.svg
-	@! grep -q '^``` mermaid' README.md
+	@grep -q '^> AGENT_FANOUT_SENT' README.md
+	@for worker in w-cyl w-gear w-am; do \
+		grep -Eq "^ *AGENT_WORKER_REPLIED $$worker" README.md || \
+		{ echo "missing receipt for $$worker"; exit 1; }; \
+	done
+	@grep -Eq '^ *COORDINATION_FANIN_VERIFIED$$' README.md
+	@grep -q '^> AGENT_FANIN_DONE' README.md
+	@grep -Eq '"agent_id":"reviewer","events.url":"wss://' README.md
+	@grep -q 'unauthorized: tls:cn:intruder has no grant' README.md
+	@! grep -qF '$(CURDIR)' README.md
 
 vignettes:
-	PIKNIT_PI=$(PIKNIT_PI) Rscript --vanilla scripts/precompile-vignettes.R
+	PATH="$(DOCS_PATH)" Rscript --vanilla scripts/precompile-vignettes.R
 
 check-vignettes:
-	PIKNIT_PI=$(PIKNIT_PI) Rscript --vanilla scripts/precompile-vignettes.R --check
+	Rscript --vanilla scripts/precompile-vignettes.R --check
 
 site: check-vignettes
-	Rscript --vanilla -e 'pkgdown::build_site()'
+	Rscript --vanilla tools/build-site.R
 
 persistent-r-proof:
 	Rscript --vanilla tools/persistent-r-proof.R

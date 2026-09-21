@@ -30,12 +30,12 @@ jobs:
         with:
           extra-packages: |
             any::pkgdown
+            any::litedown
             local::.
           needs: website
       - uses: actions/configure-pages@v5
-      - name: Build pkgdown site from precomputed vignettes
-        shell: Rscript {0}
-        run: pkgdown::build_site_github_pages(new_process = FALSE, install = FALSE)
+      - name: Build pkgdown pages and the litedown landing page
+        run: Rscript tools/build-site.R
       - uses: actions/upload-pages-artifact@v4
         with:
           path: docs

@@ -1,0 +1,13 @@
+:root { color-scheme: light; }
+body { color: #203b3a; font-family: system-ui, sans-serif; max-width: 58rem; }
+a { color: #17675c; }
+h1, h2, h3 { color: #144e46; letter-spacing: -0.02em; }
+h1 { font-size: clamp(2.2rem, 5vw, 3.4rem); }
+p, li { line-height: 1.7; }
+pre { border: 1px solid #dbe8e5; border-radius: 0.5rem; background: #f5f9f8; overflow-x: auto; }
+pre.mermaid { background: white; padding: 1rem; }
+blockquote { border-left: 3px solid #17675c; margin-left: 0; padding-left: 1rem; color: #33504e; }
+.landing-nav { display: flex; flex-wrap: wrap; align-items: center; gap: 0.7rem 1.2rem; padding: 1rem 0; border-bottom: 1px solid #dbe8e5; }
+.landing-nav a { font-size: 0.9rem; text-decoration: none; }
+.landing-nav .brand { font-size: 1.1rem; font-weight: 700; margin-right: auto; }
+@media (max-width: 40rem) { .landing-nav .brand { flex-basis: 100%; } }
