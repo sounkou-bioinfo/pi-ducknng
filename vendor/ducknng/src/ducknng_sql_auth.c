@@ -1,5 +1,7 @@
 #include "ducknng_sql_shared.h"
+#include "ducknng_runtime.h"
 #include "ducknng_service.h"
+#include "ducknng_sql_method.h"
 #include "ducknng_transport.h"
 #include "ducknng_util.h"
 #include <stdio.h>
@@ -276,6 +278,93 @@ static void ducknng_set_service_authorizer_scalar(duckdb_function_info info, duc
     }
 }
 
+/* ducknng_request_subject(): the verified caller of the SQL method whose
+ * handler is running, as the dispatcher passed it to the handler. It is
+ * read-only and captured at bind time on the request thread; outside a SQL
+ * method handler it returns no rows. */
+typedef struct {
+    idx_t row_count;
+    char *peer_identity;
+    char *principal;
+    char *subject;
+    char *claims_json;
+} ducknng_request_subject_bind_data;
+
+static void destroy_request_subject_bind_data(void *ptr) {
+    ducknng_request_subject_bind_data *data = (ducknng_request_subject_bind_data *)ptr;
+    if (!data) return;
+    if (data->peer_identity) duckdb_free(data->peer_identity);
+    if (data->principal) duckdb_free(data->principal);
+    if (data->subject) duckdb_free(data->subject);
+    if (data->claims_json) duckdb_free(data->claims_json);
+    duckdb_free(data);
+}
+
+static void ducknng_request_subject_bind(duckdb_bind_info info) {
+    ducknng_sql_context *ctx = (ducknng_sql_context *)duckdb_bind_get_extra_info(info);
+    const ducknng_request_context *request;
+    ducknng_request_subject_bind_data *bind;
+    duckdb_logical_type type;
+    if (!ctx || !ctx->rt) {
+        duckdb_bind_set_error(info, "ducknng: missing runtime");
+        return;
+    }
+    bind = (ducknng_request_subject_bind_data *)duckdb_malloc(sizeof(*bind));
+    if (!bind) {
+        duckdb_bind_set_error(info, "ducknng: out of memory");
+        return;
+    }
+    memset(bind, 0, sizeof(*bind));
+    request = ducknng_sql_method_current_request();
+    if (request) {
+        const char *principal = request->auth_principal && request->auth_principal[0] ?
+            request->auth_principal : NULL;
+        const char *peer = request->caller_identity && request->caller_identity[0] ?
+            request->caller_identity : NULL;
+        bind->row_count = 1;
+        bind->peer_identity = peer ? ducknng_strdup(peer) : NULL;
+        bind->principal = principal ? ducknng_strdup(principal) : NULL;
+        bind->subject = principal ? ducknng_strdup(principal) : (peer ? ducknng_strdup(peer) : NULL);
+        bind->claims_json = request->auth_claims_json && request->auth_claims_json[0] ?
+            ducknng_strdup(request->auth_claims_json) : NULL;
+    }
+    type = duckdb_create_logical_type(DUCKDB_TYPE_VARCHAR);
+    duckdb_bind_add_result_column(info, "peer_identity", type);
+    duckdb_bind_add_result_column(info, "principal", type);
+    duckdb_bind_add_result_column(info, "subject", type);
+    duckdb_bind_add_result_column(info, "claims_json", type);
+    duckdb_destroy_logical_type(&type);
+    type = duckdb_create_logical_type(DUCKDB_TYPE_BOOLEAN);
+    duckdb_bind_add_result_column(info, "authenticated", type);
+    duckdb_destroy_logical_type(&type);
+    duckdb_bind_set_bind_data(info, bind, destroy_request_subject_bind_data);
+    duckdb_bind_set_cardinality(info, bind->row_count, true);
+}
+
+static void ducknng_request_subject_scan(duckdb_function_info info, duckdb_data_chunk output) {
+    ducknng_sql_auth_single_row_init_data *init =
+        (ducknng_sql_auth_single_row_init_data *)duckdb_function_get_init_data(info);
+    ducknng_request_subject_bind_data *bind =
+        (ducknng_request_subject_bind_data *)duckdb_function_get_bind_data(info);
+    if (!init || !bind || init->emitted || bind->row_count == 0) {
+        duckdb_data_chunk_set_size(output, 0);
+        return;
+    }
+#define ASSIGN_SUBJECT_STRING(IDX, VALUE) do { \
+        if ((VALUE)) duckdb_unsafe_vector_assign_string_element_len(duckdb_data_chunk_get_vector(output, (IDX)), 0, (VALUE), (idx_t)strlen((VALUE))); \
+        else set_null(duckdb_data_chunk_get_vector(output, (IDX)), 0); \
+    } while (0)
+    ASSIGN_SUBJECT_STRING(0, bind->peer_identity);
+    ASSIGN_SUBJECT_STRING(1, bind->principal);
+    ASSIGN_SUBJECT_STRING(2, bind->subject);
+    ASSIGN_SUBJECT_STRING(3, bind->claims_json);
+#undef ASSIGN_SUBJECT_STRING
+    ((bool *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 4)))[0] =
+        bind->peer_identity != NULL;
+    init->emitted = 1;
+    duckdb_data_chunk_set_size(output, 1);
+}
+
 static int register_auth_context_table_named(duckdb_connection con, ducknng_sql_context *ctx, const char *name) {
     if (!ctx || !ctx->rt) return 0;
     return DUCKNNG_REGISTER_TABLE(con, name, ctx, 0, NULL, ducknng_auth_context_bind,
@@ -287,5 +376,8 @@ int ducknng_register_sql_auth(duckdb_connection con, ducknng_sql_context *ctx) {
     if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_set_service_authorizer", 2,
             ducknng_set_service_authorizer_scalar, ctx, service_authorizer_types, DUCKDB_TYPE_BOOLEAN)) return 0;
     if (!register_auth_context_table_named(con, ctx, "ducknng_auth_context")) return 0;
+    if (!DUCKNNG_REGISTER_TABLE(con, "ducknng_request_subject", ctx, 0, NULL,
+            ducknng_request_subject_bind, ducknng_sql_auth_single_row_init,
+            ducknng_request_subject_scan)) return 0;
     return 1;
 }

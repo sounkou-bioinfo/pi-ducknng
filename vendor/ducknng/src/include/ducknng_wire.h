@@ -4,6 +4,7 @@
 #include <nng/nng.h>
 
 #define DUCKNNG_WIRE_VERSION 1u
+#define DUCKNNG_VERSION "0.1.2"
 #define DUCKNNG_MAX_METHOD_NAME_LEN 128u
 #define DUCKNNG_WIRE_HEADER_LEN 22u
 

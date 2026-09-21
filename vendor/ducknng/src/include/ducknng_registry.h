@@ -81,6 +81,10 @@ typedef struct ducknng_method_descriptor {
     const char *request_schema_json;
     const char *response_schema_json;
     ducknng_method_handler handler;
+    /* Handler-owned state for dynamically registered methods, such as the
+     * runtime entry behind a SQL-defined method. Built-in methods leave it
+     * NULL. It must outlive every dispatch snapshot of the descriptor. */
+    const void *handler_data;
 } ducknng_method_descriptor;
 
 typedef struct ducknng_method_registry {

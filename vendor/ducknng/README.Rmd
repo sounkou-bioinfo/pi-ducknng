@@ -54,7 +54,7 @@ It also draws on [`mangoro`](https://github.com/sounkou-bioinfo/mangoro) for the
 | Layer | What it does |
 | --- | --- |
 | **Transport** | NNG sockets and listeners. Synchronous send/recv. One-shot AIO handles. Pipe-event telemetry. |
-| **Framed RPC** | Versioned envelope carrying Arrow IPC payloads or JSON control text. `manifest` is always on; `exec` is opt-in. `http://`/`https://` mount the same methods at the URL path. |
+| **Framed RPC** | Versioned envelope carrying Arrow IPC payloads or JSON control text. The query family is always on and may mutate; unary `exec` is opt-in. `http://`/`https://` mount the same methods at the URL path. |
 | **Policy** | Fast C admission: mTLS, exact peer-identity allowlists, IP/CIDR allowlists, per-service and per-principal resource limits. Optional SQL authorizer at the request boundary. |
 | **Codecs** | `ducknng_parse_body(...)` and `ducknng_ncurl_table(...)` parse content-type-tagged BLOBs. Built-in providers cover JSON, Arrow IPC, ducknng frames, and a text/raw fallback. User-registered codec hooks extend the set. |
 
@@ -475,22 +475,22 @@ SELECT ducknng_stop_server('ws_demo');
 
 ### Registry: manifest and exec
 
-Every server starts with a `manifest` method and nothing else. `exec` is registered explicitly.
+Every server starts with discovery, schema preparation, and the query-session family. Unary `exec` is registered explicitly.
 
 ```{duckdb collapse=TRUE, comment=""}
 SELECT ducknng_start_server(
   'rpc_demo', 'ipc:///tmp/ducknng_readme_rpc.ipc', 1, 134217728, 300000, 0
 );
 
--- Default registry: manifest only.
-SELECT name, family, response_mode, requires_auth, disabled
+-- Inspect the registry policy that also feeds the manifest.
+SELECT name, family, session_behavior, mutates_state, requires_auth, disabled
 FROM ducknng_list_methods()
 ORDER BY name;
 
 -- Register exec (false = no auth required).
 SELECT ducknng_register_exec_method(false) AS registered_exec;
 
--- Manifest now reports two methods.
+-- The manifest now also reports the opt-in exec method.
 WITH m AS (
   SELECT manifest
   FROM ducknng_get_rpc_manifest('ipc:///tmp/ducknng_readme_rpc.ipc', 0::UBIGINT)
@@ -546,6 +546,44 @@ FROM ducknng_query_rpc(
   0::UBIGINT
 );
 ```
+
+The `_params` helpers carry a typed Arrow `STRUCT`. Child order binds SQL `?`
+parameters; child names are descriptive. Values are bound through DuckDB and
+are never interpolated into SQL text. A top-level null needs SQL type context,
+such as `?::BIGINT`.
+
+```{duckdb collapse=TRUE, comment=""}
+SELECT rows_changed
+FROM ducknng_run_rpc_params(
+  'ipc:///tmp/ducknng_readme_rpc.ipc',
+  'INSERT INTO rpc_demo_t VALUES (?)',
+  struct_pack(value := 13::INTEGER),
+  0::UBIGINT
+);
+
+SELECT i
+FROM ducknng_query_rpc_params(
+  'ipc:///tmp/ducknng_readme_rpc.ipc',
+  'SELECT i FROM rpc_demo_t WHERE i >= ? ORDER BY i',
+  struct_pack(minimum := 11::INTEGER),
+  0::UBIGINT
+);
+
+DESCRIBE SELECT *
+FROM ducknng_prepare_query_params(
+  'ipc:///tmp/ducknng_readme_rpc.ipc',
+  'SELECT i FROM rpc_demo_t WHERE i >= ?',
+  struct_pack(minimum := 11::INTEGER),
+  0::UBIGINT
+);
+```
+
+The query helpers discover the remote result schema during DuckDB bind, which
+may happen more than once; use them for read-only or idempotent SQL. The
+fixed-schema `run_rpc` helpers send during scan, so `EXPLAIN` does not perform
+the remote statement. This avoids bind-time mutation but does not make a
+network write exactly once; retry and deduplication policy belongs to the
+application.
 
 `ducknng_parse_body(...)` decodes content-type-tagged BLOBs. The built-in providers cover Arrow IPC, JSON, ducknng frames, and a text/raw fallback.
 
@@ -1180,7 +1218,7 @@ A strong direct-exposure baseline:
 
 - **Local development / single-user IPC**: `inproc://`, loopback, or `ipc://` under a private directory; `exec` may be enabled for convenience.
 - **Trusted service mesh**: `tls+tcp://`, `wss://`, or `https://` with mTLS, exact peer allowlists, IP/CIDR allowlists, and service limits.
-- **Shared or semi-trusted clients**: prefer query sessions plus a short SQL authorizer; use deployment-level DuckDB/process controls for filesystem, extension loading, outbound network, and attachments.
+- **Shared or semi-trusted clients**: authorize both `query_open` and `exec`; query sessions stream SQL results but are not a read-only policy. Use deployment-level DuckDB/process controls for filesystem, extension loading, outbound network, and attachments.
 - **Public/untrusted internet**: do not expose raw DuckDB SQL directly. Put `ducknng` behind a gateway that authenticates, rate-limits, and maps users to fixed application operations.
 
 ```sql

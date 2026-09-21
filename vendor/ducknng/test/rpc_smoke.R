@@ -43,6 +43,21 @@ decode_frame <- function(buf) {
   )
 }
 
+dial_req_when_ready <- function(url, timeout_seconds = 10) {
+  deadline <- Sys.time() + timeout_seconds
+  repeat {
+    socket <- tryCatch(
+      nanonext::socket("req", dial = url, autostart = NA),
+      error = function(e) NULL
+    )
+    if (!is.null(socket)) return(socket)
+    if (Sys.time() >= deadline) {
+      stop("ducknng R smoke server did not become ready within ",
+           timeout_seconds, " seconds")
+    }
+    Sys.sleep(0.05)
+  }
+}
 ext_path <- normalizePath("build/release/ducknng.duckdb_extension")
 ipc_path <- tempfile(pattern = "ducknng_rpc_smoke_", tmpdir = "/tmp", fileext = ".ipc")
 ipc_url <- paste0("ipc://", ipc_path)
@@ -55,6 +70,7 @@ server_job <- parallel::mcparallel({
     "SELECT ducknng_start_server('smoke', '%s', 1, 134217728, 300000, 0)",
     ipc_url
   ))
+  DBI::dbGetQuery(con, "SELECT ducknng_register_exec_method()")
   Sys.sleep(4)
   rows <- tryCatch(DBI::dbGetQuery(con, "SELECT * FROM smoke_table ORDER BY x"), error = function(e) data.frame())
   DBI::dbGetQuery(con, "SELECT ducknng_stop_server('smoke')")
@@ -62,15 +78,17 @@ server_job <- parallel::mcparallel({
   rows
 })
 
-Sys.sleep(1)
-req <- nanonext::socket("req", dial = ipc_url, autostart = NA)
+req <- dial_req_when_ready(ipc_url)
 
 stopifnot(nanonext::send(req, encode_manifest_request(), mode = "raw", block = 1000L) == 0)
 manifest_reply <- decode_frame(nanonext::recv(req, mode = "raw", block = 1000L))
 stopifnot(manifest_reply$version == 1L)
 stopifnot(manifest_reply$type == 2L)
-stopifnot(grepl('"name":"exec"', rawToChar(manifest_reply$payload), fixed = TRUE))
-stopifnot(grepl('"name":"manifest"', rawToChar(manifest_reply$payload), fixed = TRUE))
+manifest_text <- rawToChar(manifest_reply$payload)
+stopifnot(grepl('"version":"0.1.2"', manifest_text, fixed = TRUE))
+stopifnot(grepl('"name":"exec"', manifest_text, fixed = TRUE))
+stopifnot(grepl('"name":"manifest"', manifest_text, fixed = TRUE))
+stopifnot(grepl('"parameter_binding":{"encoding":"arrow_struct","positional":true,"methods":["exec","query_open","query_prepare"],"max_parameters":65535}', manifest_text, fixed = TRUE))
 
 stopifnot(nanonext::send(req, encode_exec_request("CREATE TABLE smoke_table(x INTEGER)", FALSE), mode = "raw", block = 1000L) == 0)
 create_reply <- decode_frame(nanonext::recv(req, mode = "raw", block = 1000L))

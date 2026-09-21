@@ -1,0 +1,256 @@
+# name: test/sql/ducknng_sql_methods.test
+# group: [ducknng]
+
+require ducknng
+
+# Little-endian hex helpers for building JSON call frames by hand.
+statement ok
+CREATE MACRO sm_le_hex(n, width) AS array_to_string(
+  list_transform(range(width), lambda i: lpad(to_hex((n::UBIGINT >> (8 * i)::UBIGINT) & 255::UBIGINT), 2, '0')),
+  ''
+)
+
+statement ok
+CREATE MACRO sm_call(method, payload) AS from_hex(
+  '0101' || '04000000' ||
+  sm_le_hex(octet_length(encode(method)), 4) || '00000000' ||
+  sm_le_hex(octet_length(encode(payload)), 8) ||
+  hex(encode(method)) || hex(encode(payload))
+)
+
+statement ok
+CREATE TABLE sm_counters (name VARCHAR PRIMARY KEY, n INTEGER NOT NULL)
+
+query I
+SELECT ducknng_register_sql_method(
+  'echo',
+  'SELECT $1::JSON AS reply',
+  '{"type":"object"}'
+)
+----
+true
+
+query I
+SELECT ducknng_register_sql_method(
+  'bump',
+  'INSERT INTO sm_counters VALUES ($1::JSON->>''name'', 1)
+     ON CONFLICT (name) DO UPDATE SET n = n + 1;
+   SELECT to_json(struct_pack(name := name, n := n)) FROM sm_counters
+     WHERE name = ($1::JSON->>''name'')',
+  '{"type":"object","required":["name"],"properties":{"name":{"type":"string"}}}'
+)
+----
+true
+
+query I
+SELECT ducknng_register_sql_method(
+  'fail_after_insert',
+  'INSERT INTO sm_counters VALUES (''ghost'', 1); SELECT error(''boom'')',
+  '{}'
+)
+----
+true
+
+query I
+SELECT ducknng_register_sql_method('hello', 'SELECT ''hi "there"''', '{}')
+----
+true
+
+query I
+SELECT ducknng_register_sql_method('nothing', 'SELECT NULL::JSON WHERE false', '{}')
+----
+true
+
+query I
+SELECT ducknng_register_sql_method('who', 'SELECT to_json(s) FROM ducknng_request_subject() s', '{}')
+----
+true
+
+statement error
+SELECT ducknng_register_sql_method('manifest', 'SELECT 1', '{}')
+----
+built-in method
+
+statement error
+SELECT ducknng_register_sql_method('bad schema', 'SELECT 1', '{}')
+----
+SQL method name must be
+
+statement error
+SELECT ducknng_register_sql_method('bad_schema', 'SELECT 1', '[1, 2')
+----
+request_schema_json must be a JSON object
+
+query TTTT
+SELECT name, family, request_payload_format, response_payload_format
+FROM ducknng_list_methods()
+WHERE name IN ('echo', 'bump')
+ORDER BY name
+----
+bump	sql_method	json	json
+echo	sql_method	json	json
+
+query I
+SELECT ducknng_start_server('sql_methods', 'inproc://ducknng_sql_methods', 1, 134217728, 300000, 0::UBIGINT)
+----
+true
+
+query II
+SELECT position('"name":"bump"' IN payload_text) > 0,
+       position('"required":["name"]' IN payload_text) > 0
+FROM ducknng_decode_frame(ducknng_request_raw(
+  'inproc://ducknng_sql_methods',
+  from_hex('01000000000000000000000000000000000000000000'),
+  2000, 0::UBIGINT))
+----
+true	true
+
+query TTT
+SELECT ducknng_frame_type_name(f), ducknng_frame_name(f), ducknng_frame_payload_text(f)
+FROM (SELECT ducknng_request_raw(
+  'inproc://ducknng_sql_methods', sm_call('echo', '{"x":[1,2]}'), 2000, 0::UBIGINT) AS f)
+----
+result	echo	{"x":[1,2]}
+
+query T
+SELECT ducknng_frame_payload_text(f)
+FROM (SELECT ducknng_request_raw(
+  'inproc://ducknng_sql_methods', sm_call('bump', '{"name":"a"}'), 2000, 0::UBIGINT) AS f)
+----
+{"name":"a","n":1}
+
+query T
+SELECT ducknng_frame_payload_text(f)
+FROM (SELECT ducknng_request_raw(
+  'inproc://ducknng_sql_methods', sm_call('bump', '{"name":"a"}'), 2000, 0::UBIGINT) AS f)
+----
+{"name":"a","n":2}
+
+query TT
+SELECT ducknng_frame_type_name(f), position('boom' IN ducknng_frame_error_text(f)) > 0
+FROM (SELECT ducknng_request_raw(
+  'inproc://ducknng_sql_methods', sm_call('fail_after_insert', '{}'), 2000, 0::UBIGINT) AS f)
+----
+error	true
+
+query I
+SELECT count(*) FROM sm_counters WHERE name = 'ghost'
+----
+0
+
+query T
+SELECT ducknng_frame_payload_text(f)
+FROM (SELECT ducknng_request_raw(
+  'inproc://ducknng_sql_methods', sm_call('hello', ''), 2000, 0::UBIGINT) AS f)
+----
+"hi \"there\""
+
+query T
+SELECT ducknng_frame_payload_text(f)
+FROM (SELECT ducknng_request_raw(
+  'inproc://ducknng_sql_methods', sm_call('nothing', '{}'), 2000, 0::UBIGINT) AS f)
+----
+null
+
+query TT
+SELECT ducknng_frame_type_name(f), position('must be a UTF-8 JSON object' IN ducknng_frame_error_text(f)) > 0
+FROM (SELECT ducknng_request_raw(
+  'inproc://ducknng_sql_methods', sm_call('echo', '[1]'), 2000, 0::UBIGINT) AS f)
+----
+error	true
+
+query T
+SELECT ducknng_frame_payload_text(f)
+FROM (SELECT ducknng_request_raw(
+  'inproc://ducknng_sql_methods', sm_call('who', '{}'), 2000, 0::UBIGINT) AS f)
+----
+{"peer_identity":null,"principal":null,"subject":null,"claims_json":null,"authenticated":false}
+
+# Outside a request the subject is empty.
+query I
+SELECT count(*) FROM ducknng_request_subject()
+----
+0
+
+# Re-registering a SQL method replaces it.
+query I
+SELECT ducknng_register_sql_method('echo', 'SELECT ''replaced''', '{}')
+----
+true
+
+query T
+SELECT ducknng_frame_payload_text(f)
+FROM (SELECT ducknng_request_raw(
+  'inproc://ducknng_sql_methods', sm_call('echo', '{}'), 2000, 0::UBIGINT) AS f)
+----
+"replaced"
+
+query I
+SELECT ducknng_unregister_method('hello')
+----
+true
+
+query T
+SELECT ducknng_frame_type_name(f)
+FROM (SELECT ducknng_request_raw(
+  'inproc://ducknng_sql_methods', sm_call('hello', '{}'), 2000, 0::UBIGINT) AS f)
+----
+error
+
+query I
+SELECT ducknng_register_sql_method('secret', 'SELECT ''ok''', '{}', true)
+----
+true
+
+query TT
+SELECT ducknng_frame_type_name(f), position('requires verified peer identity' IN ducknng_frame_error_text(f)) > 0
+FROM (SELECT ducknng_request_raw(
+  'inproc://ducknng_sql_methods', sm_call('secret', '{}'), 2000, 0::UBIGINT) AS f)
+----
+error	true
+
+query I
+SELECT ducknng_stop_server('sql_methods')
+----
+true
+
+# Over mutual TLS the handler sees the verified peer identity.
+query I
+SELECT ducknng_self_signed_tls_config('127.0.0.1', 365, 2) > 0
+----
+1
+
+statement ok
+SET VARIABLE sm_tls = (SELECT max(tls_config_id) FROM ducknng_list_tls_configs())
+
+query I
+SELECT ducknng_start_server('sql_methods_tls', 'tls+tcp://127.0.0.1:0', 1, 134217728, 300000,
+  getvariable('sm_tls')::UBIGINT)
+----
+true
+
+statement ok
+SET VARIABLE sm_tls_url = (SELECT listen FROM ducknng_list_servers() WHERE name = 'sql_methods_tls')
+
+query TTT
+SELECT ducknng_frame_type_name(f),
+       json_extract_string(ducknng_frame_payload_text(f), '$.peer_identity') IS NOT NULL,
+       json_extract(ducknng_frame_payload_text(f), '$.authenticated')::BOOLEAN
+FROM (SELECT ducknng_request_raw(
+  getvariable('sm_tls_url')::VARCHAR, sm_call('secret', '{}'), 2000,
+  getvariable('sm_tls')::UBIGINT) AS f)
+UNION ALL
+SELECT ducknng_frame_type_name(f),
+       json_extract_string(ducknng_frame_payload_text(f), '$.peer_identity') IS NOT NULL,
+       json_extract(ducknng_frame_payload_text(f), '$.authenticated')::BOOLEAN
+FROM (SELECT ducknng_request_raw(
+  getvariable('sm_tls_url')::VARCHAR, sm_call('who', '{}'), 2000,
+  getvariable('sm_tls')::UBIGINT) AS f)
+----
+result	false	NULL
+result	true	true
+
+query I
+SELECT ducknng_stop_server('sql_methods_tls')
+----
+true

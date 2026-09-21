@@ -363,6 +363,24 @@ static int append_json_string(char **buf, size_t *len, size_t *cap, const char *
     return append_text(buf, len, cap, "\"");
 }
 
+static int append_parameter_binding_capability(char **buf, size_t *len,
+    size_t *cap, const ducknng_method_registry *registry) {
+    static const char *method_names[] = {"exec", "query_open", "query_prepare"};
+    size_t i;
+    int emitted = 0;
+    if (!append_text(buf, len, cap,
+            "\"parameter_binding\":{\"encoding\":\"arrow_struct\",\"positional\":true,\"methods\":[")) return 0;
+    for (i = 0; i < sizeof(method_names) / sizeof(method_names[0]); i++) {
+        const char *name = method_names[i];
+        if (!ducknng_method_registry_find(registry, (const uint8_t *)name,
+                (uint32_t)strlen(name))) continue;
+        if (emitted && !append_text(buf, len, cap, ",")) return 0;
+        if (!append_json_string(buf, len, cap, name)) return 0;
+        emitted = 1;
+    }
+    return append_text(buf, len, cap, "],\"max_parameters\":65535}");
+}
+
 char *ducknng_method_registry_manifest_json(const ducknng_method_registry *registry,
     const char *server_name, const char *server_version, int protocol_version,
     const ducknng_manifest_security *security, char **errmsg) {
@@ -378,7 +396,7 @@ char *ducknng_method_registry_manifest_json(const ducknng_method_registry *regis
     if (!append_text(&buf, &len, &cap, "{\"server\":{\"name\":")) goto oom;
     if (!append_json_string(&buf, &len, &cap, server_name ? server_name : "ducknng")) goto oom;
     if (!append_text(&buf, &len, &cap, ",\"version\":")) goto oom;
-    if (!append_json_string(&buf, &len, &cap, server_version ? server_version : "0.1.1")) goto oom;
+    if (!append_json_string(&buf, &len, &cap, server_version ? server_version : DUCKNNG_VERSION)) goto oom;
     if (!append_text(&buf, &len, &cap, ",\"protocol_version\":")) goto oom;
     snprintf(numbuf, sizeof(numbuf), "%d", protocol_version);
     if (!append_text(&buf, &len, &cap, numbuf)) goto oom;
@@ -418,6 +436,8 @@ char *ducknng_method_registry_manifest_json(const ducknng_method_registry *regis
             (unsigned long long)security->max_sessions_per_peer_identity);
         if (!append_text(&buf, &len, &cap, numbuf)) goto oom;
     }
+    if (!append_text(&buf, &len, &cap, "},\"capabilities\":{")) goto oom;
+    if (!append_parameter_binding_capability(&buf, &len, &cap, registry)) goto oom;
     if (!append_text(&buf, &len, &cap, "},\"methods\":[")) goto oom;
     for (i = 0; i < registry->method_count; i++) {
         const ducknng_method_descriptor *m = registry->methods[i];
@@ -464,11 +484,11 @@ char *ducknng_method_registry_manifest_json(const ducknng_method_registry *regis
         snprintf(numbuf, sizeof(numbuf), ",\"emitted_reply_flags\":%u",
             (unsigned int)view.emitted_reply_flags);
         if (!append_text(&buf, &len, &cap, numbuf)) goto oom;
-        snprintf(numbuf, sizeof(numbuf), ",\"max_request_bytes\":%lu",
-            (unsigned long)view.max_request_bytes);
+        snprintf(numbuf, sizeof(numbuf), ",\"max_request_bytes\":%llu",
+            (unsigned long long)view.max_request_bytes);
         if (!append_text(&buf, &len, &cap, numbuf)) goto oom;
-        snprintf(numbuf, sizeof(numbuf), ",\"max_reply_bytes\":%lu",
-            (unsigned long)view.max_reply_bytes);
+        snprintf(numbuf, sizeof(numbuf), ",\"max_reply_bytes\":%llu",
+            (unsigned long long)view.max_reply_bytes);
         if (!append_text(&buf, &len, &cap, numbuf)) goto oom;
         snprintf(numbuf, sizeof(numbuf), ",\"version_introduced\":%d",
             view.version_introduced);

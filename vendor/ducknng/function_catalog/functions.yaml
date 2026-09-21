@@ -139,6 +139,29 @@
       ]
     },
     {
+      "name": "ducknng_register_sql_method",
+      "kind": "scalar",
+      "category": "Method Registry",
+      "signature": "ducknng_register_sql_method(name, handler_sql, request_schema_json[, requires_auth])",
+      "returns": "BOOLEAN",
+      "since": "0.1.3",
+      "implemented": true,
+      "description": "Register or replace a manifest-visible RPC method whose handler is server-owned SQL; callers send only a JSON object payload.",
+      "notes": [
+        "The method appears in the manifest in the sql_method family with a JSON request and reply and the given request_schema_json, which must be a JSON object.",
+        "handler_sql may hold several statements. They run in one transaction on the service's request connection; any error rolls the transaction back and returns an error frame.",
+        "Each statement may use at most one parameter, which is bound to the request payload text; cast it with $1::JSON.",
+        "The first column of the first row of the last statement is the reply: a JSON column passes through, a VARCHAR column becomes a JSON string, and no row or NULL becomes null. Wrap other values with to_json().",
+        "The payload must be a UTF-8 JSON object of at most 1 MiB; an empty payload is treated as {}.",
+        "Registering an existing SQL method name replaces it; a built-in method cannot be replaced. Handler SQL is retained until the database closes, so a request that started before the replacement completes with the SQL it started with.",
+        "requires_auth defaults to false. Pass true to require a verified transport-derived peer identity. Service admission, allowlists, and the SQL authorizer apply as for every method; handler SQL reads the caller with ducknng_request_subject()."
+      ],
+      "examples": [
+        "SELECT ducknng_register_sql_method('echo', 'SELECT $1::JSON', '{\"type\":\"object\"}');",
+        "SELECT ducknng_register_sql_method('whoami', 'SELECT to_json(s) FROM ducknng_request_subject() s', '{}', true);"
+      ]
+    },
+    {
       "name": "ducknng_set_method_auth",
       "kind": "scalar",
       "category": "Method Registry",
@@ -196,12 +219,12 @@
       "kind": "table",
       "category": "Method Registry",
       "signature": "ducknng_list_methods()",
-      "returns": "TABLE(name VARCHAR, family VARCHAR, summary VARCHAR, transport_pattern VARCHAR, request_payload_format VARCHAR, response_payload_format VARCHAR, response_mode VARCHAR, request_schema_json VARCHAR, response_schema_json VARCHAR, requires_auth BOOLEAN, disabled BOOLEAN)",
+      "returns": "TABLE(name VARCHAR, family VARCHAR, summary VARCHAR, transport_pattern VARCHAR, request_payload_format VARCHAR, response_payload_format VARCHAR, response_mode VARCHAR, session_behavior VARCHAR, request_schema_json VARCHAR, response_schema_json VARCHAR, requires_auth BOOLEAN, requires_session BOOLEAN, opens_session BOOLEAN, closes_session BOOLEAN, mutates_state BOOLEAN, idempotent BOOLEAN, deprecated BOOLEAN, disabled BOOLEAN, accepted_request_flags UINTEGER, emitted_reply_flags UINTEGER, max_request_bytes UBIGINT, max_reply_bytes UBIGINT, version_introduced INTEGER)",
       "since": "0.1.0",
       "implemented": true,
       "description": "List the currently registered RPC methods in the runtime registry.",
       "notes": [
-        "Use this to verify whether exec has been explicitly enabled."
+        "Use this to inspect the same auth, session, mutation, idempotence, flag, and size policy projected into the RPC manifest."
       ],
       "examples": [
         "SELECT * FROM ducknng_list_methods();"
@@ -640,6 +663,25 @@
       ],
       "examples": [
         "SELECT allow, status, reason FROM (SELECT rpc_method = 'manifest' AS allow, 403 AS status, 'denied' AS reason FROM ducknng_auth_context());"
+      ]
+    },
+    {
+      "name": "ducknng_request_subject",
+      "kind": "table",
+      "category": "Transport Security",
+      "signature": "ducknng_request_subject()",
+      "returns": "TABLE(peer_identity VARCHAR, principal VARCHAR, subject VARCHAR, claims_json VARCHAR, authenticated BOOLEAN)",
+      "since": "0.1.3",
+      "implemented": true,
+      "description": "Expose the verified caller of the SQL method whose handler is running.",
+      "notes": [
+        "Returns one row while a SQL method handler runs and zero rows otherwise.",
+        "peer_identity is the verified transport identity; principal and claims_json come from the service SQL authorizer when it maps one; subject is the principal when present and otherwise the peer identity.",
+        "authenticated is true only when a verified peer identity is present.",
+        "The subject is read-only; SQL cannot set or replace it."
+      ],
+      "examples": [
+        "SELECT peer_identity, authenticated FROM ducknng_request_subject();"
       ]
     },
     {
@@ -1830,10 +1872,30 @@
       "description": "Execute a metadata-oriented RPC call and return a structured result row.",
       "notes": [
         "Transport is selected by the URL scheme; the synchronous helper routes over NNG, HTTP, or HTTPS as appropriate.",
+        "The RPC is sent during table-function scan, not bind, so EXPLAIN and abandoned plans do not execute the remote SQL.",
         "These helpers require the remote server to have explicitly registered the exec method."
       ],
       "examples": [
         "SELECT * FROM ducknng_run_rpc('ipc:///tmp/ducknng_sql0.ipc', 'CREATE TABLE t(i INTEGER)', 0::UBIGINT);"
+      ]
+    },
+    {
+      "name": "ducknng_run_rpc_params",
+      "kind": "table",
+      "category": "RPC Helper",
+      "signature": "ducknng_run_rpc_params(url, sql, params, tls_config_id)",
+      "returns": "TABLE(ok BOOLEAN, error VARCHAR, rows_changed UBIGINT, statement_type INTEGER, result_type INTEGER)",
+      "since": "0.1.2",
+      "implemented": true,
+      "description": "Execute one parameterized metadata-oriented exec RPC and return a structured result row.",
+      "notes": [
+        "params is a STRUCT whose child order binds positional ? parameters; child names are descriptive only.",
+        "Values are Arrow encoded and bound with duckdb_bind_value on the server; they are not interpolated into SQL text.",
+        "Parameterized exec accepts exactly one SQL statement and sends the RPC during scan, not bind.",
+        "The remote server must have explicitly registered the exec method."
+      ],
+      "examples": [
+        "SELECT * FROM ducknng_run_rpc_params('ipc:///tmp/ducknng_sql0.ipc', 'INSERT INTO t VALUES (?)', struct_pack(p1 := 42), 0::UBIGINT);"
       ]
     },
     {
@@ -1869,10 +1931,63 @@
         "Transport is selected by the URL scheme; the synchronous helper routes over NNG, HTTP, or HTTPS as appropriate.",
         "This helper now opens a server-side query session, fetches Arrow IPC batches until end-of-stream, and closes the session automatically.",
         "It is the ergonomic row path for session-backed SQL queries; use ducknng_open_query(), ducknng_fetch_query(), ducknng_fetch_query_table(), ducknng_close_query(), and ducknng_cancel_query() when you need explicit session lifecycle control.",
-        "These helpers require the remote server to have explicitly registered the exec method."
+        "Remote schema discovery occurs during table-function bind and DuckDB may bind a plan more than once; use this convenience wrapper for read-only or otherwise idempotent SQL, not mutations."
       ],
       "examples": [
         "SELECT * FROM ducknng_query_rpc('ipc:///tmp/ducknng_sql0.ipc', 'SELECT 42 AS answer', 0::UBIGINT);"
+      ]
+    },
+    {
+      "name": "ducknng_query_rpc_params",
+      "kind": "table",
+      "category": "RPC Helper",
+      "signature": "ducknng_query_rpc_params(url, sql, params, tls_config_id)",
+      "returns": "table",
+      "since": "0.1.2",
+      "implemented": true,
+      "description": "Execute a parameterized row query through the session family and expose its Arrow rows as a DuckDB table.",
+      "notes": [
+        "params is a STRUCT whose child order binds positional ? parameters; child names are descriptive only.",
+        "Values are Arrow encoded and bound with duckdb_bind_value on the server; they are not interpolated into SQL text.",
+        "Parameterized query_open accepts exactly one SQL statement.",
+        "Like ducknng_query_rpc(), this dynamic-schema wrapper performs remote schema discovery during bind and is for read-only or idempotent SQL."
+      ],
+      "examples": [
+        "SELECT * FROM ducknng_query_rpc_params('ipc:///tmp/ducknng_sql0.ipc', 'SELECT ?::INTEGER AS answer', struct_pack(p1 := 42), 0::UBIGINT);"
+      ]
+    },
+    {
+      "name": "ducknng_prepare_query",
+      "kind": "table",
+      "category": "RPC Helper",
+      "signature": "ducknng_prepare_query(url, sql, tls_config_id)",
+      "returns": "table (zero rows with the prepared remote schema)",
+      "since": "0.1.2",
+      "implemented": true,
+      "description": "Prepare exactly one remote SQL statement without executing it and expose its result schema.",
+      "notes": [
+        "Use DESCRIBE SELECT * FROM ducknng_prepare_query(...) to inspect the remote result columns.",
+        "Multiple statements are rejected before any leading statement can execute."
+      ],
+      "examples": [
+        "DESCRIBE SELECT * FROM ducknng_prepare_query('ipc:///tmp/ducknng_sql0.ipc', 'SELECT 42::INTEGER AS answer', 0::UBIGINT);"
+      ]
+    },
+    {
+      "name": "ducknng_prepare_query_params",
+      "kind": "table",
+      "category": "RPC Helper",
+      "signature": "ducknng_prepare_query_params(url, sql, params, tls_config_id)",
+      "returns": "table (zero rows with the prepared remote schema)",
+      "since": "0.1.2",
+      "implemented": true,
+      "description": "Bind a typed parameter tuple, prepare exactly one remote SQL statement without executing it, and expose its result schema.",
+      "notes": [
+        "params is a STRUCT whose child order binds positional ? parameters; child names are descriptive only.",
+        "Use this to discover concrete output types for parameterized statements without running them."
+      ],
+      "examples": [
+        "DESCRIBE SELECT * FROM ducknng_prepare_query_params('ipc:///tmp/ducknng_sql0.ipc', 'SELECT ?::BIGINT AS answer', struct_pack(p1 := 42::BIGINT), 0::UBIGINT);"
       ]
     },
     {

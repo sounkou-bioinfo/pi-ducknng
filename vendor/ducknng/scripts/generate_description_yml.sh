@@ -10,7 +10,7 @@ set -euo pipefail
 EXTENSION_NAME="ducknng"
 GIT_REF=$(git rev-parse HEAD)
 DESCRIPTION="Pure C DuckDB extension exposing a DuckDB-backed SQL and RPC server over NNG using Arrow IPC — with framed RPC, custom HTTP routes, TLS support, and a body codec layer"
-VERSION="0.1.1"
+VERSION="0.1.2"
 LANGUAGE="C"
 BUILD="cmake"
 LICENSE="MIT"

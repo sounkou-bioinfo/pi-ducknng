@@ -52,6 +52,12 @@ typedef struct {
 } ducknng_manifest_result_bind_data;
 
 typedef struct {
+    ducknng_sql_context *ctx;
+    char *url;
+    uint64_t tls_config_id;
+    uint8_t *request_payload;
+    size_t request_payload_len;
+    int executed;
     bool ok;
     char *error;
     uint64_t rows_changed;
@@ -228,6 +234,8 @@ static void destroy_manifest_result_bind_data(void *ptr) {
 static void destroy_exec_result_bind_data(void *ptr) {
     ducknng_exec_result_bind_data *data = (ducknng_exec_result_bind_data *)ptr;
     if (!data) return;
+    if (data->url) duckdb_free(data->url);
+    if (data->request_payload) duckdb_free(data->request_payload);
     if (data->error) duckdb_free(data->error);
     duckdb_free(data);
 }
@@ -767,8 +775,37 @@ static void ducknng_query_rpc_reset_result(ducknng_query_rpc_bind_data *bind) {
     bind->row_count = 0;
 }
 
+static int ducknng_query_rpc_encode_query_request(
+    ducknng_query_rpc_bind_data *bind, const char *sql, duckdb_value params,
+    uint64_t batch_rows, uint64_t batch_bytes, uint8_t **payload,
+    size_t *payload_len, char **errmsg) {
+    if (!bind || !bind->ctx || !bind->ctx->rt) {
+        if (errmsg && !*errmsg) *errmsg = ducknng_strdup(
+            "ducknng: missing runtime for query request encoding");
+        return -1;
+    }
+    if (!params) {
+        return ducknng_query_open_request_to_ipc(sql, batch_rows,
+            batch_bytes, payload, payload_len, errmsg);
+    }
+    {
+        duckdb_connection codec_con = ducknng_runtime_codec_connection(bind->ctx->rt);
+        int rc;
+        if (!codec_con) {
+            if (errmsg && !*errmsg) *errmsg = ducknng_strdup(
+                "ducknng: no local connection is available to encode query parameters");
+            return -1;
+        }
+        ducknng_runtime_codec_connection_lock(bind->ctx->rt);
+        rc = ducknng_query_open_request_with_params_to_ipc(codec_con, sql,
+            batch_rows, batch_bytes, params, payload, payload_len, errmsg);
+        ducknng_runtime_codec_connection_unlock(bind->ctx->rt);
+        return rc;
+    }
+}
+
 static int ducknng_query_rpc_open_session(ducknng_query_rpc_bind_data *bind, const char *sql,
-    char **errmsg) {
+    duckdb_value params, char **errmsg) {
     const ducknng_tls_opts *tls_opts = NULL;
     uint8_t *payload = NULL;
     size_t payload_len = 0;
@@ -783,8 +820,10 @@ static int ducknng_query_rpc_open_session(ducknng_query_rpc_bind_data *bind, con
         return -1;
     }
     if (ducknng_lookup_tls_opts(bind->ctx, bind->tls_config_id, &tls_opts, errmsg) != 0) goto cleanup;
-    if (ducknng_query_open_request_to_ipc(sql, 0, 0, &payload, &payload_len, errmsg) != 0) goto cleanup;
-    resp_msg = ducknng_client_method_roundtrip_tls(bind->url, "query_open", payload, payload_len,
+    if (ducknng_query_rpc_encode_query_request(bind, sql, params, 0, 0,
+            &payload, &payload_len, errmsg) != 0) goto cleanup;
+    resp_msg = ducknng_client_method_roundtrip_tls(bind->url, "query_open",
+        payload, payload_len,
         5000, tls_opts, errmsg);
     if (!resp_msg) goto cleanup;
     if (ducknng_decode_request(resp_msg, &frame) != 0) {
@@ -1337,27 +1376,39 @@ static void ducknng_request_socket_scalar(duckdb_function_info info, duckdb_data
     }
 }
 
-static void ducknng_query_rpc_bind(duckdb_bind_info info) {
+static void ducknng_query_rpc_bind_impl(duckdb_bind_info info, int with_params) {
     ducknng_query_rpc_bind_data *bind;
     duckdb_value url_val;
     duckdb_value sql_val;
     duckdb_value tls_val;
+    duckdb_value params_val;
     char *sql;
     char *errmsg = NULL;
+    idx_t param_count;
     ducknng_sql_context *ctx = (ducknng_sql_context *)duckdb_bind_get_extra_info(info);
     if (ducknng_reject_table_inside_authorizer(info, ctx)) return;
-    if (duckdb_bind_get_parameter_count(info) != 3) {
-        duckdb_bind_set_error(info, "ducknng: ducknng_query_rpc(url, sql, tls_config_id) requires exactly three parameters");
+    param_count = duckdb_bind_get_parameter_count(info);
+    memset(&params_val, 0, sizeof(params_val));
+    if ((!with_params && param_count != 3) || (with_params && param_count != 4)) {
+        duckdb_bind_set_error(info, with_params
+            ? "ducknng: ducknng_query_rpc_params(url, sql, params, tls_config_id) requires exactly four parameters"
+            : "ducknng: ducknng_query_rpc(url, sql, tls_config_id) requires exactly three parameters");
         return;
     }
     url_val = duckdb_bind_get_parameter(info, 0);
     sql_val = duckdb_bind_get_parameter(info, 1);
-    tls_val = duckdb_bind_get_parameter(info, 2);
+    if (with_params) {
+        params_val = duckdb_bind_get_parameter(info, 2);
+        tls_val = duckdb_bind_get_parameter(info, 3);
+    } else {
+        tls_val = duckdb_bind_get_parameter(info, 2);
+    }
     bind = (ducknng_query_rpc_bind_data *)duckdb_malloc(sizeof(*bind));
     if (!bind) {
         duckdb_destroy_value(&url_val);
         duckdb_destroy_value(&sql_val);
         duckdb_destroy_value(&tls_val);
+        if (with_params) duckdb_destroy_value(&params_val);
         duckdb_bind_set_error(info, "ducknng: out of memory");
         return;
     }
@@ -1371,17 +1422,23 @@ static void ducknng_query_rpc_bind(duckdb_bind_info info) {
     duckdb_destroy_value(&tls_val);
     if (!bind->url || !sql || !bind->url[0] || !sql[0]) {
         if (sql) duckdb_free(sql);
+        if (with_params) duckdb_destroy_value(&params_val);
         destroy_query_rpc_bind_data(bind);
-        duckdb_bind_set_error(info, "ducknng: ducknng_query_rpc(url, sql, tls_config_id) requires non-empty url and sql");
+        duckdb_bind_set_error(info, with_params
+            ? "ducknng: ducknng_query_rpc_params(url, sql, params, tls_config_id) requires non-empty url and sql"
+            : "ducknng: ducknng_query_rpc(url, sql, tls_config_id) requires non-empty url and sql");
         return;
     }
-    if (ducknng_query_rpc_open_session(bind, sql, &errmsg) != 0) {
+    if (ducknng_query_rpc_open_session(bind, sql,
+            with_params ? params_val : NULL, &errmsg) != 0) {
         duckdb_free(sql);
+        if (with_params) duckdb_destroy_value(&params_val);
         destroy_query_rpc_bind_data(bind);
         duckdb_bind_set_error(info, errmsg ? errmsg : "ducknng: query_open failed");
         if (errmsg) duckdb_free(errmsg);
         return;
     }
+    if (with_params) duckdb_destroy_value(&params_val);
     duckdb_free(sql);
     if (ducknng_query_rpc_fetch_batch(bind, &errmsg) != 0) {
         destroy_query_rpc_bind_data(bind);
@@ -1402,6 +1459,120 @@ static void ducknng_query_rpc_bind(duckdb_bind_info info) {
     }
     duckdb_bind_set_bind_data(info, bind, destroy_query_rpc_bind_data);
     duckdb_bind_set_cardinality(info, bind->row_count, true);
+}
+
+static void ducknng_query_rpc_bind(duckdb_bind_info info) {
+    ducknng_query_rpc_bind_impl(info, 0);
+}
+
+static void ducknng_query_rpc_params_bind(duckdb_bind_info info) {
+    ducknng_query_rpc_bind_impl(info, 1);
+}
+
+static void ducknng_prepare_query_bind_impl(duckdb_bind_info info,
+    int with_params) {
+    ducknng_query_rpc_bind_data *bind = NULL;
+    ducknng_sql_context *ctx = (ducknng_sql_context *)duckdb_bind_get_extra_info(info);
+    duckdb_value url_val = NULL;
+    duckdb_value sql_val = NULL;
+    duckdb_value params_val = NULL;
+    duckdb_value tls_val = NULL;
+    const ducknng_tls_opts *tls_opts = NULL;
+    char *sql = NULL;
+    uint8_t *payload = NULL;
+    size_t payload_len = 0;
+    nng_msg *response = NULL;
+    ducknng_frame frame;
+    char *errmsg = NULL;
+    idx_t param_count = duckdb_bind_get_parameter_count(info);
+    if (ducknng_reject_table_inside_authorizer(info, ctx)) return;
+    if ((!with_params && param_count != 3) || (with_params && param_count != 4)) {
+        duckdb_bind_set_error(info, with_params
+            ? "ducknng: ducknng_prepare_query_params(url, sql, params, tls_config_id) requires four parameters"
+            : "ducknng: ducknng_prepare_query(url, sql, tls_config_id) requires three parameters");
+        return;
+    }
+    url_val = duckdb_bind_get_parameter(info, 0);
+    sql_val = duckdb_bind_get_parameter(info, 1);
+    if (with_params) {
+        params_val = duckdb_bind_get_parameter(info, 2);
+        tls_val = duckdb_bind_get_parameter(info, 3);
+    } else {
+        tls_val = duckdb_bind_get_parameter(info, 2);
+    }
+    bind = (ducknng_query_rpc_bind_data *)duckdb_malloc(sizeof(*bind));
+    if (!bind) {
+        duckdb_bind_set_error(info, "ducknng: out of memory");
+        goto cleanup;
+    }
+    memset(bind, 0, sizeof(*bind));
+    bind->ctx = ctx;
+    bind->url = duckdb_get_varchar(url_val);
+    bind->tls_config_id = (uint64_t)duckdb_get_uint64(tls_val);
+    sql = duckdb_get_varchar(sql_val);
+    if (!bind->url || !bind->url[0] || !sql || !sql[0]) {
+        duckdb_bind_set_error(info,
+            with_params
+                ? "ducknng: ducknng_prepare_query_params requires non-empty url and sql"
+                : "ducknng: ducknng_prepare_query requires non-empty url and sql");
+        goto cleanup;
+    }
+    if (ducknng_query_rpc_encode_query_request(bind, sql,
+            with_params ? params_val : NULL, 0, 0, &payload, &payload_len,
+            &errmsg) != 0 ||
+        ducknng_lookup_tls_opts(ctx, bind->tls_config_id, &tls_opts, &errmsg) != 0) {
+        duckdb_bind_set_error(info, errmsg ? errmsg :
+            "ducknng: failed to encode query_prepare request");
+        goto cleanup;
+    }
+    response = ducknng_client_method_roundtrip_tls(bind->url, "query_prepare",
+        payload, payload_len, 5000, tls_opts, &errmsg);
+    if (!response || ducknng_decode_request(response, &frame) != 0) {
+        duckdb_bind_set_error(info, errmsg ? errmsg :
+            "ducknng: query_prepare transport failed");
+        goto cleanup;
+    }
+    if (frame.type == DUCKNNG_RPC_ERROR) {
+        errmsg = ducknng_frame_error_detail(&frame,
+            "ducknng: query_prepare failed");
+        duckdb_bind_set_error(info, errmsg ? errmsg :
+            "ducknng: query_prepare failed");
+        goto cleanup;
+    }
+    if (!(frame.flags & DUCKNNG_RPC_FLAG_RESULT_ROWS) ||
+        !(frame.flags & DUCKNNG_RPC_FLAG_PAYLOAD_ARROW_STREAM) ||
+        ducknng_decode_ipc_table_payload(frame.payload,
+            (size_t)frame.payload_len, &bind->schema, &bind->array,
+            &errmsg) != 0 ||
+        ducknng_sql_arrow_bind_result_columns(info, &bind->schema, &errmsg) != 0) {
+        duckdb_bind_set_error(info, errmsg ? errmsg :
+            "ducknng: invalid query_prepare Arrow schema reply");
+        goto cleanup;
+    }
+    duckdb_bind_set_bind_data(info, bind, destroy_query_rpc_bind_data);
+    duckdb_bind_set_cardinality(info, 0, true);
+    bind = NULL;
+cleanup:
+    if (response) nng_msg_free(response);
+    if (payload) duckdb_free(payload);
+    if (sql) duckdb_free(sql);
+    if (url_val) duckdb_destroy_value(&url_val);
+    if (sql_val) duckdb_destroy_value(&sql_val);
+    if (params_val) duckdb_destroy_value(&params_val);
+    if (tls_val) duckdb_destroy_value(&tls_val);
+    if (errmsg) duckdb_free(errmsg);
+    if (bind) destroy_query_rpc_bind_data(bind);
+}
+
+static void ducknng_prepare_query_bind(duckdb_bind_info info) {
+    ducknng_prepare_query_bind_impl(info,
+        duckdb_bind_get_parameter_count(info) == 4);
+}
+
+static void ducknng_prepare_query_scan(duckdb_function_info info,
+    duckdb_data_chunk output) {
+    (void)info;
+    duckdb_data_chunk_set_size(output, 0);
 }
 
 static void ducknng_query_rpc_init(duckdb_init_info info) {
@@ -1558,70 +1729,78 @@ static void ducknng_get_rpc_manifest_scan(duckdb_function_info info, duckdb_data
     init->emitted = 1;
 }
 
-static void ducknng_run_rpc_bind(duckdb_bind_info info) {
+static void ducknng_run_rpc_bind_impl(duckdb_bind_info info, int with_params) {
     ducknng_exec_result_bind_data *bind;
     duckdb_logical_type type;
-    duckdb_value url_val;
-    duckdb_value sql_val;
-    duckdb_value tls_val;
-    char *url;
-    char *sql;
-    uint64_t tls_config_id;
-    const ducknng_tls_opts *tls_opts = NULL;
+    duckdb_value url_val = NULL;
+    duckdb_value sql_val = NULL;
+    duckdb_value params_val = NULL;
+    duckdb_value tls_val = NULL;
+    char *sql = NULL;
     char *errmsg = NULL;
-    nng_msg *resp_msg = NULL;
-    ducknng_frame frame;
     ducknng_sql_context *ctx = (ducknng_sql_context *)duckdb_bind_get_extra_info(info);
     if (ducknng_reject_table_inside_authorizer(info, ctx)) return;
+    if ((!with_params && duckdb_bind_get_parameter_count(info) != 3) ||
+        (with_params && duckdb_bind_get_parameter_count(info) != 4)) {
+        duckdb_bind_set_error(info, with_params
+            ? "ducknng: ducknng_run_rpc_params(url, sql, params, tls_config_id) requires four parameters"
+            : "ducknng: ducknng_run_rpc(url, sql, tls_config_id) requires three parameters");
+        return;
+    }
     bind = (ducknng_exec_result_bind_data *)duckdb_malloc(sizeof(*bind));
     if (!bind) {
         duckdb_bind_set_error(info, "ducknng: out of memory");
         return;
     }
     memset(bind, 0, sizeof(*bind));
+    bind->ctx = ctx;
     url_val = duckdb_bind_get_parameter(info, 0);
     sql_val = duckdb_bind_get_parameter(info, 1);
-    tls_val = duckdb_bind_get_parameter(info, 2);
-    url = duckdb_get_varchar(url_val);
+    if (with_params) {
+        params_val = duckdb_bind_get_parameter(info, 2);
+        tls_val = duckdb_bind_get_parameter(info, 3);
+    } else {
+        tls_val = duckdb_bind_get_parameter(info, 2);
+    }
+    bind->url = duckdb_get_varchar(url_val);
     sql = duckdb_get_varchar(sql_val);
-    tls_config_id = (uint64_t)duckdb_get_uint64(tls_val);
-    duckdb_destroy_value(&url_val);
-    duckdb_destroy_value(&sql_val);
-    duckdb_destroy_value(&tls_val);
-    if (!url || !url[0] || !sql || !sql[0]) {
+    bind->tls_config_id = (uint64_t)duckdb_get_uint64(tls_val);
+    if (!bind->url || !bind->url[0] || !sql || !sql[0]) {
         bind->ok = false;
         bind->error = ducknng_strdup("ducknng: remote exec URL and SQL must not be NULL or empty");
-    } else if (ducknng_lookup_tls_opts(ctx, tls_config_id, &tls_opts, &errmsg) != 0) {
-        bind->ok = false;
-        bind->error = errmsg ? errmsg : ducknng_strdup("ducknng: tls config not found");
-        errmsg = NULL;
-    } else {
-        resp_msg = ducknng_client_roundtrip_tls(url, ducknng_client_exec_request(sql, 0, &errmsg), 5000, tls_opts, &errmsg, NULL);
-        if (!resp_msg) {
-            bind->ok = false;
-            bind->error = errmsg ? errmsg : ducknng_strdup("ducknng: remote exec request failed");
-            errmsg = NULL;
-        } else if (ducknng_decode_request(resp_msg, &frame) != 0) {
-            bind->ok = false;
-            bind->error = ducknng_strdup("ducknng: invalid remote exec response envelope");
-        } else if (frame.type == DUCKNNG_RPC_ERROR) {
-            bind->ok = false;
-            bind->error = ducknng_frame_error_detail(&frame, "ducknng: remote exec request failed");
-        } else if (frame.type != DUCKNNG_RPC_RESULT || !(frame.flags & DUCKNNG_RPC_FLAG_RESULT_METADATA)) {
-            bind->ok = false;
-            bind->error = ducknng_strdup("ducknng: remote exec expected metadata reply");
-        } else if (ducknng_decode_exec_metadata_payload(frame.payload, (size_t)frame.payload_len,
-                &bind->rows_changed, (uint32_t *)&bind->statement_type, (uint32_t *)&bind->result_type, &errmsg) != 0) {
-            bind->ok = false;
-            bind->error = errmsg ? errmsg : ducknng_strdup("ducknng: failed to decode remote exec metadata");
-            errmsg = NULL;
+    } else if (with_params) {
+        duckdb_connection codec_con = ctx && ctx->rt
+            ? ducknng_runtime_codec_connection(ctx->rt) : NULL;
+        int encode_rc;
+        if (!codec_con) {
+            bind->error = ducknng_strdup(
+                "ducknng: no local connection is available to encode exec parameters");
         } else {
-            bind->ok = true;
+            ducknng_runtime_codec_connection_lock(ctx->rt);
+            encode_rc = ducknng_exec_request_with_params_to_ipc(codec_con, sql,
+                0, params_val, &bind->request_payload,
+                &bind->request_payload_len, &errmsg);
+            ducknng_runtime_codec_connection_unlock(ctx->rt);
+            if (encode_rc != 0) {
+                bind->error = errmsg ? errmsg : ducknng_strdup(
+                    "ducknng: failed to encode parameterized exec request");
+                errmsg = NULL;
+            }
+        }
+    } else {
+        if (ducknng_exec_request_to_ipc(sql, 0, &bind->request_payload,
+                &bind->request_payload_len, &errmsg) != 0) {
+            bind->error = errmsg ? errmsg : ducknng_strdup(
+                "ducknng: failed to encode exec request");
+            errmsg = NULL;
         }
     }
-    if (resp_msg) nng_msg_free(resp_msg);
-    if (url) duckdb_free(url);
     if (sql) duckdb_free(sql);
+    if (url_val) duckdb_destroy_value(&url_val);
+    if (sql_val) duckdb_destroy_value(&sql_val);
+    if (params_val) duckdb_destroy_value(&params_val);
+    if (tls_val) duckdb_destroy_value(&tls_val);
+    if (errmsg) duckdb_free(errmsg);
     type = duckdb_create_logical_type(DUCKDB_TYPE_BOOLEAN);
     duckdb_bind_add_result_column(info, "ok", type);
     duckdb_destroy_logical_type(&type);
@@ -1639,6 +1818,14 @@ static void ducknng_run_rpc_bind(duckdb_bind_info info) {
     duckdb_bind_set_cardinality(info, 1, true);
 }
 
+static void ducknng_run_rpc_bind(duckdb_bind_info info) {
+    ducknng_run_rpc_bind_impl(info, 0);
+}
+
+static void ducknng_run_rpc_params_bind(duckdb_bind_info info) {
+    ducknng_run_rpc_bind_impl(info, 1);
+}
+
 static void ducknng_run_rpc_scan(duckdb_function_info info, duckdb_data_chunk output) {
     ducknng_single_row_init_data *init = (ducknng_single_row_init_data *)duckdb_function_get_init_data(info);
     ducknng_exec_result_bind_data *bind = (ducknng_exec_result_bind_data *)duckdb_function_get_bind_data(info);
@@ -1649,6 +1836,49 @@ static void ducknng_run_rpc_scan(duckdb_function_info info, duckdb_data_chunk ou
     if (!init || !bind || init->emitted) {
         duckdb_data_chunk_set_size(output, 0);
         return;
+    }
+    if (!bind->executed) {
+        const ducknng_tls_opts *tls_opts = NULL;
+        char *errmsg = NULL;
+        nng_msg *resp_msg = NULL;
+        ducknng_frame frame;
+        bind->executed = 1;
+        if (!bind->error && ducknng_lookup_tls_opts(bind->ctx,
+                bind->tls_config_id, &tls_opts, &errmsg) != 0) {
+            bind->error = errmsg ? errmsg : ducknng_strdup(
+                "ducknng: tls config not found");
+            errmsg = NULL;
+        }
+        if (!bind->error) {
+            resp_msg = ducknng_client_method_roundtrip_tls(bind->url, "exec",
+                bind->request_payload, bind->request_payload_len, 5000,
+                tls_opts, &errmsg);
+            if (!resp_msg) {
+                bind->error = errmsg ? errmsg : ducknng_strdup(
+                    "ducknng: remote exec request failed");
+                errmsg = NULL;
+            } else if (ducknng_decode_request(resp_msg, &frame) != 0) {
+                bind->error = ducknng_strdup(
+                    "ducknng: invalid remote exec response envelope");
+            } else if (frame.type == DUCKNNG_RPC_ERROR) {
+                bind->error = ducknng_frame_error_detail(&frame,
+                    "ducknng: remote exec request failed");
+            } else if (frame.type != DUCKNNG_RPC_RESULT ||
+                !(frame.flags & DUCKNNG_RPC_FLAG_RESULT_METADATA)) {
+                bind->error = ducknng_strdup(
+                    "ducknng: remote exec expected metadata reply");
+            } else if (ducknng_decode_exec_metadata_payload(frame.payload,
+                    (size_t)frame.payload_len, &bind->rows_changed,
+                    (uint32_t *)&bind->statement_type,
+                    (uint32_t *)&bind->result_type, &errmsg) != 0) {
+                bind->error = errmsg ? errmsg : ducknng_strdup(
+                    "ducknng: failed to decode remote exec metadata");
+                errmsg = NULL;
+            }
+        }
+        bind->ok = bind->error == NULL;
+        if (resp_msg) nng_msg_free(resp_msg);
+        if (errmsg) duckdb_free(errmsg);
     }
     ok_data = (bool *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 0));
     rows_changed = (uint64_t *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 2));
@@ -2011,6 +2241,31 @@ static int register_remote_table_named(duckdb_connection con, ducknng_sql_contex
         ducknng_query_rpc_init, ducknng_query_rpc_scan);
 }
 
+static int register_remote_table_params(duckdb_connection con,
+    ducknng_sql_context *ctx) {
+    duckdb_type param_types[4] = {DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_VARCHAR,
+        DUCKDB_TYPE_ANY, DUCKDB_TYPE_UBIGINT};
+    if (!ctx || !ctx->rt) return 0;
+    return DUCKNNG_REGISTER_TABLE(con, "ducknng_query_rpc_params", ctx, 4,
+        param_types, ducknng_query_rpc_params_bind, ducknng_query_rpc_init,
+        ducknng_query_rpc_scan);
+}
+
+static int register_prepare_query_tables(duckdb_connection con,
+    ducknng_sql_context *ctx) {
+    duckdb_type plain[3] = {DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_VARCHAR,
+        DUCKDB_TYPE_UBIGINT};
+    duckdb_type parameterized[4] = {DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_VARCHAR,
+        DUCKDB_TYPE_ANY, DUCKDB_TYPE_UBIGINT};
+    if (!ctx || !ctx->rt) return 0;
+    if (!DUCKNNG_REGISTER_TABLE(con, "ducknng_prepare_query", ctx, 3, plain,
+            ducknng_prepare_query_bind, ducknng_query_rpc_init,
+            ducknng_prepare_query_scan)) return 0;
+    return DUCKNNG_REGISTER_TABLE(con, "ducknng_prepare_query_params", ctx, 4,
+        parameterized, ducknng_prepare_query_bind, ducknng_query_rpc_init,
+        ducknng_prepare_query_scan);
+}
+
 static int register_manifest_result_table_named(duckdb_connection con, ducknng_sql_context *ctx, const char *name) {
     duckdb_type param_types[2] = {DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_UBIGINT};
     if (!ctx || !ctx->rt) return 0;
@@ -2023,6 +2278,16 @@ static int register_exec_result_table_named(duckdb_connection con, ducknng_sql_c
     if (!ctx || !ctx->rt) return 0;
     return DUCKNNG_REGISTER_TABLE(con, name, ctx, 3, param_types, ducknng_run_rpc_bind,
         ducknng_single_row_init, ducknng_run_rpc_scan);
+}
+
+static int register_exec_params_result_table(duckdb_connection con,
+    ducknng_sql_context *ctx) {
+    duckdb_type param_types[4] = {DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_VARCHAR,
+        DUCKDB_TYPE_ANY, DUCKDB_TYPE_UBIGINT};
+    if (!ctx || !ctx->rt) return 0;
+    return DUCKNNG_REGISTER_TABLE(con, "ducknng_run_rpc_params", ctx, 4,
+        param_types, ducknng_run_rpc_params_bind, ducknng_single_row_init,
+        ducknng_run_rpc_scan);
 }
 
 static int register_request_result_table_named(duckdb_connection con, ducknng_sql_context *ctx, const char *name) {
@@ -2099,8 +2364,11 @@ int ducknng_register_sql_rpc(duckdb_connection connection, ducknng_sql_context *
     if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(connection, "ducknng_request_raw", 4, ducknng_request_raw_scalar, ctx, request_tls_types, DUCKDB_TYPE_BLOB)) return 0;
     if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(connection, "ducknng_request_socket_raw", 3, ducknng_request_socket_scalar, ctx, request_socket_types, DUCKDB_TYPE_BLOB)) return 0;
     if (!register_remote_table_named(connection, ctx, "ducknng_query_rpc")) return 0;
+    if (!register_remote_table_params(connection, ctx)) return 0;
+    if (!register_prepare_query_tables(connection, ctx)) return 0;
     if (!register_manifest_result_table_named(connection, ctx, "ducknng_get_rpc_manifest")) return 0;
     if (!register_exec_result_table_named(connection, ctx, "ducknng_run_rpc")) return 0;
+    if (!register_exec_params_result_table(connection, ctx)) return 0;
     if (!register_request_result_table_named(connection, ctx, "ducknng_request")) return 0;
     if (!register_request_socket_result_table_named(connection, ctx, "ducknng_request_socket")) return 0;
     if (!register_http_result_table_named(connection, ctx, "ducknng_ncurl")) return 0;

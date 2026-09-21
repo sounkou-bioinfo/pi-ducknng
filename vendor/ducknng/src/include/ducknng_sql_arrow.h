@@ -6,6 +6,9 @@
 
 int ducknng_sql_arrow_schema_to_logical_type(const struct ArrowSchema *schema,
     duckdb_logical_type *out_type, char **errmsg);
+int ducknng_sql_arrow_value_at(const struct ArrowSchema *schema,
+    struct ArrowArrayView *view, idx_t index, duckdb_value *out_value,
+    char **errmsg);
 int ducknng_sql_arrow_bind_result_columns(duckdb_bind_info info,
     const struct ArrowSchema *schema, char **errmsg);
 int ducknng_sql_arrow_assign_column(duckdb_vector vec, struct ArrowArrayView *col_view,
