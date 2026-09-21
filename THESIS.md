@@ -27,6 +27,13 @@ Each describe or call opens and closes its own in-memory DuckDB instance.
 Endpoint state belongs to the endpoint process and survives those clients.
 The generic tools refuse a URL that the coordination adapter has claimed.
 
+For `tls+tcp://` and `wss://` URLs, each fresh client builds a ducknng TLS
+configuration. `PI_DUCKNNG_TLS_CA_FILE` is required and verifies the server.
+`PI_DUCKNNG_TLS_CERT_KEY_FILE` optionally names a combined certificate and key
+PEM file that authenticates the client for mutual TLS. The file paths are bound
+as SQL parameters. Neither the paths nor the key material enter tool schemas
+or results.
+
 ## R endpoint
 
 `tools/pi-r-endpoint.R` declares `eval` and `close`. `eval` accepts R source
@@ -206,6 +213,12 @@ state persistence and an active binding in a selected environment.
 - stale-process handling and cleanup;
 - an R endpoint that outlives idle polls and exits after its parent.
 
+`test/pi-extension-tls.test.js` issues a throwaway CA, server certificate, and
+client certificate. It checks that the generic tools reach a mutual-TLS
+ducknng listener only with the injected client certificate. When the loaded
+ducknng supports SQL-defined methods, it also checks that a method called over
+that connection sees the client's verified peer identity.
+
 `test/coordination-endpoint.test.js` runs two extension sessions against a
 real endpoint. It checks:
 
@@ -254,5 +267,6 @@ executable proof before it is added:
 
 - structured R conditions, interruption, streaming, and attachment to the R
   endpoint by a second non-Pi client;
-- authenticated identities, TLS, and cross-user or cross-host deployment;
+- a coordination endpoint that authenticates agents by mTLS peer identity,
+  and cross-user or cross-host deployment;
 - broadcast delivery to several mailboxes.

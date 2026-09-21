@@ -104,6 +104,41 @@ async function openDucknngConnection(
   }
 }
 
+/**
+ * Client TLS material is injected at the process boundary: PEM file paths come
+ * from the environment, are bound as SQL parameters, and never appear in tool
+ * schemas or results. A TLS URL always verifies the server against
+ * PI_DUCKNNG_TLS_CA_FILE; PI_DUCKNNG_TLS_CERT_KEY_FILE adds a client
+ * certificate for mutual TLS.
+ */
+function usesTls(url: string): boolean {
+  return /^(tls\+tcp|wss):\/\//i.test(url);
+}
+
+async function clientTlsConfigId(
+  connection: DuckDBConnection,
+  url: string,
+): Promise<number> {
+  if (!usesTls(url)) return 0;
+  const caFile = process.env.PI_DUCKNNG_TLS_CA_FILE?.trim();
+  if (!caFile) {
+    throw new Error(
+      "TLS endpoints require PI_DUCKNNG_TLS_CA_FILE to verify the server",
+    );
+  }
+  const certKeyFile = process.env.PI_DUCKNNG_TLS_CERT_KEY_FILE?.trim() || null;
+  const reader = await connection.runAndReadAll(
+    `SELECT ducknng_tls_config_from_files($cert_key_file, $ca_file, NULL, 2)::UBIGINT AS id`,
+    { cert_key_file: certKeyFile, ca_file: caFile },
+  );
+  const [row] = reader.getRowObjects();
+  const id = Number(row?.id);
+  if (!Number.isSafeInteger(id) || id <= 0) {
+    throw new Error("ducknng did not create a client TLS configuration");
+  }
+  return id;
+}
+
 function blobBytes(value: unknown): Uint8Array {
   if (value instanceof Uint8Array) return value;
   if (
@@ -381,7 +416,7 @@ async function manifestThroughDucknng(
   try {
     const reader = await connection.runAndReadAll(MANIFEST_SQL, {
       url,
-      tls_config_id: 0,
+      tls_config_id: await clientTlsConfigId(connection, url),
     });
     const [row] = reader.getRowObjects();
     if (!row || row.type_name !== "result" || row.name !== "manifest") {
@@ -410,7 +445,7 @@ async function rpcCallThroughDucknng(
       url,
       frame_hex: frameHex,
       timeout: timeoutMs,
-      tls_config_id: 0,
+      tls_config_id: await clientTlsConfigId(connection, url),
     });
     const [row] = reader.getRowObjects();
     if (!row || row.type_name !== "result") {
