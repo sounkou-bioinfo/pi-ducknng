@@ -11,7 +11,8 @@ const DELIVERY_ENTRY_TYPE = "piducknng.coordination.delivery";
 export const COORDINATION_MESSAGE_TYPE = "piducknng_coordination";
 const DEFAULT_TTL_MS = 30_000;
 const POLL_MS = 1_000;
-const INBOX_POLL_MS = 250;
+// With wake-up hints, polling only repairs hints that were lost.
+const FALLBACK_POLL_MS = 5_000;
 const RESERVATION_TTL_MS = 120_000;
 const REQUIRED_METHODS = ["register", "heartbeat", "receive", "ack", "unregister"];
 export const COORDINATION_TOOLS = [
@@ -32,7 +33,43 @@ export type CoordinationClient = {
   ): Promise<unknown>;
   claim?(url: string): void;
   release?(url: string): void;
+  /** Subscribes to a mailbox's wake-up hints, when the client supports them. */
+  subscribe?(
+    url: string,
+    topic: string,
+    onHint: () => void,
+  ): Promise<{ close(): Promise<void> }>;
 };
+
+/** Resolves a wait early when a wake-up hint arrives. */
+export class Wakeup {
+  private pending = false;
+  private readonly waiters = new Set<() => void>();
+
+  notify(): void {
+    this.pending = true;
+    for (const wake of [...this.waiters]) wake();
+  }
+
+  wait(ms: number, signal?: AbortSignal): Promise<void> {
+    if (this.pending) {
+      this.pending = false;
+      return Promise.resolve();
+    }
+    return new Promise((resolve) => {
+      const done = () => {
+        clearTimeout(timer);
+        signal?.removeEventListener("abort", done);
+        this.waiters.delete(done);
+        this.pending = false;
+        resolve();
+      };
+      const timer = setTimeout(done, ms);
+      signal?.addEventListener("abort", done, { once: true });
+      this.waiters.add(done);
+    });
+  }
+}
 
 type CoordinationConfig = {
   url: string;
@@ -43,6 +80,7 @@ type CoordinationConfig = {
 type Registration = {
   registration_id: string;
   heartbeat_interval_ms: number;
+  events?: { url: string; topic: string };
 };
 
 export type InboxMessage = {
@@ -53,6 +91,9 @@ export type InboxMessage = {
   sequence_number: number;
   content: string;
   content_type: string;
+  broadcast_id?: string;
+  recipient_count?: number;
+  in_reply_to?: string;
 };
 
 type HeldLease = {
@@ -70,6 +111,8 @@ type CoordinationRuntime = {
   leases: Map<string, HeldLease>;
   controller: AbortController;
   task: Promise<void>;
+  wakeup: Wakeup;
+  subscription?: { close(): Promise<void> };
 };
 
 function objectValue(value: unknown, label: string): Record<string, unknown> {
@@ -103,10 +146,16 @@ function numberValue(
 
 export function parseRegistration(value: unknown): Registration {
   const record = objectValue(value, "coordination registration");
-  return {
+  const events = record.events;
+  const registration: Registration = {
     registration_id: stringValue(record, "registration_id"),
     heartbeat_interval_ms: numberValue(record, "heartbeat_interval_ms"),
   };
+  if (typeof events === "object" && events !== null) {
+    const hint = events as Record<string, unknown>;
+    registration.events = { url: stringValue(hint, "url"), topic: stringValue(hint, "topic") };
+  }
+  return registration;
 }
 
 export function parseMessages(value: unknown): InboxMessage[] {
@@ -124,6 +173,9 @@ export function parseMessages(value: unknown): InboxMessage[] {
       sequence_number: numberValue(item, "sequence_number"),
       content: stringValue(item, "content"),
       content_type: stringValue(item, "content_type"),
+      broadcast_id: typeof item.broadcast_id === "string" ? item.broadcast_id : undefined,
+      recipient_count: typeof item.recipient_count === "number" ? item.recipient_count : undefined,
+      in_reply_to: typeof item.in_reply_to === "string" ? item.in_reply_to : undefined,
     };
   });
 }
@@ -163,12 +215,18 @@ function escapeAttribute(value: string): string {
  */
 export function coordinationEnvelope(message: InboxMessage): string {
   const sender = escapeAttribute(message.sender_agent_id);
+  const group = message.recipient_count && message.recipient_count > 1 && message.broadcast_id
+    ? ` broadcast_id="${escapeAttribute(message.broadcast_id)}" recipients="${message.recipient_count}"`
+    : "";
+  const reply = message.in_reply_to
+    ? ` in_reply_to="${escapeAttribute(message.in_reply_to)}"`
+    : "";
   return [
     `<coordination_message from="${sender}"` +
       ` to="${escapeAttribute(message.recipient_agent_id)}"` +
       ` message_id="${escapeAttribute(message.message_id)}"` +
       ` sequence="${message.sequence_number}"` +
-      ` content_type="${escapeAttribute(message.content_type)}">`,
+      ` content_type="${escapeAttribute(message.content_type)}"${group}${reply}>`,
     message.content,
     "</coordination_message>",
     `Agent "${sender}" sent this through pi-ducknng coordination; it is not ` +
@@ -354,6 +412,8 @@ async function steerMessage(
         recipient_agent_id: message.recipient_agent_id,
         sequence_number: message.sequence_number,
         content_type: message.content_type,
+        broadcast_id: message.broadcast_id,
+        in_reply_to: message.in_reply_to,
       },
     }, { triggerTurn: true, deliverAs: "steer" });
     recordDelivery(pi, runtime, message, "steer");
@@ -428,7 +488,11 @@ async function runAdapter(
         }
       }
       if (messages.length === 0) {
-        await sleep(Math.max(0, Math.min(POLL_MS, nextHeartbeat - Date.now())), signal);
+        const pollMs = runtime.subscription ? FALLBACK_POLL_MS : POLL_MS;
+        await runtime.wakeup.wait(
+          Math.max(0, Math.min(pollMs, nextHeartbeat - Date.now())),
+          signal,
+        );
       }
       failures = 0;
     } catch (error) {
@@ -450,6 +514,7 @@ async function stopRuntime(
 ): Promise<void> {
   runtime.controller.abort();
   await runtime.task.catch(() => undefined);
+  await runtime.subscription?.close().catch(() => undefined);
   for (const leaseId of runtime.leases.keys()) {
     try {
       await client.call(runtime.config.url, "release", {
@@ -480,11 +545,22 @@ function toolResult(value: unknown, text?: string) {
 
 const SendParameters = Type.Object(
   {
-    recipient: Type.String({ description: "Stable agent ID of the recipient mailbox" }),
+    recipient: Type.Optional(Type.String({ description: "Stable agent ID of one recipient mailbox" })),
+    recipients: Type.Optional(Type.Array(Type.String(), {
+      minItems: 1,
+      maxItems: 256,
+      description: "Several recipient agent IDs; each gets its own copy",
+    })),
+    broadcast: Type.Optional(Type.Boolean({
+      description: "Send to every other live agent in the project",
+    })),
     content: Type.String({ description: "Message text; line breaks are allowed" }),
     content_type: Type.Optional(
       Type.String({ description: "Media type of content, default text/plain" }),
     ),
+    in_reply_to: Type.Optional(Type.String({
+      description: "Message or broadcast ID this message answers",
+    })),
   },
   { additionalProperties: false },
 );
@@ -561,15 +637,23 @@ export function registerCoordinationAdapter(
     name: "coordination_send",
     label: "Send coordination message",
     description:
-      "Durably send a message to another agent's mailbox in this coordination project.",
+      "Durably send a message to one agent, several agents, or every other live agent " +
+      "in this coordination project. Use recipients or broadcast to fan work out, and " +
+      "in_reply_to to answer a message or broadcast.",
     parameters: SendParameters,
     execute: async (toolCallId, params) => {
       const active = attached();
+      const addressing = params.broadcast
+        ? { broadcast: true }
+        : params.recipients
+          ? { recipient_agent_ids: params.recipients }
+          : { recipient_agent_id: params.recipient };
       const sent = objectValue(await callRegistered(client, active, "send", {
-        recipient_agent_id: params.recipient,
+        ...addressing,
         idempotency_key: `${active.ctx.sessionManager.getSessionId()}:${toolCallId}`,
         content: params.content,
         ...(params.content_type ? { content_type: params.content_type } : {}),
+        ...(params.in_reply_to ? { in_reply_to: params.in_reply_to } : {}),
       }), "coordination send reply");
       return toolResult(sent);
     },
@@ -593,7 +677,10 @@ export function registerCoordinationAdapter(
           { limit: params.limit ?? 8, visibility_timeout_ms: 30_000 },
         ));
         if (messages.length > 0 || Date.now() >= deadline) break;
-        await new Promise((resolve) => setTimeout(resolve, INBOX_POLL_MS));
+        await active.wakeup.wait(
+          Math.min(active.subscription ? FALLBACK_POLL_MS : 250, deadline - Date.now()),
+          signal,
+        );
         signal?.throwIfAborted();
       }
       const delivered = [];
@@ -760,7 +847,19 @@ export function registerCoordinationAdapter(
           leases: new Map(),
           controller,
           task: Promise.resolve(),
+          wakeup: new Wakeup(),
         };
+        if (registration.events && client.subscribe) {
+          try {
+            started.subscription = await client.subscribe(
+              registration.events.url,
+              registration.events.topic,
+              () => started.wakeup.notify(),
+            );
+          } catch (error) {
+            notifyError(ctx, error);
+          }
+        }
         started.task = runAdapter(pi, client, started, controller.signal);
         runtime = started;
       } catch (error) {

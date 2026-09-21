@@ -109,7 +109,6 @@
         "type": "object",
         "required": [
           "registration_id",
-          "recipient_agent_id",
           "idempotency_key",
           "content"
         ],
@@ -121,7 +120,7 @@
           },
           "recipient_agent_id": {
             "type": "string",
-            "description": "Stable mailbox owner",
+            "description": "One recipient mailbox",
             "maxLength": 128
           },
           "idempotency_key": {
@@ -145,10 +144,46 @@
             "default": 604800000,
             "minimum": 60000,
             "maximum": 2592000000
+          },
+          "recipient_agent_ids": {
+            "type": "array",
+            "description": "Several recipient mailboxes",
+            "items": {
+              "type": "string",
+              "maxLength": 128
+            },
+            "minItems": 1,
+            "maxItems": 256
+          },
+          "broadcast": {
+            "type": "boolean",
+            "description": "Send to every other live agent in the project"
+          },
+          "in_reply_to": {
+            "type": "string",
+            "description": "Message or broadcast ID this message answers",
+            "maxLength": 64
           }
         },
         "additionalProperties": false,
-        "description": "Durably enqueue one idempotent message to a stable agent mailbox"
+        "description": "Durably send one idempotent message to one mailbox, several mailboxes, or every other live agent",
+        "oneOf": [
+          {
+            "required": [
+              "recipient_agent_id"
+            ]
+          },
+          {
+            "required": [
+              "recipient_agent_ids"
+            ]
+          },
+          {
+            "required": [
+              "broadcast"
+            ]
+          }
+        ]
       }
     },
     {

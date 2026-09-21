@@ -7,10 +7,16 @@ CREATE TABLE IF NOT EXISTS coordination_meta (
   fixed_now_ms BIGINT,
   maintained_at_ms BIGINT NOT NULL,
   retention_ms BIGINT NOT NULL,
-  max_pending_per_mailbox BIGINT NOT NULL
+  max_pending_per_mailbox BIGINT NOT NULL,
+  -- Wake-up hints: the host's PUB socket, its URL, and the salt that keeps
+  -- mailbox topics unguessable without a registration.
+  event_socket_id UBIGINT,
+  event_url VARCHAR,
+  event_salt VARCHAR NOT NULL
 );
 
-INSERT INTO coordination_meta VALUES (TRUE, 1, NULL, 0, 2592000000, 10000)
+INSERT INTO coordination_meta
+  VALUES (TRUE, 1, NULL, 0, 2592000000, 10000, NULL, NULL, uuid()::VARCHAR)
   ON CONFLICT (singleton) DO NOTHING;
 
 -- A verified peer identity may act only as the (project, agent) pairs granted
@@ -57,6 +63,10 @@ CREATE TABLE IF NOT EXISTS coordination_messages (
   sequence_number BIGINT NOT NULL,
   content VARCHAR NOT NULL,
   content_type VARCHAR NOT NULL,
+  -- One send to several mailboxes shares a broadcast_id.
+  broadcast_id VARCHAR NOT NULL,
+  recipient_count INTEGER NOT NULL,
+  in_reply_to VARCHAR,
   created_at_ms BIGINT NOT NULL,
   expires_at_ms BIGINT NOT NULL,
   state VARCHAR NOT NULL,
@@ -68,7 +78,7 @@ CREATE TABLE IF NOT EXISTS coordination_messages (
   delivery_ref VARCHAR,
   delivery_capability VARCHAR,
   ack_instance_id VARCHAR,
-  UNIQUE (project_id, sender_agent_id, idempotency_key)
+  UNIQUE (project_id, sender_agent_id, idempotency_key, recipient_agent_id)
 );
 
 CREATE TABLE IF NOT EXISTS coordination_fencing_counters (
@@ -217,4 +227,37 @@ CREATE OR REPLACE MACRO coord_conflict(l, r) AS (
       OR starts_with(l, r || '/') OR starts_with(r, l || '/')
     )
   )
+);
+
+-- Opaque per-mailbox hint topic; a hint carries only this value.
+CREATE OR REPLACE MACRO coord_topic(project, agent) AS (
+  SELECT left(sha256(event_salt || chr(0) || project || chr(0) || agent), 32)
+  FROM coordination_meta
+);
+
+CREATE OR REPLACE MACRO coord_events(project, agent) AS (
+  SELECT CASE WHEN event_url IS NOT NULL THEN
+    struct_pack(url := event_url, topic := coord_topic(project, agent))
+  END
+  FROM coordination_meta
+);
+
+-- An explicit recipient list: 1 to 256 bounded identifiers, deduplicated.
+CREATE OR REPLACE MACRO coord_recipients(p) AS (
+  CASE
+    WHEN coalesce(json_type(p, '$.recipient_agent_ids'), 'NULL') = 'NULL' THEN NULL
+    WHEN json_type(p, '$.recipient_agent_ids') <> 'ARRAY'
+      OR json_array_length(p, '$.recipient_agent_ids') NOT BETWEEN 1 AND 256
+      OR NOT list_bool_and(list_transform(
+        json_extract(p, '$.recipient_agent_ids[*]'),
+        lambda entry: json_type(entry) = 'VARCHAR'
+          AND (entry ->> '$') <> ''
+          AND strlen(entry ->> '$') <= 128
+          AND NOT regexp_matches(entry ->> '$', '[\x00-\x1F\x7F]')
+      ))
+    THEN coord_fail('invalid_argument',
+      'recipient_agent_ids must be 1 to 256 identifiers of at most 128 bytes')
+    ELSE list_sort(list_distinct(list_transform(
+      json_extract(p, '$.recipient_agent_ids[*]'), lambda entry: entry ->> '$')))
+  END
 );

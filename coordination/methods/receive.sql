@@ -44,6 +44,9 @@ SELECT to_json(struct_pack(
       sequence_number := sequence_number,
       content := content,
       content_type := content_type,
+      broadcast_id := broadcast_id,
+      recipient_count := recipient_count,
+      in_reply_to := in_reply_to,
       created_at_ms := created_at_ms,
       expires_at_ms := expires_at_ms,
       lease_expires_at_ms := lease_expires_at_ms

@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import {
   type CoordinationGrant,
+  type CoordinationTls,
   startCoordinationEndpoint,
 } from "../extensions/pi-ducknng/coordination-endpoint.ts";
 
@@ -24,29 +25,48 @@ async function grants(path: string | undefined): Promise<CoordinationGrant[]> {
   return value as CoordinationGrant[];
 }
 
+// Listener TLS comes from PEM text in the environment or from PEM files.
+function tlsMaterial(): CoordinationTls | undefined {
+  const certPem = environment("PI_DUCKNNG_COORDINATION_TLS_CERT_PEM");
+  const keyPem = environment("PI_DUCKNNG_COORDINATION_TLS_KEY_PEM");
+  const caPem = environment("PI_DUCKNNG_COORDINATION_TLS_CA_PEM");
+  const certKeyFile = environment("PI_DUCKNNG_COORDINATION_TLS_CERT_KEY_FILE");
+  const caFile = environment("PI_DUCKNNG_COORDINATION_TLS_CA_FILE");
+  if (certPem || keyPem || caPem) {
+    if (!certPem || !keyPem || !caPem) {
+      throw new Error(
+        "in-memory TLS needs PI_DUCKNNG_COORDINATION_TLS_CERT_PEM, _KEY_PEM, and _CA_PEM",
+      );
+    }
+    return { certPem, keyPem, caPem };
+  }
+  if ((certKeyFile === undefined) !== (caFile === undefined)) {
+    throw new Error(
+      "file TLS needs both PI_DUCKNNG_COORDINATION_TLS_CERT_KEY_FILE and PI_DUCKNNG_COORDINATION_TLS_CA_FILE",
+    );
+  }
+  return certKeyFile && caFile ? { certKeyFile, caFile } : undefined;
+}
+
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
   if (args.length < 2 || args.length > 3) throw new Error(USAGE);
   const [locator, database, listen] = args;
-  const certKeyFile = environment("PI_DUCKNNG_COORDINATION_TLS_CERT_KEY_FILE");
-  const caFile = environment("PI_DUCKNNG_COORDINATION_TLS_CA_FILE");
-  if ((certKeyFile === undefined) !== (caFile === undefined)) {
-    throw new Error(
-      "mutual TLS needs both PI_DUCKNNG_COORDINATION_TLS_CERT_KEY_FILE and PI_DUCKNNG_COORDINATION_TLS_CA_FILE",
-    );
-  }
+  const tls = tlsMaterial();
   const granted = await grants(environment("PI_DUCKNNG_COORDINATION_GRANTS_FILE"));
-  if (certKeyFile && granted.length === 0) {
+  if (tls && granted.length === 0) {
     throw new Error("a mutual-TLS endpoint needs PI_DUCKNNG_COORDINATION_GRANTS_FILE");
   }
+  const eventsUrl = environment("PI_DUCKNNG_COORDINATION_EVENTS_URL");
   // The ipc socket and locator are created readable only by this user.
   process.umask(0o077);
   const endpoint = await startCoordinationEndpoint({
     database,
     locator,
     listen,
-    tls: certKeyFile && caFile ? { certKeyFile, caFile } : undefined,
+    tls,
     grants: granted,
+    events: eventsUrl === "off" ? false : eventsUrl ? { listen: eventsUrl } : undefined,
   });
   const keepAlive = setInterval(() => {}, 2 ** 30);
   const stop = async () => {

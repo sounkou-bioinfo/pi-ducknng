@@ -83,6 +83,7 @@ SELECT to_json(struct_pack(
   expires_at_ms := getvariable('coord_now') + a.ttl_ms,
   heartbeat_interval_ms := a.ttl_ms // 3,
   delivery_capability := a.delivery_capability,
-  replayed := getvariable('coord_reuse') IS NOT NULL
+  replayed := getvariable('coord_reuse') IS NOT NULL,
+  events := coord_events(a.project_id, a.agent_id)
 ))
 FROM (SELECT unnest(getvariable('coord_args'))) AS a

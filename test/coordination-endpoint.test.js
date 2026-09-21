@@ -136,7 +136,7 @@ test("two Pi sessions coordinate through the manifested endpoint", async () => {
     });
     assert.equal(sent.recipient_seen, true);
     await waitFor(() => bob.steered.length === 1, 5000, "bob steering");
-    assert.ok(bob.steered[0].at - sentAt < 2500, "polling delivers within the poll interval");
+    assert.ok(bob.steered[0].at - sentAt < 800, "a wake-up hint delivers before any poll");
     assert.match(bob.steered[0].message.content, /from="alice"/);
     assert.match(bob.steered[0].message.content, /Review src\/model\.R\.\nReply/);
 

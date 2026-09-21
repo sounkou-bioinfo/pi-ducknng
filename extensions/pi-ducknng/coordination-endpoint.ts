@@ -12,6 +12,10 @@ export type CoordinationGrant = {
   agent_id: string;
 };
 
+export type CoordinationTls =
+  | { certKeyFile: string; caFile: string }
+  | { certPem: string; keyPem: string; caPem: string };
+
 export type CoordinationEndpointOptions = {
   /** DuckDB database file owned by this endpoint. */
   database: string;
@@ -19,8 +23,17 @@ export type CoordinationEndpointOptions = {
   listen?: string;
   /** File that receives the resolved listen URL. */
   locator?: string;
-  /** Mutual TLS listener material; every method then requires a verified peer. */
-  tls?: { certKeyFile: string; caFile: string };
+  /**
+   * Mutual TLS listener material, as files or as in-memory PEM text; every
+   * method then requires a verified peer.
+   */
+  tls?: CoordinationTls;
+  /**
+   * Wake-up hint listener. Defaults to ipc:// beside the database when the
+   * endpoint itself listens on ipc://; pass a URL such as wss://host:port to
+   * publish hints across hosts, or false to disable hints.
+   */
+  events?: false | { listen: string };
   /** Peer identities allowed to register as each (project, agent). */
   grants?: CoordinationGrant[];
   retentionMs?: number;
@@ -29,6 +42,8 @@ export type CoordinationEndpointOptions = {
 
 export type CoordinationEndpoint = {
   url: string;
+  /** Wake-up hint URL, when hints are enabled. */
+  eventsUrl?: string;
   /** The host connection, for administration on the same database. */
   connection: DuckDBConnection;
   close(): Promise<void>;
@@ -39,12 +54,42 @@ type MethodCatalog = {
   methods: Array<{ name: string; maintain: boolean; request_schema: unknown }>;
 };
 
-export function defaultCoordinationListen(database: string): string {
-  const socket = resolve(dirname(database), `${basename(database, extname(database))}.ipc`);
+function ipcBeside(database: string, suffix: string): string {
+  const socket = resolve(dirname(database), `${basename(database, extname(database))}${suffix}`);
   if (Buffer.byteLength(socket, "utf8") > 100) {
     throw new Error(`ipc socket path is too long; pass a listen URL: ${socket}`);
   }
   return `ipc://${socket}`;
+}
+
+export function defaultCoordinationListen(database: string): string {
+  return ipcBeside(database, ".ipc");
+}
+
+async function tlsConfigId(connection: DuckDBConnection, tls: CoordinationTls): Promise<number> {
+  const id = "certPem" in tls
+    ? await scalar(connection,
+      "SELECT ducknng_tls_config_from_pem($cert, $key, $ca, NULL, 2)::UBIGINT",
+      { cert: tls.certPem, key: tls.keyPem, ca: tls.caPem })
+    : await scalar(connection,
+      "SELECT ducknng_tls_config_from_files($cert_key, $ca, NULL, 2)::UBIGINT",
+      { cert_key: tls.certKeyFile, ca: tls.caFile });
+  return Number(id);
+}
+
+// Socket helpers return a STRUCT with ok and error; failures are in-band.
+async function socketCall(
+  connection: DuckDBConnection,
+  call: string,
+  values: Record<string, unknown>,
+): Promise<{ socket_id: unknown; url: unknown }> {
+  const reader = await connection.runAndReadAll(
+    `SELECT s.ok, s.error, s.socket_id, s.url FROM (SELECT ${call} AS s)`,
+    values as never,
+  );
+  const [row] = reader.getRowObjects();
+  if (!row?.ok) throw new Error(String(row?.error ?? "ducknng socket call failed"));
+  return { socket_id: row.socket_id, url: row.url };
 }
 
 async function runScript(connection: DuckDBConnection, sql: string): Promise<void> {
@@ -79,6 +124,10 @@ export async function startCoordinationEndpoint(
 ): Promise<CoordinationEndpoint> {
   const extensionPath = await ensureDucknngExtension(PACKAGE_ROOT);
   const listen = options.listen ?? defaultCoordinationListen(options.database);
+  const eventsListen = options.events === false
+    ? undefined
+    : options.events?.listen ??
+      (listen.startsWith("ipc://") ? ipcBeside(options.database, ".events.ipc") : undefined);
   const catalog = JSON.parse(
     await readFile(resolve(COORDINATION_ROOT, "methods.json"), "utf8"),
   ) as MethodCatalog;
@@ -88,9 +137,15 @@ export async function startCoordinationEndpoint(
   });
   const connection = await instance.connect();
   let serving = false;
+  let eventSocket: unknown;
   const shutdown = async () => {
     try {
       if (serving) await connection.run(`SELECT ducknng_stop_server('${SERVICE}')`);
+      if (eventSocket !== undefined) {
+        await connection.run(
+          "UPDATE coordination_meta SET event_socket_id = NULL, event_url = NULL");
+        await connection.run("SELECT ducknng_close_socket($id::UBIGINT)", { id: eventSocket } as never);
+      }
     } finally {
       serving = false;
       connection.closeSync();
@@ -131,11 +186,20 @@ export async function startCoordinationEndpoint(
         },
       );
     }
-    let tlsConfig = 0;
-    if (options.tls) {
-      tlsConfig = Number(await scalar(connection,
-        "SELECT ducknng_tls_config_from_files($cert_key, $ca, NULL, 2)::UBIGINT",
-        { cert_key: options.tls.certKeyFile, ca: options.tls.caFile }));
+    const tlsConfig = options.tls ? await tlsConfigId(connection, options.tls) : 0;
+    let eventsUrl: string | undefined;
+    await connection.run("UPDATE coordination_meta SET event_socket_id = NULL, event_url = NULL");
+    if (eventsListen) {
+      const opened = await socketCall(connection, "ducknng_open_socket('pub')", {});
+      eventSocket = opened.socket_id;
+      const bound = await socketCall(connection,
+        "ducknng_listen_socket($id::UBIGINT, $url, 1048576, $tls::UBIGINT)",
+        { id: eventSocket, url: eventsListen, tls: tlsConfig });
+      eventsUrl = typeof bound.url === "string" && bound.url ? bound.url : eventsListen;
+      await connection.run(
+        "UPDATE coordination_meta SET event_socket_id = $id::UBIGINT, event_url = $url",
+        { id: eventSocket, url: eventsUrl } as never,
+      );
     }
     await connection.run(
       `SELECT ducknng_start_server('${SERVICE}', $listen, 8, 134217728, 300000, $tls::UBIGINT)`,
@@ -149,7 +213,7 @@ export async function startCoordinationEndpoint(
       await writeFile(staged, `${url}\n`, { mode: 0o600 });
       await rename(staged, options.locator);
     }
-    return { url, connection, close: shutdown };
+    return { url, eventsUrl, connection, close: shutdown };
   } catch (error) {
     await shutdown();
     throw error;

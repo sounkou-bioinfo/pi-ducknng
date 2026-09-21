@@ -75,7 +75,7 @@ export async function ensureDucknngExtension(root: string): Promise<string> {
   return extensionPath;
 }
 
-function closeDucknngConnection(
+export function closeDucknngConnection(
   instance: DuckDBInstance,
   connection?: DuckDBConnection,
 ): void {
@@ -86,7 +86,7 @@ function closeDucknngConnection(
   }
 }
 
-async function openDucknngConnection(
+export async function openDucknngConnection(
   extensionPath: string,
 ): Promise<{ instance: DuckDBInstance; connection: DuckDBConnection }> {
   const instance = await DuckDBInstance.create(":memory:", {
@@ -105,32 +105,51 @@ async function openDucknngConnection(
 }
 
 /**
- * Client TLS material is injected at the process boundary: PEM file paths come
- * from the environment, are bound as SQL parameters, and never appear in tool
- * schemas or results. A TLS URL always verifies the server against
- * PI_DUCKNNG_TLS_CA_FILE; PI_DUCKNNG_TLS_CERT_KEY_FILE adds a client
- * certificate for mutual TLS.
+ * Client TLS material is injected at the process boundary: PEM text or PEM
+ * file paths come from the environment, are bound as SQL parameters, and
+ * never appear in tool schemas or results. ducknng holds PEM text in memory.
+ * A TLS URL always verifies the server against PI_DUCKNNG_TLS_CA_PEM or
+ * PI_DUCKNNG_TLS_CA_FILE; a client certificate for mutual TLS comes from
+ * PI_DUCKNNG_TLS_CERT_PEM with PI_DUCKNNG_TLS_KEY_PEM, or from
+ * PI_DUCKNNG_TLS_CERT_KEY_FILE.
  */
 function usesTls(url: string): boolean {
   return /^(tls\+tcp|wss):\/\//i.test(url);
 }
 
-async function clientTlsConfigId(
+function environment(name: string): string | null {
+  return process.env[name]?.trim() || null;
+}
+
+export async function clientTlsConfigId(
   connection: DuckDBConnection,
   url: string,
 ): Promise<number> {
   if (!usesTls(url)) return 0;
-  const caFile = process.env.PI_DUCKNNG_TLS_CA_FILE?.trim();
-  if (!caFile) {
+  const caPem = environment("PI_DUCKNNG_TLS_CA_PEM");
+  const caFile = environment("PI_DUCKNNG_TLS_CA_FILE");
+  if (!caPem && !caFile) {
     throw new Error(
-      "TLS endpoints require PI_DUCKNNG_TLS_CA_FILE to verify the server",
+      "TLS endpoints require PI_DUCKNNG_TLS_CA_PEM or PI_DUCKNNG_TLS_CA_FILE to verify the server",
     );
   }
-  const certKeyFile = process.env.PI_DUCKNNG_TLS_CERT_KEY_FILE?.trim() || null;
-  const reader = await connection.runAndReadAll(
-    `SELECT ducknng_tls_config_from_files($cert_key_file, $ca_file, NULL, 2)::UBIGINT AS id`,
-    { cert_key_file: certKeyFile, ca_file: caFile },
-  );
+  let reader;
+  if (caPem) {
+    const certPem = environment("PI_DUCKNNG_TLS_CERT_PEM");
+    const keyPem = environment("PI_DUCKNNG_TLS_KEY_PEM");
+    if ((certPem === null) !== (keyPem === null)) {
+      throw new Error("in-memory client TLS needs both PI_DUCKNNG_TLS_CERT_PEM and PI_DUCKNNG_TLS_KEY_PEM");
+    }
+    reader = await connection.runAndReadAll(
+      `SELECT ducknng_tls_config_from_pem($cert, $key, $ca, NULL, 2)::UBIGINT AS id`,
+      { cert: certPem, key: keyPem, ca: caPem },
+    );
+  } else {
+    reader = await connection.runAndReadAll(
+      `SELECT ducknng_tls_config_from_files($cert_key_file, $ca_file, NULL, 2)::UBIGINT AS id`,
+      { cert_key_file: environment("PI_DUCKNNG_TLS_CERT_KEY_FILE"), ca_file: caFile },
+    );
+  }
   const [row] = reader.getRowObjects();
   const id = Number(row?.id);
   if (!Number.isSafeInteger(id) || id <= 0) {
@@ -731,12 +750,67 @@ function stringifyToolResult(value: unknown): string {
 }
 
 /**
+ * Subscribes to one mailbox's wake-up hints. The subscriber owns one DuckDB
+ * instance and one NNG SUB socket for its lifetime; hints are opaque topics
+ * and carry no mail, so a lost hint only delays delivery until the next poll.
+ */
+export async function subscribeCoordinationEvents(
+  url: string,
+  topic: string,
+  onHint: () => void,
+): Promise<{ close(): Promise<void> }> {
+  const extensionPath = await ensureDucknngExtension(PACKAGE_ROOT);
+  const { instance, connection } = await openDucknngConnection(extensionPath);
+  const socketCall = async (call: string, values: Record<string, unknown>) => {
+    const reader = await connection.runAndReadAll(
+      `SELECT s.ok, s.error, s.socket_id FROM (SELECT ${call} AS s)`,
+      values as never,
+    );
+    const [row] = reader.getRowObjects();
+    if (!row?.ok) throw new Error(String(row?.error ?? "ducknng socket call failed"));
+    return row.socket_id;
+  };
+  let socket: unknown;
+  try {
+    const tls = await clientTlsConfigId(connection, url);
+    socket = await socketCall("ducknng_open_socket('sub')", {});
+    await socketCall("ducknng_subscribe_socket($id::UBIGINT, encode($topic))", { id: socket, topic });
+    await socketCall("ducknng_dial_socket($id::UBIGINT, $url, 2000, $tls::UBIGINT)", { id: socket, url, tls });
+  } catch (error) {
+    closeDucknngConnection(instance, connection);
+    throw error;
+  }
+  let open = true;
+  const loop = (async () => {
+    while (open) {
+      const reader = await connection.runAndReadAll(
+        "SELECT (ducknng_recv_socket_raw($id::UBIGINT, 500)).ok AS ok",
+        { id: socket } as never,
+      );
+      if (open && reader.getRowObjects()[0]?.ok === true) onHint();
+    }
+  })();
+  return {
+    async close() {
+      open = false;
+      await loop.catch(() => undefined);
+      try {
+        await connection.run("SELECT ducknng_close_socket($id::UBIGINT)", { id: socket } as never);
+      } finally {
+        closeDucknngConnection(instance, connection);
+      }
+    },
+  };
+}
+
+/**
  * The DuckDB and ducknng client used by the Pi adapter, for host processes
  * that attach an `AgentHarness` lane with `attachCoordinationLane`.
  */
 export const ducknngCoordinationClient: CoordinationClient = {
   describe: describeEndpoint,
   call: callCoordinationEndpoint,
+  subscribe: subscribeCoordinationEvents,
 };
 
 export default function piDucknngExtension(pi: ExtensionAPI): void {
@@ -824,6 +898,7 @@ export default function piDucknngExtension(pi: ExtensionAPI): void {
   registerCoordinationAdapter(pi, {
     describe: describeEndpoint,
     call: callCoordinationEndpoint,
+    subscribe: subscribeCoordinationEvents,
     claim: (url) => adapterOwnedUrls.add(url),
     release: (url) => adapterOwnedUrls.delete(url),
   });

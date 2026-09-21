@@ -348,3 +348,24 @@ test("error codes are read through the ducknng SQL error wrapper", () => {
   assert.equal(coordinationErrorCode(new Error("unauthorized: no grant")), "unauthorized");
   assert.equal(coordinationErrorCode(new Error("Connection refused")), undefined);
 });
+
+test("the send tool fans out and envelopes name the group and the reply", async () => {
+  const harness = adapterHarness({ mode: "print" });
+  const client = coordinationClient();
+  registerCoordinationAdapter(harness.pi, client);
+  await harness.emit("session_start");
+  await harness.tool("coordination_send", { recipients: ["w1", "w2"], content: "split" }, "fan");
+  await harness.tool("coordination_send", { broadcast: true, content: "all" }, "all");
+  await harness.tool("coordination_send", { recipient: "lead", content: "done", in_reply_to: "b-1" }, "reply");
+  await harness.emit("session_shutdown");
+
+  const sends = client.calls.filter(({ method }) => method === "send").map(({ args }) => args);
+  assert.deepEqual(sends[0].recipient_agent_ids, ["w1", "w2"]);
+  assert.equal(sends[1].broadcast, true);
+  assert.equal(sends[2].recipient_agent_id, "lead");
+  assert.equal(sends[2].in_reply_to, "b-1");
+  const envelope = coordinationEnvelope({
+    ...inboxMessage, broadcast_id: "b-1", recipient_count: 3, in_reply_to: "m-0",
+  });
+  assert.match(envelope, /broadcast_id="b-1" recipients="3" in_reply_to="m-0"/);
+});

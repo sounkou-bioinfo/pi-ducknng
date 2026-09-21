@@ -1,6 +1,7 @@
 import {
   type CoordinationClient,
   type InboxMessage,
+  Wakeup,
   COORDINATION_MESSAGE_TYPE,
   coordinationEnvelope,
   coordinationErrorCode,
@@ -49,7 +50,7 @@ export type HarnessCoordinationOptions = {
   /** `auto` steers a running lane and queues for the next run otherwise. */
   queue?: LaneQueue;
   visibilityTimeoutMs?: number;
-  /** Delay between empty receives. */
+  /** Delay between empty receives; hints shorten it when the endpoint offers them. */
   pollMs?: number;
   onError?: (error: unknown) => void;
 };
@@ -138,6 +139,9 @@ export function attachCoordinationLane(
     pollMs = 1_000,
   } = options;
   const controller = new AbortController();
+  const wakeup = new Wakeup();
+  let subscription: { close(): Promise<void> } | undefined;
+  let events: { url: string; topic: string } | undefined;
   let registrationId = "";
   let heartbeatIntervalMs = 10_000;
 
@@ -153,6 +157,7 @@ export function attachCoordinationLane(
     }));
     registrationId = registration.registration_id;
     heartbeatIntervalMs = registration.heartbeat_interval_ms;
+    events = registration.events;
   };
 
   const call = async (
@@ -212,7 +217,11 @@ export function attachCoordinationLane(
         }
         failures = 0;
         if (messages.length === 0) {
-          await abortable(Math.max(0, Math.min(pollMs, nextHeartbeat - Date.now())), controller.signal);
+          await wakeup.wait(
+            Math.max(0, Math.min(subscription ? Math.max(pollMs, 5_000) : pollMs,
+              nextHeartbeat - Date.now())),
+            controller.signal,
+          );
         }
       } catch (error) {
         if (controller.signal.aborted) return;
@@ -233,6 +242,13 @@ export function attachCoordinationLane(
       }
     }
     await register();
+    if (events && client.subscribe) {
+      subscription = await client.subscribe(events.url, events.topic, () => wakeup.notify())
+        .catch((error) => {
+          options.onError?.(error);
+          return undefined;
+        });
+    }
     task = run();
   })();
 
@@ -242,6 +258,7 @@ export function attachCoordinationLane(
       controller.abort();
       await ready.catch(() => undefined);
       await task;
+      await subscription?.close().catch(() => undefined);
       if (!registrationId) return;
       try {
         await client.call(url, "unregister", { registration_id: registrationId });

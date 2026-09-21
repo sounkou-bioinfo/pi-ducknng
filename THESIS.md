@@ -29,11 +29,12 @@ Endpoint state belongs to the endpoint process and survives those clients.
 The generic tools refuse a URL that the coordination adapter has claimed.
 
 For `tls+tcp://` and `wss://` URLs, each fresh client builds a ducknng TLS
-configuration. `PI_DUCKNNG_TLS_CA_FILE` is required and verifies the server.
-`PI_DUCKNNG_TLS_CERT_KEY_FILE` optionally names a combined certificate and key
-PEM file that authenticates the client for mutual TLS. The file paths are bound
-as SQL parameters. Neither the paths nor the key material enter tool schemas
-or results.
+configuration, which ducknng holds in memory. The server is always verified,
+against PEM text in `PI_DUCKNNG_TLS_CA_PEM` or a file in
+`PI_DUCKNNG_TLS_CA_FILE`. A client certificate for mutual TLS comes from
+`PI_DUCKNNG_TLS_CERT_PEM` with `PI_DUCKNNG_TLS_KEY_PEM`, or from a combined PEM
+file in `PI_DUCKNNG_TLS_CERT_KEY_FILE`. The material is bound as SQL
+parameters and never enters SQL text, tool schemas, or results.
 
 ## R endpoint
 
@@ -67,7 +68,16 @@ rolls the transaction back and returns a ducknng error whose text carries
 `lease_invalid`, and `resource_conflict`. Write methods first run a
 maintenance step at most once a second. It returns expired delivery leases to
 the queue, turns overdue mail into dead letters, and applies retention.
-`receive` replies at once, and callers poll.
+`receive` replies at once.
+
+The host also opens an NNG PUB socket for wake-up hints: on `ipc://` beside
+the database by default, or on any URL passed in
+`PI_DUCKNNG_COORDINATION_EVENTS_URL`, such as `wss://host:port`, with the
+listener's TLS configuration. `register` returns the hint URL and the
+mailbox's topic, an opaque salted hash that cannot be derived without a
+registration. After `send` stores mail, it publishes that topic once per
+recipient. A hint carries no mail. A subscriber that misses a hint loses
+only latency, because polling still repairs it.
 
 - **Identity.** A mailbox belongs to a stable `(project_id, agent_id)`.
   `register` binds an instance, such as a Pi session ID, to that mailbox and
@@ -77,9 +87,15 @@ the queue, turns overdue mail into dead letters, and applies retention.
   unexpired server-side lease renewed by `heartbeat`. Live instances of one
   agent ID are competing consumers of its mailbox.
 - **Delivery.** `send` commits the message before replying. Content is UTF-8
-  text of at most 64 KiB and may contain tabs and line breaks. It is
-  idempotent for each project, sender, and `idempotency_key`; reusing a key
-  for different content fails. The reply reports whether the recipient has
+  text of at most 64 KiB and may contain tabs and line breaks. A send
+  addresses one `recipient_agent_id`, up to 256 `recipient_agent_ids`, or
+  `broadcast` to every other live agent. Each recipient gets its own copy
+  with its own sequence, lease, and acknowledgement, and the copies share a
+  `broadcast_id` and `recipient_count`. The send is refused whole if any
+  recipient's mailbox is full. `in_reply_to` names the message or broadcast
+  being answered, so replies to a fan-out can be gathered. A send is
+  idempotent for each project, sender, and `idempotency_key`. Reusing a key
+  for different content or a different recipient list fails. The reply reports whether the recipient has
   ever registered. `receive` leases up to 32 queued messages in mailbox
   sequence order for a visibility timeout. When a lease expires, the message
   returns to the queue with the same message ID. `ack` accepts only the
@@ -110,8 +126,11 @@ session, and heartbeats. The registration ID stays in the adapter and never
 enters model context. After a `registration_expired` reply the adapter
 registers again and retries the call once.
 
-In the `tui` and `rpc` modes the adapter polls `receive` in the background,
-once a second while the mailbox is empty. It injects each new message with
+The adapter subscribes to the mailbox's hints when the endpoint offers them,
+through one long-lived DuckDB instance and NNG SUB socket that it owns and
+closes at shutdown. A hint wakes it at once. Without hints it polls every
+second, and with them it polls every five seconds to repair lost hints. In
+the `tui` and `rpc` modes it receives in the background. It injects each new message with
 `pi.sendMessage(..., { triggerTurn: true, deliverAs: "steer" })`, appends a
 session entry holding the message ID, and then acknowledges. In the one-shot
 `print` and `json` modes it does not steer, and the model pulls mail with
@@ -128,8 +147,9 @@ recorded ID survived.
 
 The adapter gives the model five tools:
 
-- `coordination_send` sends with an idempotency key derived from the session
-  and tool call IDs, so a retried tool call cannot duplicate mail;
+- `coordination_send` sends to one agent, several agents, or a broadcast,
+  optionally `in_reply_to` another message. Its idempotency key comes from
+  the session and tool call IDs, so a retried tool call cannot duplicate mail;
 - `coordination_inbox` receives, optionally waiting, and acknowledges;
 - `coordination_agents` lists live agents and active reservations;
 - `coordination_reserve` resolves a path against the session's working
@@ -167,9 +187,12 @@ umask inside the database's directory, so filesystem permissions decide who
 can connect. Callers carry no verified identity, and `register` accepts any
 project and agent ID.
 
-The mutual-TLS profile serves `tls+tcp://` with a listener certificate from
-`PI_DUCKNNG_COORDINATION_TLS_CERT_KEY_FILE` and client verification against
-`PI_DUCKNNG_COORDINATION_TLS_CA_FILE`. Every method then requires a verified
+The mutual-TLS profile serves `tls+tcp://` or `wss://` with in-memory
+listener material. That material comes from
+`PI_DUCKNNG_COORDINATION_TLS_CERT_PEM`, `_KEY_PEM`, and `_CA_PEM`, or from
+`PI_DUCKNNG_COORDINATION_TLS_CERT_KEY_FILE` and `_CA_FILE`. Hints are
+published only when `PI_DUCKNNG_COORDINATION_EVENTS_URL` names a listener,
+and that listener requires client certificates too. Every method then requires a verified
 peer identity. `PI_DUCKNNG_COORDINATION_GRANTS_FILE` lists which peer
 identities may register as which `(project_id, agent_id)`, and agent `*`
 grants a whole project. A caller without a matching grant is refused. A
@@ -275,7 +298,10 @@ lane commit and checks the following:
 - the endpoint records both messages as acknowledged.
 
 `test/coordination-store.test.js` drives the SQL methods over ducknng with a
-fixed server clock. It covers:
+fixed server clock. It covers fan-out to lists and broadcasts, replies
+gathered by `in_reply_to`, and all-or-nothing mailbox caps. It also shows
+that a hint reaches only its recipient's subscriber and arrives well before
+any poll. The rest of it covers:
 
 - offline mail and idempotent send;
 - lease expiry and redelivery across an endpoint restart;
@@ -301,5 +327,5 @@ executable proof before it is added:
 
 - structured R conditions, interruption, streaming, and attachment to the R
   endpoint by a second non-Pi client;
-- server-side waiting for `receive`, which needs deferred replies in ducknng;
-- broadcast delivery to several mailboxes.
+- an SSE hint stream for plain HTTP clients, which needs a ducknng route that
+  can yield rows as events arrive.

@@ -6,7 +6,11 @@ import test from "node:test";
 
 import { startCoordinationEndpoint } from "../extensions/pi-ducknng/coordination-endpoint.ts";
 import { coordinationErrorCode } from "../extensions/pi-ducknng/coordination.ts";
-import { ducknngCoordinationClient as client } from "../extensions/pi-ducknng/index.ts";
+import {
+  ducknngCoordinationClient as client,
+  subscribeCoordinationEvents,
+} from "../extensions/pi-ducknng/index.ts";
+import { readFile } from "node:fs/promises";
 import { pki, withEnv } from "./support/pki.js";
 
 // Drives the SQL methods over the real ducknng path with a fixed server clock
@@ -238,9 +242,23 @@ test("mutual TLS binds registrations to granted peer identities", async () => {
     await rm(work, { recursive: true, force: true });
     throw error;
   });
+  // Clients present in-memory PEM; ducknng never needs a certificate file.
+  const pem = async (path) => await readFile(path, "utf8");
+  const caPem = await pem(material.ca);
+  const clientPem = {};
+  for (const name of ["alice", "mallory"]) {
+    const combined = await pem(material[name]);
+    clientPem[name] = {
+      cert: combined.slice(0, combined.indexOf("-----END CERTIFICATE-----") + 25),
+      key: combined.slice(combined.indexOf("-----BEGIN PRIVATE KEY-----")),
+    };
+  }
   const as = (name, operation) => withEnv({
-    PI_DUCKNNG_TLS_CA_FILE: material.ca,
-    PI_DUCKNNG_TLS_CERT_KEY_FILE: material[name],
+    PI_DUCKNNG_TLS_CA_FILE: undefined,
+    PI_DUCKNNG_TLS_CERT_KEY_FILE: undefined,
+    PI_DUCKNNG_TLS_CA_PEM: caPem,
+    PI_DUCKNNG_TLS_CERT_PEM: clientPem[name].cert,
+    PI_DUCKNNG_TLS_KEY_PEM: clientPem[name].key,
   }, operation);
   // The endpoint names the verified caller when it refuses an ungranted one.
   const identity = (name) => as(name, async () => {
@@ -289,6 +307,135 @@ test("mutual TLS binds registrations to granted peer identities", async () => {
     assert.equal(inbox.messages[0].sender_agent_id, "alice");
     const agents = await as("alice", () => s.call("list_agents", { registration_id: alice.registration_id }));
     assert.ok(agents.agents.every(({ authenticated }) => authenticated === true));
+  } finally {
+    await s.endpoint.close();
+    await rm(work, { recursive: true, force: true });
+  }
+});
+
+test("one send reaches several mailboxes and replies fan back in", async () => {
+  const work = await mkdtemp(resolve(tmpdir(), "pi-ducknng-store-"));
+  const s = await store(work, { maxPendingPerMailbox: 3 });
+  try {
+    await s.setClock(4_000_000);
+    const lead = await s.register("lead", "lead-1");
+    const workers = [];
+    for (const name of ["w1", "w2", "w3"]) workers.push(await s.register(name, `${name}-1`));
+    const question = (extra) => s.call("send", {
+      registration_id: lead.registration_id,
+      idempotency_key: "question",
+      content: "Estimate mean mpg for your cylinder group.",
+      ...extra,
+    });
+
+    const listed = await question({ recipient_agent_ids: ["w2", "w1", "w1"] });
+    assert.equal(listed.recipient_count, 2, "duplicates collapse");
+    assert.deepEqual(listed.messages.map(({ recipient_agent_id }) => recipient_agent_id), ["w1", "w2"]);
+    assert.equal(listed.message_id, null, "no single message ID for a fan-out");
+    const replay = await question({ recipient_agent_ids: ["w1", "w2"] });
+    assert.equal(replay.replayed, true);
+    assert.equal(replay.broadcast_id, listed.broadcast_id);
+    await rejectsWith(question({ recipient_agent_ids: ["w1", "w3"] }), "idempotency_conflict");
+    await rejectsWith(question({ recipient_agent_id: "w1", broadcast: true }), "invalid_argument",
+      /exactly one/);
+
+    const everyone = await s.call("send", {
+      registration_id: lead.registration_id,
+      idempotency_key: "all-hands",
+      broadcast: true,
+      content: "Report your group's result to lead.",
+    });
+    assert.deepEqual(everyone.messages.map(({ recipient_agent_id }) => recipient_agent_id),
+      ["w1", "w2", "w3"], "broadcast reaches every other live agent");
+
+    const replies = [];
+    for (const worker of workers) {
+      const inbox = (await s.call("receive", { registration_id: worker.registration_id })).messages;
+      const copy = inbox.find(({ broadcast_id }) => broadcast_id === everyone.broadcast_id);
+      assert.equal(copy.recipient_count, 3);
+      replies.push(await s.call("send", {
+        registration_id: worker.registration_id,
+        idempotency_key: "reply",
+        recipient_agent_id: "lead",
+        in_reply_to: copy.broadcast_id,
+        content: `done by ${copy.recipient_agent_id}`,
+      }));
+    }
+    const gathered = (await s.call("receive", { registration_id: lead.registration_id, limit: 8 })).messages;
+    assert.deepEqual(gathered.map(({ in_reply_to }) => in_reply_to),
+      [everyone.broadcast_id, everyone.broadcast_id, everyone.broadcast_id]);
+    assert.deepEqual(gathered.map(({ sender_agent_id }) => sender_agent_id).sort(), ["w1", "w2", "w3"]);
+
+    // Filling w1 to the cap refuses a later fan-out that includes it, whole.
+    await s.call("send", {
+      registration_id: lead.registration_id,
+      idempotency_key: "filler",
+      recipient_agent_id: "w1",
+      content: "fill",
+    });
+    await rejectsWith(s.call("send", {
+      registration_id: lead.registration_id,
+      idempotency_key: "overflow",
+      recipient_agent_ids: ["w3", "w1"],
+      content: "x",
+    }), "mailbox_full", /w1/);
+    const w3Pending = (await s.endpoint.connection.runAndReadAll(
+      "SELECT count(*) FROM coordination_messages WHERE recipient_agent_id = 'w3' AND idempotency_key = 'overflow'",
+    )).getRows()[0][0];
+    assert.equal(w3Pending, 0n, "a refused fan-out writes no copy");
+  } finally {
+    await s.endpoint.close();
+    await rm(work, { recursive: true, force: true });
+  }
+});
+
+test("send publishes an opaque wake-up hint to each recipient's topic", async () => {
+  const work = await mkdtemp(resolve(tmpdir(), "pi-ducknng-store-"));
+  const s = await store(work);
+  let subscription;
+  try {
+    assert.match(s.endpoint.eventsUrl, /^ipc:\/\/.*coordination\.events\.ipc$/);
+    const lead = await s.register("lead", "lead-1");
+    const worker = await s.register("w1", "w1-1");
+    assert.equal(worker.events.url, s.endpoint.eventsUrl);
+    assert.match(worker.events.topic, /^[0-9a-f]{32}$/);
+    assert.notEqual(worker.events.topic, lead.events.topic);
+
+    let hints = 0;
+    subscription = await subscribeCoordinationEvents(worker.events.url, worker.events.topic, () => {
+      hints += 1;
+    });
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 200));
+    const sentAt = Date.now();
+    await s.call("send", {
+      registration_id: lead.registration_id, recipient_agent_id: "w1",
+      idempotency_key: "wake", content: "wake up",
+    });
+    while (hints === 0 && Date.now() - sentAt < 2000) {
+      await new Promise((resolveDelay) => setTimeout(resolveDelay, 10));
+    }
+    assert.equal(hints, 1);
+    assert.ok(Date.now() - sentAt < 1000, "the hint arrives well before any poll");
+    await s.call("send", {
+      registration_id: lead.registration_id, recipient_agent_id: "lead",
+      idempotency_key: "self", content: "not for w1",
+    });
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 300));
+    assert.equal(hints, 1, "a subscriber sees only its own mailbox topic");
+  } finally {
+    await subscription?.close();
+    await s.endpoint.close();
+    await rm(work, { recursive: true, force: true });
+  }
+});
+
+test("an endpoint without hints advertises none", async () => {
+  const work = await mkdtemp(resolve(tmpdir(), "pi-ducknng-store-"));
+  const s = await store(work, { events: false });
+  try {
+    const lead = await s.register("lead", "lead-1");
+    assert.equal(lead.events, null);
+    assert.equal(s.endpoint.eventsUrl, undefined);
   } finally {
     await s.endpoint.close();
     await rm(work, { recursive: true, force: true });
