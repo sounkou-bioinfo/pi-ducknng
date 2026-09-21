@@ -22,6 +22,9 @@ readme:
 check-readme:
 	@grep -q 'extension="./extensions/pi-ducknng/index.ts"' README.qmd
 	@grep -q '^> AGENT_DUCKNNG_MANIFEST_CALL_OK' README.md
+	@grep -q '^> AGENT_COORDINATION_SENT' README.md
+	@grep -q '^> AGENT_COORDINATION_REPLIED' README.md
+	@grep -Eq '^ *COORDINATION_ROUND_TRIP_VERIFIED$$' README.md
 	@grep -q 'man/figures/architecture.svg' README.qmd README.md
 	@test -s man/figures/architecture.mmd
 	@test -s man/figures/architecture.svg

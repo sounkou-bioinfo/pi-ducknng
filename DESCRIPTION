@@ -31,6 +31,7 @@ Suggests:
     knitr,
     piknit,
     pkgdown,
+    processx,
     rmarkdown,
     tinytest
 VignetteBuilder: knitr

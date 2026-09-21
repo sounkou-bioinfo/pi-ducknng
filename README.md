@@ -2,6 +2,8 @@
 
 # pi-ducknng
 
+[![](https://img.shields.io/badge/lifecycle-experimental-orange.svg)](https://lifecycle.r-lib.org/articles/stages.html#experimental)
+
 `pi-ducknng` lets Pi agents discover and call manifested ducknng
 endpoints. It ships two endpoints: a persistent R session and a durable
 coordination service for Pi sessions.
@@ -26,11 +28,14 @@ Install the repository as a Pi package:
 pi install git:github.com/sounkou-bioinfo/pi-ducknng
 ```
 
-The package contributes three model tools:
+The package contributes three generic model tools:
 
 - `persistent_r_start` places the R endpoint;
 - `ducknng_describe` reads any compatible endpoint manifest;
 - `ducknng_call` invokes a declared method.
+
+A session attached to a coordination endpoint also gets the coordination
+tools described below.
 
 On first use the package builds the pinned ducknng source, which
 requires Git, Make, CMake, Python, and a C/C++ toolchain. The R runtime
@@ -45,7 +50,7 @@ examples, then runs an `mtcars` analysis whose intermediate table
 survives across fresh DuckDB clients.
 
 ``` sh
-'pi' --provider 'openai-codex' --model 'gpt-6-astra' --no-extensions --thinking 'medium' -e './extensions/pi-ducknng/index.ts' --no-session -p \
+'/root/pi-ducknng/node_modules/.bin/pi' --provider 'openai-codex' --model 'gpt-6-astra' --no-extensions --thinking 'medium' -e './extensions/pi-ducknng/index.ts' --no-session -p \
   "$(printf %s \
     'Using the package tools, start the R adapter and follow ' \
     'its ducknng manifest. In one eval call, create and ' \
@@ -61,13 +66,12 @@ survives across fresh DuckDB clients.
 
 > AGENT_DUCKNNG_MANIFEST_CALL_OK
 >
-> Manifested methods: `eval` (JSON → Arrow, persistent R evaluation),
-> `close` (JSON → JSON, stops endpoint).
+> Manifested methods: `eval` (JSON → Arrow), `close` (JSON → JSON).
 >
-> Both eval calls succeeded in endpoint process `257984`, preserving
+> Both eval calls succeeded in endpoint process `306401`, preserving
 > `mpg_by_cyl`. Endpoint closed successfully.
 >
-> First call decoded rows:
+> First decoded result:
 >
 > | cyl |                mpg |
 > |----:|-------------------:|
@@ -75,7 +79,7 @@ survives across fresh DuckDB clients.
 > |   6 | 19.742857142857144 |
 > |   8 |               15.1 |
 >
-> Second call decoded rows:
+> Second decoded result:
 >
 > | cyl |                mpg |     delta_from_4cyl |
 > |----:|-------------------:|--------------------:|
@@ -86,15 +90,18 @@ survives across fresh DuckDB clients.
 Each tool request opens and closes a fresh DuckDB instance. Eval results
 travel as Arrow IPC streams written by nanoarrow and decoded by ducknng.
 The mirai-owned R environment stays in the endpoint process until
-`close` or 30 seconds without a request.
+`close` or until the Pi process that started it exits.
 
-The README is rendered by `piknit`, and `make readme` rejects output
-that lacks the agent’s success receipt.
+The README is rendered by `piknit` with the Pi version pinned in
+`DEPENDENCIES`. `make readme` rejects output that lacks any agent’s
+success receipt.
 
 ## Durable agent coordination
 
 Start the coordination endpoint independently of any Pi session, with
-its locator and DuckDB state in a private directory:
+its DuckDB state in a private directory. It listens on `ipc://` beside
+the database, so the address survives restarts and only the directory’s
+owner can connect:
 
 ``` sh
 install -d -m 700 "$HOME/.local/state/pi-ducknng"
@@ -103,7 +110,7 @@ Rscript --vanilla tools/pi-coordination-endpoint.R \
   "$HOME/.local/state/pi-ducknng/coordination.duckdb"
 ```
 
-Attach an interactive Pi session in another terminal:
+Attach a Pi session in another terminal:
 
 ``` sh
 export PI_DUCKNNG_COORDINATION_URL="$(cat \
@@ -113,27 +120,135 @@ export PI_DUCKNNG_AGENT_ID="reviewer"
 pi
 ```
 
-The extension registers the session and polls the `reviewer` mailbox. It
-injects each message through Pi’s steering API and acknowledges it once
-that call returns.
+The attached session gets five tools: `coordination_send`,
+`coordination_inbox`, `coordination_agents`, `coordination_reserve`, and
+`coordination_release`. The registration behind them never enters the
+model’s context.
 
-- `send` stores mail before replying. Queued mail and reservations
-  survive disconnected sessions and endpoint restarts.
-- Delivery is at least once. A crash between injection and
-  acknowledgement redelivers the same message ID, and work done in
-  response is not exactly once.
-- Reservations are advisory leases over `resource:` identifiers or
-  canonical `file:///` URIs, with a fencing value that increases across
-  the project.
-- Acknowledged messages are kept for 30 days. A mailbox holds at most
-  10,000 unacknowledged messages.
+- **Delivery.** An interactive session waits on its mailbox in the
+  background and steers each message into the conversation. A one-shot
+  `pi -p` run pulls mail with `coordination_inbox`. Every message
+  arrives framed with its sender and message ID and is marked as coming
+  from another agent, not the user.
+- **Durability.** `send` stores mail before replying, so mail survives
+  disconnected sessions and endpoint restarts. Delivery is at least
+  once, and work done in response is not exactly once. Mail nobody
+  receives becomes a dead letter after 7 days, and `send` reports
+  recipients that have never registered.
+- **Reservations.** Leases cover `resource:` identifiers or paths and
+  carry a fencing value that increases across the project. The session
+  renews each lease it holds until release or shutdown. While another
+  session holds a path, Pi’s `edit` and `write` tools refuse to touch
+  it.
 
-This first endpoint is for one trusted user on one machine. It listens
-on a new loopback port at each start, so restart attached Pi sessions
-after restarting it. It has no authentication, and the adapter does not
-yet give the model its own send or reserve tool. NNG PUB/SUB is kept off
-the correctness path: a later event socket may reduce wake-up latency,
-but `receive` always repairs missed events.
+This first endpoint is for one user on one machine and has no
+authentication beyond filesystem permissions.
+
+### Two agents, one handoff
+
+The cells below start a coordination endpoint and run two one-shot Codex
+agents in sequence. The planner mails a handoff to a reviewer that has
+never registered. The reviewer pulls the handoff, answers it with
+persistent R, and replies. The last cell checks the round trip through
+the endpoint’s own methods rather than trusting either agent’s report.
+
+``` sh
+'/root/pi-ducknng/node_modules/.bin/pi' --provider 'openai-codex' --model 'gpt-6-astra' --no-extensions --thinking 'medium' -e './extensions/pi-ducknng/index.ts' --no-session -p \
+  "$(printf %s \
+    'You are agent `planner`. Use coordination_agents to see ' \
+    'who is live, then reserve ' \
+    '`resource:readme/mtcars-review`. Send agent `reviewer` a ' \
+    'handoff of exactly two lines. Line 1: `Review mpg by ' \
+    'cylinder count in datasets::mtcars.` Line 2: `Reply with ' \
+    'one sentence naming the cylinder count with the highest ' \
+    'mean mpg and that mean.` Then release the reservation. ' \
+    'Report the live agents, the message ID, whether the ' \
+    'recipient had been seen, and the fencing value, ' \
+    'beginning with `AGENT_COORDINATION_SENT` only when the ' \
+    'send and the release both succeeded.')"
+```
+
+> AGENT_COORDINATION_SENT - Live agents: planner - Message ID:
+> 8675cd7d-eb27-4096-befe-e30ab85fe959 - Recipient seen: false - Fencing
+> value: 1 - Reservation released: true
+
+``` sh
+'/root/pi-ducknng/node_modules/.bin/pi' --provider 'openai-codex' --model 'gpt-6-astra' --no-extensions --thinking 'medium' -e './extensions/pi-ducknng/index.ts' --no-session -p \
+  "$(printf %s \
+    'You are agent `reviewer`. Call coordination_inbox with ' \
+    'wait_ms 20000 to read your handoff. Answer it by ' \
+    'computing the aggregate with the persistent R adapter ' \
+    '(start it, follow its ducknng manifest, and close it ' \
+    'when done). Reply to the sender with coordination_send ' \
+    'in one sentence. Report the sender, the message ID, both ' \
+    'handoff lines exactly as received, the computed rows, ' \
+    "and your reply's message ID, beginning with " \
+    '`AGENT_COORDINATION_REPLIED` only when you received ' \
+    'exactly one message, it came from `planner`, and your ' \
+    'reply was stored.')"
+```
+
+> AGENT_COORDINATION_REPLIED
+>
+> Sender: `planner` Message ID: `8675cd7d-eb27-4096-befe-e30ab85fe959`
+>
+> Handoff:
+>
+> ``` text
+> Review mpg by cylinder count in datasets::mtcars.
+> Reply with one sentence naming the cylinder count with the highest mean mpg and that mean.
+> ```
+>
+> Computed rows:
+>
+> | cyl |           mean mpg |
+> |----:|-------------------:|
+> |   4 | 26.663636363636364 |
+> |   6 | 19.742857142857144 |
+> |   8 |               15.1 |
+>
+> Reply: The 4-cylinder group has the highest mean mpg at
+> 26.663636363636364.
+>
+> Reply message ID: `33804b66-c564-4078-a641-0d1bbad9127c`
+>
+> Persistent R adapter closed.
+
+The endpoint, not either model, confirms the round trip:
+
+``` r
+source("tools/ducknng-rpc.R")
+url <- Sys.getenv("PI_DUCKNNG_COORDINATION_URL")
+verifier <- rpc_call(url, "register", list(
+  project_id = "readme", agent_id = "planner",
+  instance_id = "readme-verifier", operation_key = "verify"
+))
+inbox <- rpc_call(
+  url, "receive",
+  list(registration_id = verifier$registration_id, wait_ms = 5000),
+  timeout_ms = 10000
+)$messages
+reservations <- rpc_call(url, "list_reservations", list(
+  registration_id = verifier$registration_id
+))$reservations
+stopifnot(
+  length(inbox) == 1L,
+  identical(inbox[[1L]]$sender_agent_id, "reviewer"),
+  length(reservations) == 0L
+)
+invisible(rpc_call(url, "ack", list(
+  registration_id = verifier$registration_id,
+  receipt_token = inbox[[1L]]$receipt_token
+)))
+cat(
+  "COORDINATION_ROUND_TRIP_VERIFIED",
+  sprintf("reply from %s: %s", inbox[[1L]]$sender_agent_id, inbox[[1L]]$content),
+  sep = "\n"
+)
+```
+
+    COORDINATION_ROUND_TRIP_VERIFIED
+    reply from reviewer: The 4-cylinder group has the highest mean mpg at 26.663636363636364.
 
 ## Agent-backed pkgdown articles
 
