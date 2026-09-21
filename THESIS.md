@@ -125,6 +125,25 @@ when another instance holds a conflicting reservation. This gate covers only
 Pi's own file tools, not writes made through `bash`. It lets the call through
 when the endpoint is unreachable.
 
+## AgentHarness adapter
+
+A host process that owns a `@earendil-works/pi-agent-core` `AgentHarness`
+attaches one lane to one mailbox with `attachCoordinationLane` from
+`extensions/pi-ducknng/harness.ts`. It uses `ducknngCoordinationClient` from
+the extension module. The adapter registers with `adapter_kind` set to
+`agent_harness` and a delivery capability of `harness_lane_commit`. It waits
+on `receive` and first looks for a lane entry that already carries the
+message ID, in the lane's queues or its transcript. Only if none exists does
+it admit the envelope, with `steer` while an operation runs and with `nextRun`
+otherwise. It acknowledges with the lane entry ID as `delivery_ref`. A lost
+acknowledgement therefore leads to redelivery and reconciliation, never to a
+second lane entry. The commit is durable only when the harness session uses a
+durable `SessionRepo` such as `JsonlSessionRepo`. The adapter never calls
+`drive`, and the host keeps ownership of runs, operation recovery, and the
+model runtime.
+
+## Deployment profile
+
 The first deployment profile is one user on one machine. The default `ipc://`
 socket is created with a 0077 umask inside the directory that holds the
 database, so filesystem permissions decide who can connect. `register`
@@ -145,6 +164,7 @@ source of truth.
 | R table/vector conversion | nanoarrow |
 | Durable coordination tables and transactions | endpoint-owned DuckDB database |
 | Pi steering, tool calls, and session-entry receipts | Pi public extension API |
+| Harness lanes, runs, and operation recovery | host process that owns the `AgentHarness` |
 | Tool projection, local endpoint lifecycle, and the coordination adapter | `pi-ducknng` |
 
 Ducknng changes belong upstream and arrive here through the pinned subtree.
@@ -206,6 +226,14 @@ real endpoint. It checks:
 - lease release at shutdown;
 - tool deactivation and reinjection suppression.
 
+`test/coordination-harness.test.js` attaches a real `AgentHarness` lane on a
+`JsonlSessionRepo` to a real endpoint. It drops an acknowledgement after the
+lane commit and checks the following:
+
+- redelivery reuses the existing lane entry;
+- the committed entries survive reopening the session;
+- the endpoint records both messages as acknowledged.
+
 `inst/tinytest/test-coordination.R` covers:
 
 - offline mail and idempotent send;
@@ -227,5 +255,4 @@ executable proof before it is added:
 - structured R conditions, interruption, streaming, and attachment to the R
   endpoint by a second non-Pi client;
 - authenticated identities, TLS, and cross-user or cross-host deployment;
-- broadcast delivery to several mailboxes;
-- a host-owned `AgentHarness` adapter with a durable-lane acknowledgement.
+- broadcast delivery to several mailboxes.

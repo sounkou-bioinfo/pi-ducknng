@@ -10,8 +10,7 @@ piknit::register_engines()
 
 # pi-ducknng
 
-[![Lifecycle:
-experimental](https://img.shields.io/badge/lifecycle-experimental-orange.svg)](https://lifecycle.r-lib.org/articles/stages.html#experimental)
+[![Lifecycle: experimental](https://img.shields.io/badge/lifecycle-experimental-orange.svg)](https://lifecycle.r-lib.org/articles/stages.html#experimental)
 
 `pi-ducknng` lets Pi agents discover and call manifested ducknng endpoints.
 It ships two endpoints: a persistent R session and a durable coordination
@@ -114,6 +113,24 @@ model's context.
 
 This first endpoint is for one user on one machine and has no
 authentication beyond filesystem permissions.
+
+A host process that owns a `pi-agent-core` `AgentHarness` can attach a lane
+to a mailbox. Each message is committed to the lane before it is
+acknowledged, and a redelivered message is matched to its existing lane entry
+by message ID:
+
+```js
+import { attachCoordinationLane } from "pi-ducknng/extensions/pi-ducknng/harness.ts";
+import { ducknngCoordinationClient } from "pi-ducknng/extensions/pi-ducknng/index.ts";
+
+const coordination = attachCoordinationLane({
+  client: ducknngCoordinationClient,
+  url, projectId: "my-project", agentId: "worker", instanceId: "host-1",
+  lane: await harness.lane("main", context),
+  context,
+});
+await coordination.ready;
+```
 
 ### Two agents, one handoff
 

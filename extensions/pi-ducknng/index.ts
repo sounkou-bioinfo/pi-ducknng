@@ -10,7 +10,10 @@ import {
 } from "@duckdb/node-api";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
-import { registerCoordinationAdapter } from "./coordination.ts";
+import {
+  type CoordinationClient,
+  registerCoordinationAdapter,
+} from "./coordination.ts";
 
 const execFileAsync = promisify(execFile);
 const PACKAGE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
@@ -691,6 +694,15 @@ function toolResultDetails(value: unknown): unknown {
 function stringifyToolResult(value: unknown): string {
   return JSON.stringify(value, null, 2);
 }
+
+/**
+ * The DuckDB and ducknng client used by the Pi adapter, for host processes
+ * that attach an `AgentHarness` lane with `attachCoordinationLane`.
+ */
+export const ducknngCoordinationClient: CoordinationClient = {
+  describe: describeEndpoint,
+  call: callCoordinationEndpoint,
+};
 
 export default function piDucknngExtension(pi: ExtensionAPI): void {
   pi.registerTool({

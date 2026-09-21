@@ -8,7 +8,7 @@ import type {
 import { Type } from "@sinclair/typebox";
 
 const DELIVERY_ENTRY_TYPE = "piducknng.coordination.delivery";
-const MESSAGE_TYPE = "piducknng_coordination";
+export const COORDINATION_MESSAGE_TYPE = "piducknng_coordination";
 const DEFAULT_TTL_MS = 30_000;
 const RECEIVE_WAIT_MS = 20_000;
 const RESERVATION_TTL_MS = 120_000;
@@ -100,7 +100,7 @@ function numberValue(
   return member;
 }
 
-function parseRegistration(value: unknown): Registration {
+export function parseRegistration(value: unknown): Registration {
   const record = objectValue(value, "coordination registration");
   return {
     registration_id: stringValue(record, "registration_id"),
@@ -108,7 +108,7 @@ function parseRegistration(value: unknown): Registration {
   };
 }
 
-function parseMessages(value: unknown): InboxMessage[] {
+export function parseMessages(value: unknown): InboxMessage[] {
   const record = objectValue(value, "coordination receive reply");
   if (!Array.isArray(record.messages)) {
     throw new Error("coordination receive reply has invalid messages");
@@ -329,7 +329,7 @@ async function steerMessage(
   signal.throwIfAborted();
   if (!runtime.delivered.has(message.message_id)) {
     pi.sendMessage({
-      customType: MESSAGE_TYPE,
+      customType: COORDINATION_MESSAGE_TYPE,
       content: coordinationEnvelope(message),
       display: true,
       details: {

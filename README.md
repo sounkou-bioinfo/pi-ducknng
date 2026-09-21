@@ -66,12 +66,13 @@ survives across fresh DuckDB clients.
 
 > AGENT_DUCKNNG_MANIFEST_CALL_OK
 >
-> Manifested methods: `eval` (JSON → Arrow), `close` (JSON → JSON).
+> Manifested methods: `eval` (JSON → Arrow, persistent R process),
+> `close` (JSON → JSON).
 >
-> Both eval calls succeeded in endpoint process `306401`, preserving
-> `mpg_by_cyl`. Endpoint closed successfully.
+> Both eval calls succeeded in endpoint process **320648**. Endpoint
+> closed successfully.
 >
-> First decoded result:
+> First call decoded rows:
 >
 > | cyl |                mpg |
 > |----:|-------------------:|
@@ -79,7 +80,7 @@ survives across fresh DuckDB clients.
 > |   6 | 19.742857142857144 |
 > |   8 |               15.1 |
 >
-> Second decoded result:
+> Second call, using persisted `mpg_by_cyl`:
 >
 > | cyl |                mpg |     delta_from_4cyl |
 > |----:|-------------------:|--------------------:|
@@ -144,6 +145,24 @@ model’s context.
 This first endpoint is for one user on one machine and has no
 authentication beyond filesystem permissions.
 
+A host process that owns a `pi-agent-core` `AgentHarness` can attach a
+lane to a mailbox. Each message is committed to the lane before it is
+acknowledged, and a redelivered message is matched to its existing lane
+entry by message ID:
+
+``` js
+import { attachCoordinationLane } from "pi-ducknng/extensions/pi-ducknng/harness.ts";
+import { ducknngCoordinationClient } from "pi-ducknng/extensions/pi-ducknng/index.ts";
+
+const coordination = attachCoordinationLane({
+  client: ducknngCoordinationClient,
+  url, projectId: "my-project", agentId: "worker", instanceId: "host-1",
+  lane: await harness.lane("main", context),
+  context,
+});
+await coordination.ready;
+```
+
 ### Two agents, one handoff
 
 The cells below start a coordination endpoint and run two one-shot Codex
@@ -168,9 +187,9 @@ the endpoint’s own methods rather than trusting either agent’s report.
     'send and the release both succeeded.')"
 ```
 
-> AGENT_COORDINATION_SENT - Live agents: planner - Message ID:
-> 8675cd7d-eb27-4096-befe-e30ab85fe959 - Recipient seen: false - Fencing
-> value: 1 - Reservation released: true
+> AGENT_COORDINATION_SENT - Live agents: `planner` - Message ID:
+> `91c4089a-1d71-4a8a-bd9b-e905cd8de765` - Recipient seen: false -
+> Fencing value: 1 - Reservation released: true
 
 ``` sh
 '/root/pi-ducknng/node_modules/.bin/pi' --provider 'openai-codex' --model 'gpt-6-astra' --no-extensions --thinking 'medium' -e './extensions/pi-ducknng/index.ts' --no-session -p \
@@ -190,9 +209,8 @@ the endpoint’s own methods rather than trusting either agent’s report.
 
 > AGENT_COORDINATION_REPLIED
 >
-> Sender: `planner` Message ID: `8675cd7d-eb27-4096-befe-e30ab85fe959`
->
-> Handoff:
+> Sender: planner  
+> Message ID: 91c4089a-1d71-4a8a-bd9b-e905cd8de765
 >
 > ``` text
 > Review mpg by cylinder count in datasets::mtcars.
@@ -210,7 +228,7 @@ the endpoint’s own methods rather than trusting either agent’s report.
 > Reply: The 4-cylinder group has the highest mean mpg at
 > 26.663636363636364.
 >
-> Reply message ID: `33804b66-c564-4078-a641-0d1bbad9127c`
+> Reply message ID: b3619f9e-012f-4ea6-8eb2-c179fc54e9a5
 >
 > Persistent R adapter closed.
 
