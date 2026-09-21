@@ -2,23 +2,21 @@
 
 # pi-ducknng
 
-`pi-ducknng` is a ducknng-backed network substrate for Pi, beginning
-with persistent R sessions.
+`pi-ducknng` lets Pi agents discover and call manifested ducknng
+endpoints. It ships two endpoints: a persistent R session and a durable
+coordination service for Pi sessions.
 
 ## Architecture
 
 ![Generic ducknng endpoint architecture](man/figures/architecture.svg)
 
-Placement stays outside the generic invocation path and supplies an
-endpoint URL. Endpoint-specific implementations belong in the examples
-below. The committed SVG is generated from the Mermaid source in
-`man/figures/architecture.mmd`.
-
-DuckDB owns native extension loading and host-language calls. The
-hard-vendored ducknng release owns transport, mbedTLS, identity,
+An endpoint is placed first and supplies a URL. Discovery and calls stay
+generic. DuckDB owns native extension loading and host-language calls.
+The hard-vendored ducknng release owns transport, mbedTLS, identity,
 framing, manifests, sessions, AIO, cancellation, and codecs. The R
-package composes `nanonext` and `mirai`; it does not reproduce those
-layers.
+endpoints compose `nanonext` and `mirai` and do not reproduce those
+layers. `make architecture` regenerates the SVG from
+`man/figures/architecture.mmd`.
 
 ## Pi package
 
@@ -28,64 +26,22 @@ Install the repository as a Pi package:
 pi install git:github.com/sounkou-bioinfo/pi-ducknng
 ```
 
-The package contributes three model tools: `persistent_r_start` places
-the first adapter, `ducknng_describe` reads any compatible endpoint
-manifest, and `ducknng_call` invokes a declared method. On first use it
-builds the pinned ducknng source; this requires Git, Make, CMake,
-Python, and a C/C++ toolchain. The R runtime must provide the packages
-listed under `Imports` in [`DESCRIPTION`](DESCRIPTION).
+The package contributes three model tools:
 
-## Durable agent coordination
+- `persistent_r_start` places the R endpoint;
+- `ducknng_describe` reads any compatible endpoint manifest;
+- `ducknng_call` invokes a declared method.
 
-Start the coordination endpoint independently of any Pi session. Keep
-its locator and DuckDB state in a private persistent directory:
+On first use the package builds the pinned ducknng source, which
+requires Git, Make, CMake, Python, and a C/C++ toolchain. The R runtime
+must provide the packages listed under `Imports` in
+[`DESCRIPTION`](DESCRIPTION).
 
-``` sh
-install -d -m 700 "$HOME/.local/state/pi-ducknng"
-Rscript --vanilla tools/pi-coordination-endpoint.R \
-  "$HOME/.local/state/pi-ducknng/coordination.url" \
-  "$HOME/.local/state/pi-ducknng/coordination.duckdb"
-```
-
-The endpoint manifests `register`, `heartbeat`, `list_agents`, `send`,
-`receive`, `ack`, `reserve`, `release`, and `unregister`. It has no
-evaluation method. Mail is stored before `send` returns, survives
-disconnected Pi sessions and endpoint restarts, and is leased by
-`receive` until acknowledged or the visibility timeout expires.
-Reservations are advisory leases over canonical opaque `resource:`
-identifiers or lexical canonical `file:///` URIs. An acquisition
-operation key is not reused while its record is retained; reacquisition
-after release or expiry uses a new key and fencing generation.
-Acknowledged messages and expired operation records are retained for 30
-days, and each mailbox accepts at most 10,000 pending messages.
-
-Attach an interactive Pi session in another terminal:
-
-``` sh
-export PI_DUCKNNG_COORDINATION_URL="$(cat \
-  "$HOME/.local/state/pi-ducknng/coordination.url")"
-export PI_DUCKNNG_COORDINATION_PROJECT="my-project"
-export PI_DUCKNNG_AGENT_ID="reviewer"
-pi
-```
-
-The extension registers the Pi session, heartbeats, polls its stable
-mailbox, injects messages through Pi’s steering API, and acknowledges
-after API acceptance. Stable message IDs are recorded in Pi session
-entries for retry reconciliation. Delivery is at least once; work
-performed in response to a message is not exactly once.
-
-This initial endpoint is for one trusted user on one machine. It listens
-on loopback and does not provide cross-user or cross-host authorization.
-NNG PUB/SUB is deliberately absent from the correctness path: a later
-event socket may reduce wake-up latency, but missed events must always
-be repaired by `receive`.
-
-## Pi-to-R proof
+## Persistent R
 
 The evaluated cell below loads the package extension into an OpenAI
 Codex agent. The model discovers the endpoint’s methods and request
-examples, then performs an `mtcars` analysis whose intermediate table
+examples, then runs an `mtcars` analysis whose intermediate table
 survives across fresh DuckDB clients.
 
 ``` sh
@@ -105,13 +61,13 @@ survives across fresh DuckDB clients.
 
 > AGENT_DUCKNNG_MANIFEST_CALL_OK
 >
-> Manifested methods: `eval` (JSON → Arrow, persistent process), `close`
-> (JSON → JSON).
+> Manifested methods: `eval` (JSON → Arrow, persistent R evaluation),
+> `close` (JSON → JSON, stops endpoint).
 >
-> Both eval calls succeeded in endpoint process `146187`. Endpoint
-> closed successfully.
+> Both eval calls succeeded in endpoint process `257984`, preserving
+> `mpg_by_cyl`. Endpoint closed successfully.
 >
-> First call — decoded rows:
+> First call decoded rows:
 >
 > | cyl |                mpg |
 > |----:|-------------------:|
@@ -119,7 +75,7 @@ survives across fresh DuckDB clients.
 > |   6 | 19.742857142857144 |
 > |   8 |               15.1 |
 >
-> Second call — using persisted `mpg_by_cyl`:
+> Second call decoded rows:
 >
 > | cyl |                mpg |     delta_from_4cyl |
 > |----:|-------------------:|--------------------:|
@@ -127,21 +83,63 @@ survives across fresh DuckDB clients.
 > |   6 | 19.742857142857144 |   -6.92077922077922 |
 > |   8 |               15.1 | -11.563636363636364 |
 
-`persistent_r_start` returns an NNG URL, `ducknng_describe` fetches the
-endpoint’s ducknng RPC manifest, and `ducknng_call` sends declared calls
-as ducknng frames. Each tool request opens and closes a fresh DuckDB
-instance. Eval results are Arrow IPC streams produced by nanoarrow and
-decoded by ducknng; the mirai-owned R environment remains in the same
-endpoint process.
+Each tool request opens and closes a fresh DuckDB instance. Eval results
+travel as Arrow IPC streams written by nanoarrow and decoded by ducknng.
+The mirai-owned R environment stays in the endpoint process until
+`close` or 30 seconds without a request.
 
-Executable documentation uses `piknit`; `make readme` rejects output
-without the agent’s success receipt.
+The README is rendered by `piknit`, and `make readme` rejects output
+that lacks the agent’s success receipt.
+
+## Durable agent coordination
+
+Start the coordination endpoint independently of any Pi session, with
+its locator and DuckDB state in a private directory:
+
+``` sh
+install -d -m 700 "$HOME/.local/state/pi-ducknng"
+Rscript --vanilla tools/pi-coordination-endpoint.R \
+  "$HOME/.local/state/pi-ducknng/coordination.url" \
+  "$HOME/.local/state/pi-ducknng/coordination.duckdb"
+```
+
+Attach an interactive Pi session in another terminal:
+
+``` sh
+export PI_DUCKNNG_COORDINATION_URL="$(cat \
+  "$HOME/.local/state/pi-ducknng/coordination.url")"
+export PI_DUCKNNG_COORDINATION_PROJECT="my-project"
+export PI_DUCKNNG_AGENT_ID="reviewer"
+pi
+```
+
+The extension registers the session and polls the `reviewer` mailbox. It
+injects each message through Pi’s steering API and acknowledges it once
+that call returns.
+
+- `send` stores mail before replying. Queued mail and reservations
+  survive disconnected sessions and endpoint restarts.
+- Delivery is at least once. A crash between injection and
+  acknowledgement redelivers the same message ID, and work done in
+  response is not exactly once.
+- Reservations are advisory leases over `resource:` identifiers or
+  canonical `file:///` URIs, with a fencing value that increases across
+  the project.
+- Acknowledged messages are kept for 30 days. A mailbox holds at most
+  10,000 unacknowledged messages.
+
+This first endpoint is for one trusted user on one machine. It listens
+on a new loopback port at each start, so restart attached Pi sessions
+after restarting it. It has no authentication, and the adapter does not
+yet give the model its own send or reserve tool. NNG PUB/SUB is kept off
+the correctness path: a later event socket may reduce wake-up latency,
+but `receive` always repairs missed events.
 
 ## Agent-backed pkgdown articles
 
 Two pkgdown articles are authored as `vignettes/*.Rmd.orig` and
-precomputed with `openai-codex` agents. The committed `.Rmd` results let
-package and site builds remain credential-free, following the [rOpenSci
+precomputed with `openai-codex` agents. The committed `.Rmd` results
+keep package and site builds credential-free, following the [rOpenSci
 precomputed-vignette
 pattern](https://ropensci.org/blog/2019/12/08/precompute-vignettes/).
 
@@ -153,11 +151,12 @@ make site
 ## Pinned runtime tuple
 
 | Component                         | Version              |
-|-----------------------------------|----------------------|
+|:----------------------------------|:---------------------|
 | DuckDB                            | 1.5.4                |
 | `@duckdb/node-api`                | 1.5.4-r.1            |
 | ducknng                           | `v0.1.1-duckdb1.5.4` |
 | `@earendil-works/pi-coding-agent` | 0.86.1               |
 | `@earendil-works/pi-agent-core`   | 0.86.1               |
 
-[`DEPENDENCIES`](DEPENDENCIES) records the exact source commit.
+[`DEPENDENCIES`](DEPENDENCIES) is the version authority and records the
+exact source commits.

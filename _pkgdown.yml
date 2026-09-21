@@ -7,7 +7,7 @@ development:
   mode: unreleased
 
 home:
-  title: Reach persistent R from Pi through DuckDB and ducknng
+  title: Manifested ducknng endpoints for Pi agents
 
 articles:
   - title: OpenAI Codex agent evidence
