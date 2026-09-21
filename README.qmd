@@ -10,7 +10,7 @@ piknit::register_engines()
 
 # pi-ducknng
 
-[![Lifecycle: experimental](https://img.shields.io/badge/lifecycle-experimental-orange.svg)](https://lifecycle.r-lib.org/articles/stages.html#experimental)
+<a href="https://lifecycle.r-lib.org/articles/stages.html#experimental"><img src="https://img.shields.io/badge/lifecycle-experimental-orange.svg" alt="Lifecycle: experimental" /></a>
 
 `pi-ducknng` lets Pi agents discover and call manifested ducknng endpoints.
 It ships two endpoints: a persistent R session and a durable coordination
@@ -23,9 +23,11 @@ service for Pi sessions.
 An endpoint is placed first and supplies a URL. Discovery and calls stay
 generic. DuckDB owns native extension loading and host-language calls. The
 hard-vendored ducknng release owns transport, mbedTLS, identity, framing,
-manifests, sessions, AIO, cancellation, and codecs. The R endpoints compose
-`nanonext` and `mirai` and do not reproduce those layers. `make architecture`
-regenerates the SVG from `man/figures/architecture.mmd`.
+manifests, sessions, AIO, cancellation, and codecs. The R endpoint composes
+`nanonext` and `mirai` and does not reproduce those layers. The coordination
+endpoint has no host-language logic at all: its methods are SQL that ducknng
+serves. `make architecture` regenerates the SVG from
+`man/figures/architecture.mmd`.
 
 ## Pi package
 
@@ -47,6 +49,11 @@ tools described below.
 On first use the package builds the pinned ducknng source, which requires
 Git, Make, CMake, Python, and a C/C++ toolchain. The R runtime must provide
 the packages listed under `Imports` in [`DESCRIPTION`](DESCRIPTION).
+
+For `tls+tcp://` and `wss://` endpoints, point `PI_DUCKNNG_TLS_CA_FILE` at the
+CA that signed the server certificate. For mutual TLS, also point
+`PI_DUCKNNG_TLS_CERT_KEY_FILE` at a PEM file holding the client certificate
+and key. The paths never enter tool schemas or results.
 
 ## Persistent R
 
@@ -70,14 +77,15 @@ receipt.
 
 ## Durable agent coordination
 
-Start the coordination endpoint independently of any Pi session, with its
-DuckDB state in a private directory. It listens on `ipc://` beside the
-database, so the address survives restarts and only the directory's owner can
-connect:
+The coordination endpoint is a DuckDB database whose methods are
+[SQL files](coordination/methods) served by ducknng. Start it independently of
+any Pi session, with its state in a private directory. It listens on `ipc://`
+beside the database, so the address survives restarts and only the
+directory's owner can connect:
 
 ```sh
 install -d -m 700 "$HOME/.local/state/pi-ducknng"
-Rscript --vanilla tools/pi-coordination-endpoint.R \
+node tools/pi-coordination-endpoint.ts \
   "$HOME/.local/state/pi-ducknng/coordination.url" \
   "$HOME/.local/state/pi-ducknng/coordination.duckdb"
 ```
@@ -97,7 +105,7 @@ The attached session gets five tools: `coordination_send`,
 `coordination_release`. The registration behind them never enters the
 model's context.
 
-- **Delivery.** An interactive session waits on its mailbox in the background
+- **Delivery.** An interactive session polls its mailbox in the background
   and steers each message into the conversation. A one-shot `pi -p` run pulls
   mail with `coordination_inbox`. Every message arrives framed with its sender
   and message ID and is marked as coming from another agent, not the user.
@@ -111,8 +119,25 @@ model's context.
   lease it holds until release or shutdown. While another session holds a
   path, Pi's `edit` and `write` tools refuse to touch it.
 
-This first endpoint is for one user on one machine and has no
-authentication beyond filesystem permissions.
+Over `ipc://`, filesystem permissions are the only authentication. To serve
+agents on several hosts or users, start the endpoint on mutual TLS with a
+grants file that names which certificate may act as which agent:
+
+```sh
+cat > grants.json <<'JSON'
+[{"peer_identity": "tls:cn:reviewer", "project_id": "my-project", "agent_id": "reviewer"},
+ {"peer_identity": "tls:cn:planner", "project_id": "my-project", "agent_id": "*"}]
+JSON
+PI_DUCKNNG_COORDINATION_TLS_CERT_KEY_FILE=server.pem \
+PI_DUCKNNG_COORDINATION_TLS_CA_FILE=ca.pem \
+PI_DUCKNNG_COORDINATION_GRANTS_FILE=grants.json \
+  node tools/pi-coordination-endpoint.ts coordination.url coordination.duckdb \
+  tls+tcp://0.0.0.0:7400
+```
+
+Every call must then present a certificate from that CA. A certificate may
+register only the agents it is granted, and a registration ID is useless to
+any other certificate.
 
 A host process that owns a `pi-agent-core` `AgentHarness` can attach a lane
 to a mailbox. Each message is committed to the lane before it is
@@ -146,11 +171,8 @@ state <- tempfile("pi-ducknng-readme-")
 dir.create(state, mode = "0700")
 locator <- file.path(state, "coordination.url")
 endpoint <- processx::process$new(
-  "Rscript",
-  c(
-    "--vanilla", "tools/pi-coordination-endpoint.R",
-    locator, file.path(state, "coordination.duckdb")
-  )
+  "node",
+  c("tools/pi-coordination-endpoint.ts", locator, file.path(state, "coordination.duckdb"))
 )
 listening <- function() {
   file.exists(locator) && length(readLines(locator, warn = FALSE)) == 1L
@@ -189,11 +211,9 @@ verifier <- rpc_call(url, "register", list(
   project_id = "readme", agent_id = "planner",
   instance_id = "readme-verifier", operation_key = "verify"
 ))
-inbox <- rpc_call(
-  url, "receive",
-  list(registration_id = verifier$registration_id, wait_ms = 5000),
-  timeout_ms = 10000
-)$messages
+inbox <- rpc_call(url, "receive", list(
+  registration_id = verifier$registration_id
+))$messages
 reservations <- rpc_call(url, "list_reservations", list(
   registration_id = verifier$registration_id
 ))$reservations

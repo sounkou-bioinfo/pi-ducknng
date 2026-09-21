@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import test from "node:test";
@@ -10,32 +9,11 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/pi-agent-core/harness/contex
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { createModels, fauxProvider } from "@earendil-works/pi-ai";
 
+import { startCoordinationEndpoint } from "../extensions/pi-ducknng/coordination-endpoint.ts";
 import { attachCoordinationLane } from "../extensions/pi-ducknng/harness.ts";
 import { ducknngCoordinationClient } from "../extensions/pi-ducknng/index.ts";
 
-const ROOT = resolve(import.meta.dirname, "..");
 const context = BACKGROUND_CONTEXT;
-
-async function startEndpoint(work) {
-  const locator = resolve(work, "endpoint.url");
-  const child = spawn(
-    process.env.RSCRIPT ?? "Rscript",
-    [
-      "--vanilla",
-      "tools/pi-coordination-endpoint.R",
-      locator,
-      resolve(work, "coordination.duckdb"),
-    ],
-    { cwd: ROOT, stdio: "ignore" },
-  );
-  const deadline = Date.now() + 15000;
-  while (Date.now() < deadline) {
-    const url = (await readFile(locator, "utf8").catch(() => "")).trim();
-    if (url) return { child, url };
-    await new Promise((resolveDelay) => setTimeout(resolveDelay, 50));
-  }
-  throw new Error("timed out waiting for coordination endpoint");
-}
 
 async function openLane(work, metadata) {
   const env = new NodeExecutionEnv({ cwd: work });
@@ -91,7 +69,9 @@ function waitFor(predicate, timeout, label) {
 
 test("a harness lane commits mail before acknowledging and reconciles redelivery", async () => {
   const work = await mkdtemp(resolve(tmpdir(), "pi-ducknng-harness-test-"));
-  const endpoint = await startEndpoint(work);
+  const endpoint = await startCoordinationEndpoint({
+    database: resolve(work, "coordination.duckdb"),
+  });
   const { url } = endpoint;
   const acks = [];
   let dropNextAck = false;
@@ -135,7 +115,7 @@ test("a harness lane commits mail before acknowledging and reconciles redelivery
       lane: opened.lane,
       context,
       visibilityTimeoutMs: 1000,
-      waitMs: 2000,
+      pollMs: 100,
       onError: (error) => errors.push(error.message),
     });
     await attached.ready;
@@ -195,8 +175,7 @@ test("a harness lane commits mail before acknowledging and reconciles redelivery
   } finally {
     await attached?.stop();
     await opened.close();
-    endpoint.child.kill();
-    await new Promise((resolveExit) => endpoint.child.once("exit", resolveExit));
+    await endpoint.close();
     await rm(work, { recursive: true, force: true });
   }
 });

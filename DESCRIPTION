@@ -12,17 +12,15 @@ Authors@R: c(
     comment = "Mbed TLS copyright holders")
   )
 Description: A thin R and Pi integration layer that composes ducknng RPC
-    manifests and calls with nanonext, nanoarrow, and mirai. It provides
-    persistent R evaluation, durable local agent coordination, and generic Pi
-    discovery/call tools without re-implementing NNG transport, process
-    scheduling, AIO, or transport security.
+    manifests and calls with nanonext, nanoarrow, and mirai. It provides a
+    persistent R evaluation endpoint and generic Pi discovery/call tools
+    without re-implementing NNG transport, process scheduling, AIO, or
+    transport security.
 License: GPL (>= 3)
 Encoding: UTF-8
 Depends:
     R (>= 4.3)
 Imports:
-    DBI (>= 1.3.0),
-    duckdb (>= 1.5.4),
     jsonlite,
     mirai,
     nanoarrow,

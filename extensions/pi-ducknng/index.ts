@@ -16,7 +16,7 @@ import {
 } from "./coordination.ts";
 
 const execFileAsync = promisify(execFile);
-const PACKAGE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+export const PACKAGE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const DUCKNNG_WIRE_VERSION = 1;
 const DUCKNNG_RPC_CALL = 1;
 const DUCKNNG_RPC_FLAG_PAYLOAD_JSON = 4;
@@ -38,7 +38,7 @@ const RPC_CALL_SQL = `
     )
   )`;
 
-async function ensureDucknngExtension(root: string): Promise<string> {
+export async function ensureDucknngExtension(root: string): Promise<string> {
   const configured = process.env.DUCKNNG_EXTENSION_PATH;
   const extensionPath = configured
     ? resolve(configured)
@@ -589,8 +589,8 @@ function declaredJsonMethod(url: string, method: string): EndpointMethod {
   return descriptor;
 }
 
-// Coordination requests may wait server-side, so they bypass the per-URL turn
-// that orders model calls; the endpoint answers each NNG context separately.
+// The coordination adapter's own requests bypass the per-URL turn that orders
+// model calls, so background polling never delays a model tool call.
 async function callCoordinationEndpoint(
   url: string,
   method: string,

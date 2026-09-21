@@ -12,13 +12,8 @@ const ROOT = resolve(import.meta.dirname, "..");
 async function startEndpoint(work) {
   const locator = resolve(work, `endpoint-${Date.now()}.url`);
   const child = spawn(
-    process.env.RSCRIPT ?? "Rscript",
-    [
-      "--vanilla",
-      "tools/pi-coordination-endpoint.R",
-      locator,
-      resolve(work, "coordination.duckdb"),
-    ],
+    process.execPath,
+    ["tools/pi-coordination-endpoint.ts", locator, resolve(work, "coordination.duckdb")],
     { cwd: ROOT, stdio: "ignore" },
   );
   const deadline = Date.now() + 15000;
@@ -141,7 +136,7 @@ test("two Pi sessions coordinate through the manifested endpoint", async () => {
     });
     assert.equal(sent.recipient_seen, true);
     await waitFor(() => bob.steered.length === 1, 5000, "bob steering");
-    assert.ok(bob.steered[0].at - sentAt < 2000, "waiting receive delivers promptly");
+    assert.ok(bob.steered[0].at - sentAt < 2500, "polling delivers within the poll interval");
     assert.match(bob.steered[0].message.content, /from="alice"/);
     assert.match(bob.steered[0].message.content, /Review src\/model\.R\.\nReply/);
 

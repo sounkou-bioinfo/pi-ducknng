@@ -6,8 +6,9 @@
 Node NNG binding, a second wire protocol, or an endpoint-specific Pi tool for
 every method. Endpoint placement is separate from discovery and invocation.
 The package places a persistent R endpoint on demand. A separately started
-coordination endpoint gives Pi sessions durable mail and advisory
-reservations. The generic tools accept any compatible URL.
+coordination endpoint, whose methods are SQL served by ducknng itself, gives
+Pi sessions durable mail and advisory reservations. The generic tools accept
+any compatible URL.
 
 ## Generic Pi tools
 
@@ -46,24 +47,33 @@ exits after it disappears, so idle time never discards the R environment.
 
 ## Coordination endpoint
 
-`tools/pi-coordination-endpoint.R` runs independently of any Pi session and is
-the sole owner of one DuckDB database file. It declares `register`,
-`heartbeat`, `list_agents`, `send`, `receive`, `ack`, `reserve`,
-`list_reservations`, `release`, and `unregister`. It does not declare `eval`,
-and clients reach its tables only through those methods.
+The coordination endpoint is a DuckDB database served by ducknng. Its methods
+are ducknng SQL-defined methods whose handler SQL lives in
+`coordination/methods/*.sql`; `coordination/schema.sql` defines the tables and
+the validation macros, and `coordination/methods.json` supplies each method's
+manifest request schema. That SQL is the whole implementation. The host,
+`tools/pi-coordination-endpoint.ts` started with Node, owns only the database
+file, the listener, and the contents of the grant table. It runs independently
+of any Pi session and is the sole owner of its database. The manifest declares
+`register`, `heartbeat`, `list_agents`, `send`, `receive`, `ack`, `reserve`,
+`list_reservations`, `release`, and `unregister`, and no evaluation method.
+Clients reach the tables only through those methods.
 
-By default the endpoint listens on `ipc://` beside its database, so the
-address stays the same across restarts. It serves 64 NNG REP contexts. A
-`receive` with `wait_ms` holds one context until mail arrives or the wait
-ends, while other requests proceed on the remaining contexts. The serve loop
-retries parked receives after each dispatched request, which is when new mail
-can have been committed. Payloads larger than a method's manifested
-`max_request_bytes` are rejected. Failures travel as `<code>: <detail>` error
-text, and the manifest lists the codes.
+Each method call runs as one transaction on the service's request connection,
+with the caller's JSON object bound as the handler's parameter. A failure
+rolls the transaction back and returns a ducknng error whose text carries
+`<code>: <detail>`. The codes are `invalid_argument`, `registration_expired`,
+`unauthorized`, `idempotency_conflict`, `mailbox_full`, `receipt_invalid`,
+`lease_invalid`, and `resource_conflict`. Write methods first run a
+maintenance step at most once a second. It returns expired delivery leases to
+the queue, turns overdue mail into dead letters, and applies retention.
+`receive` replies at once, and callers poll.
 
 - **Identity.** A mailbox belongs to a stable `(project_id, agent_id)`.
   `register` binds an instance, such as a Pi session ID, to that mailbox and
-  returns an opaque `registration_id` for later calls. Presence is an
+  returns an opaque `registration_id` for later calls. The registration
+  records the caller's verified peer identity, and every later call with that
+  ID must come from the same identity. Presence is an
   unexpired server-side lease renewed by `heartbeat`. Live instances of one
   agent ID are competing consumers of its mailbox.
 - **Delivery.** `send` commits the message before replying. Content is UTF-8
@@ -100,14 +110,14 @@ session, and heartbeats. The registration ID stays in the adapter and never
 enters model context. After a `registration_expired` reply the adapter
 registers again and retries the call once.
 
-In the `tui` and `rpc` modes the adapter waits on `receive` in the background.
-It injects each new message with
+In the `tui` and `rpc` modes the adapter polls `receive` in the background,
+once a second while the mailbox is empty. It injects each new message with
 `pi.sendMessage(..., { triggerTurn: true, deliverAs: "steer" })`, appends a
 session entry holding the message ID, and then acknowledges. In the one-shot
 `print` and `json` modes it does not steer, and the model pulls mail with
-`coordination_inbox`. Either path frames the text in a `<coordination_message>`
-envelope that names the sender and message ID and states that the text is not
-from the user.
+`coordination_inbox`, which polls until mail arrives or its `wait_ms` ends.
+Either path frames the text in a `<coordination_message>` envelope that names
+the sender and message ID and states that the text is not from the user.
 
 The acknowledgement proves only that the public call returned. A busy session
 holds a steered message in its in-memory steering queue, and an idle session
@@ -138,8 +148,8 @@ A host process that owns a `@earendil-works/pi-agent-core` `AgentHarness`
 attaches one lane to one mailbox with `attachCoordinationLane` from
 `extensions/pi-ducknng/harness.ts`. It uses `ducknngCoordinationClient` from
 the extension module. The adapter registers with `adapter_kind` set to
-`agent_harness` and a delivery capability of `harness_lane_commit`. It waits
-on `receive` and first looks for a lane entry that already carries the
+`agent_harness` and a delivery capability of `harness_lane_commit`. It polls
+`receive` and first looks for a lane entry that already carries the
 message ID, in the lane's queues or its transcript. Only if none exists does
 it admit the envelope, with `steer` while an operation runs and with `nextRun`
 otherwise. It acknowledges with the lane entry ID as `delivery_ref`. A lost
@@ -149,15 +159,28 @@ durable `SessionRepo` such as `JsonlSessionRepo`. The adapter never calls
 `drive`, and the host keeps ownership of runs, operation recovery, and the
 model runtime.
 
-## Deployment profile
+## Deployment profiles
 
-The first deployment profile is one user on one machine. The default `ipc://`
-socket is created with a 0077 umask inside the directory that holds the
-database, so filesystem permissions decide who can connect. `register`
-accepts any project and agent ID, so a registration ID scopes calls but does
-not authenticate the caller. NNG PUB/SUB is not part of the mailbox. The
-waiting `receive` already provides prompt delivery, and `receive` remains the
-source of truth.
+The local profile is the default. The endpoint listens on `ipc://` beside its
+database, so the address survives restarts. The socket is created with a 0077
+umask inside the database's directory, so filesystem permissions decide who
+can connect. Callers carry no verified identity, and `register` accepts any
+project and agent ID.
+
+The mutual-TLS profile serves `tls+tcp://` with a listener certificate from
+`PI_DUCKNNG_COORDINATION_TLS_CERT_KEY_FILE` and client verification against
+`PI_DUCKNNG_COORDINATION_TLS_CA_FILE`. Every method then requires a verified
+peer identity. `PI_DUCKNNG_COORDINATION_GRANTS_FILE` lists which peer
+identities may register as which `(project_id, agent_id)`, and agent `*`
+grants a whole project. A caller without a matching grant is refused. A
+registration ID is useless to any other identity, and an instance stays bound
+to the identity that registered it. Clients present their certificates through
+`PI_DUCKNNG_TLS_CERT_KEY_FILE`. The same endpoint therefore serves agents on
+several hosts and users, with project isolation decided by certificates and
+grants.
+
+NNG PUB/SUB is not part of the mailbox, and `receive` remains the source of
+truth.
 
 ## Authorities and ownership
 
@@ -166,9 +189,11 @@ source of truth.
 | Exact DuckDB, Node API, Pi, and ducknng versions | `DEPENDENCIES` |
 | RPC frames, manifests, NNG, AIO, TLS, and codecs | hard-vendored ducknng |
 | Native extension loading and calls from Node | DuckDB and `@duckdb/node-api` |
-| R-side NNG endpoint and REP contexts | nanonext |
+| R-side NNG endpoint | nanonext |
 | Persistent R process and scheduling | mirai |
 | R table/vector conversion | nanoarrow |
+| Coordination method semantics | `coordination/*.sql` |
+| Coordination serving, admission, and peer identity | ducknng SQL-defined methods |
 | Durable coordination tables and transactions | endpoint-owned DuckDB database |
 | Pi steering, tool calls, and session-entry receipts | Pi public extension API |
 | Harness lanes, runs, and operation recovery | host process that owns the `AgentHarness` |
@@ -184,8 +209,8 @@ codec implementations.
 - A call must match a method in the fetched manifest.
 - Complete ducknng responses are parsed before model-facing output is bounded.
 - Only serialized model previews are capped; protocol bytes are not truncated.
-- Model calls to one URL are serialized. A coordination request that waits
-  holds one NNG context and does not block other requests.
+- Model calls to one URL are serialized. Adapter polling bypasses that order
+  and never delays a model tool call.
 - One coordination endpoint is the sole owner of its DuckDB database.
 - An endpoint placed by Pi does not outlive the process that placed it.
 - A dead local endpoint invalidates its cached manifest and process record.
@@ -196,13 +221,16 @@ codec implementations.
 - Durable mailbox correctness does not depend on presence or notification delivery.
 - An expired delivery lease makes the same message ID available for redelivery.
 - A stale reservation lease cannot release a newer coordinator lease.
+- A registration is usable only by the peer identity that created it.
 - Coordination state belongs to the independent endpoint, not a Pi session.
 
 ## Executable evidence
 
 `README.qmd` runs an OpenAI Codex agent that discovers the R manifest,
 persists an `mtcars` aggregate across fresh DuckDB clients, decodes both Arrow
-tables, and closes the endpoint. Two precomputed pkgdown articles exercise
+tables, and closes the endpoint. It then runs two Codex agents through a
+coordination endpoint and checks their round trip through the endpoint's own
+methods. Two precomputed pkgdown articles exercise
 state persistence and an active binding in a selected environment.
 
 `test/pi-extension.test.js` covers the following:
@@ -215,15 +243,14 @@ state persistence and an active binding in a selected environment.
 
 `test/pi-extension-tls.test.js` issues a throwaway CA, server certificate, and
 client certificate. It checks that the generic tools reach a mutual-TLS
-ducknng listener only with the injected client certificate. When the loaded
-ducknng supports SQL-defined methods, it also checks that a method called over
-that connection sees the client's verified peer identity.
+ducknng listener only with the injected client certificate, and that a SQL
+method called over that connection sees the client's verified peer identity.
 
-`test/coordination-endpoint.test.js` runs two extension sessions against a
-real endpoint. It checks:
+`test/coordination-endpoint.test.js` runs two extension sessions against an
+endpoint started through the Node host. It checks:
 
 - URL ownership;
-- prompt delivery through a waiting receive;
+- delivery within the poll interval;
 - multi-line content;
 - unseen-recipient reporting;
 - reservation-gated edits;
@@ -234,7 +261,7 @@ real endpoint. It checks:
 
 - envelopes and background steering;
 - one-shot pull mode;
-- re-registration;
+- re-registration and error codes read through the ducknng error wrapper;
 - idempotency keys and the edit gate;
 - lease release at shutdown;
 - tool deactivation and reinjection suppression.
@@ -247,18 +274,25 @@ lane commit and checks the following:
 - the committed entries survive reopening the session;
 - the endpoint records both messages as acknowledged.
 
-`inst/tinytest/test-coordination.R` covers:
+`test/coordination-store.test.js` drives the SQL methods over ducknng with a
+fixed server clock. It covers:
 
 - offline mail and idempotent send;
-- lease expiry and redelivery across a store reopen;
+- lease expiry and redelivery across an endpoint restart;
 - duplicate acknowledgement and presence;
-- reservation conflicts, fencing, and percent-encoding;
-- reservation listing and dead letters;
-- multi-line text and error codes;
-- retention and the mailbox cap.
+- reservation conflicts, fencing, renewal, and percent-encoding;
+- reservation listing, dead letters, retention, and the mailbox cap;
+- multi-line text and error codes.
+
+Over mutual TLS it also shows the following:
+
+- an ungranted certificate cannot register;
+- a certificate cannot register an agent or project it was not granted;
+- another certificate cannot use a registration ID;
+- an instance cannot be taken over under a shared agent grant.
 
 `make check` runs the README and vignette receipt checks, the Node tests, and
-the tinytest suite against a temporary installation.
+the R package smoke tests against a temporary installation.
 
 ## Outside the current contract
 
@@ -267,6 +301,5 @@ executable proof before it is added:
 
 - structured R conditions, interruption, streaming, and attachment to the R
   endpoint by a second non-Pi client;
-- a coordination endpoint that authenticates agents by mTLS peer identity,
-  and cross-user or cross-host deployment;
+- server-side waiting for `receive`, which needs deferred replies in ducknng;
 - broadcast delivery to several mailboxes.

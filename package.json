@@ -6,7 +6,7 @@
   "license": "GPL-3.0-or-later",
   "type": "module",
   "engines": {
-    "node": ">=22.6"
+    "node": ">=22.19"
   },
   "keywords": [
     "pi-package",
@@ -22,7 +22,7 @@
   "files": [
     "extensions/pi-ducknng",
     "tools",
-    "R/coordination.R",
+    "coordination",
     "vendor/ducknng/CMakeLists.txt",
     "vendor/ducknng/Makefile",
     "vendor/ducknng/description.yml",

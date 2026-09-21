@@ -10,7 +10,8 @@ import { Type } from "@sinclair/typebox";
 const DELIVERY_ENTRY_TYPE = "piducknng.coordination.delivery";
 export const COORDINATION_MESSAGE_TYPE = "piducknng_coordination";
 const DEFAULT_TTL_MS = 30_000;
-const RECEIVE_WAIT_MS = 20_000;
+const POLL_MS = 1_000;
+const INBOX_POLL_MS = 250;
 const RESERVATION_TTL_MS = 120_000;
 const REQUIRED_METHODS = ["register", "heartbeat", "receive", "ack", "unregister"];
 export const COORDINATION_TOOLS = [
@@ -127,10 +128,25 @@ export function parseMessages(value: unknown): InboxMessage[] {
   });
 }
 
-/** Returns the coordination error code carried by a "code: detail" reply. */
+export const COORDINATION_ERROR_CODES = [
+  "invalid_argument",
+  "registration_expired",
+  "unauthorized",
+  "idempotency_conflict",
+  "mailbox_full",
+  "receipt_invalid",
+  "lease_invalid",
+  "resource_conflict",
+];
+
+/**
+ * Returns the coordination error code in a ducknng error, which wraps the
+ * handler's "<code>: <detail>" text in the SQL error it raised.
+ */
 export function coordinationErrorCode(error: unknown): string | undefined {
   const message = error instanceof Error ? error.message : String(error);
-  return /^([a-z_]+): /.exec(message)?.[1];
+  const match = new RegExp(`(?:^|: )(${COORDINATION_ERROR_CODES.join("|")}): `).exec(message);
+  return match?.[1];
 }
 
 function escapeAttribute(value: string): string {
@@ -399,23 +415,20 @@ async function runAdapter(
         await renewLeases(client, runtime);
         nextHeartbeat = Date.now() + runtime.registration.heartbeat_interval_ms;
       }
-      const waitMs = Math.max(
-        0,
-        Math.min(RECEIVE_WAIT_MS, nextHeartbeat - Date.now()),
-      );
+      let messages: InboxMessage[] = [];
       if (receives) {
-        const messages = parseMessages(await callRegistered(
+        messages = parseMessages(await callRegistered(
           client,
           runtime,
           "receive",
-          { limit: 8, visibility_timeout_ms: 30_000, wait_ms: waitMs },
-          { timeoutMs: waitMs + 5_000 },
+          { limit: 8, visibility_timeout_ms: 30_000 },
         ));
         for (const message of messages) {
           await steerMessage(pi, client, runtime, message, signal);
         }
-      } else {
-        await sleep(waitMs, signal);
+      }
+      if (messages.length === 0) {
+        await sleep(Math.max(0, Math.min(POLL_MS, nextHeartbeat - Date.now())), signal);
       }
       failures = 0;
     } catch (error) {
@@ -570,14 +583,19 @@ export function registerCoordinationAdapter(
     parameters: InboxParameters,
     execute: async (toolCallId, params, signal) => {
       const active = attached();
-      const waitMs = params.wait_ms ?? 0;
-      const messages = parseMessages(await callRegistered(
-        client,
-        active,
-        "receive",
-        { limit: params.limit ?? 8, visibility_timeout_ms: 30_000, wait_ms: waitMs },
-        { timeoutMs: waitMs + 5_000 },
-      ));
+      const deadline = Date.now() + (params.wait_ms ?? 0);
+      let messages: InboxMessage[] = [];
+      for (;;) {
+        messages = parseMessages(await callRegistered(
+          client,
+          active,
+          "receive",
+          { limit: params.limit ?? 8, visibility_timeout_ms: 30_000 },
+        ));
+        if (messages.length > 0 || Date.now() >= deadline) break;
+        await new Promise((resolve) => setTimeout(resolve, INBOX_POLL_MS));
+        signal?.throwIfAborted();
+      }
       const delivered = [];
       for (const message of messages) {
         signal?.throwIfAborted();

@@ -49,7 +49,8 @@ export type HarnessCoordinationOptions = {
   /** `auto` steers a running lane and queues for the next run otherwise. */
   queue?: LaneQueue;
   visibilityTimeoutMs?: number;
-  waitMs?: number;
+  /** Delay between empty receives. */
+  pollMs?: number;
   onError?: (error: unknown) => void;
 };
 
@@ -134,7 +135,7 @@ export function attachCoordinationLane(
     context,
     queue = "auto",
     visibilityTimeoutMs = 30_000,
-    waitMs = 20_000,
+    pollMs = 1_000,
   } = options;
   const controller = new AbortController();
   let registrationId = "";
@@ -197,11 +198,9 @@ export function attachCoordinationLane(
           await call("heartbeat", { status: { lane: lane.name } });
           nextHeartbeat = Date.now() + heartbeatIntervalMs;
         }
-        const wait = Math.max(0, Math.min(waitMs, nextHeartbeat - Date.now()));
         const messages = parseMessages(await call(
           "receive",
-          { limit: 8, visibility_timeout_ms: visibilityTimeoutMs, wait_ms: wait },
-          { timeoutMs: wait + 5_000 },
+          { limit: 8, visibility_timeout_ms: visibilityTimeoutMs },
         ));
         for (const message of messages) {
           if (controller.signal.aborted) return;
@@ -212,6 +211,9 @@ export function attachCoordinationLane(
           });
         }
         failures = 0;
+        if (messages.length === 0) {
+          await abortable(Math.max(0, Math.min(pollMs, nextHeartbeat - Date.now())), controller.signal);
+        }
       } catch (error) {
         if (controller.signal.aborted) return;
         failures += 1;

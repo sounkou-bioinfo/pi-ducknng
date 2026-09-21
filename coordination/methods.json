@@ -1,0 +1,328 @@
+{
+  "schema_version": 1,
+  "methods": [
+    {
+      "name": "register",
+      "maintain": true,
+      "request_schema": {
+        "type": "object",
+        "required": [
+          "project_id",
+          "agent_id",
+          "instance_id",
+          "operation_key"
+        ],
+        "properties": {
+          "project_id": {
+            "type": "string",
+            "description": "Stable project scope",
+            "maxLength": 128
+          },
+          "agent_id": {
+            "type": "string",
+            "description": "Stable mailbox owner",
+            "maxLength": 128
+          },
+          "instance_id": {
+            "type": "string",
+            "description": "Pi session or harness instance",
+            "maxLength": 256
+          },
+          "operation_key": {
+            "type": "string",
+            "description": "Idempotent registration attempt",
+            "maxLength": 256
+          },
+          "display_name": {
+            "type": "string",
+            "description": "Human-visible agent name",
+            "maxLength": 256
+          },
+          "adapter_kind": {
+            "type": "string",
+            "description": "Pi integration boundary",
+            "maxLength": 64
+          },
+          "delivery_capability": {
+            "type": "string",
+            "description": "Evidence-backed acknowledgement strength",
+            "maxLength": 64
+          },
+          "ttl_ms": {
+            "type": "integer",
+            "description": "Presence lease duration",
+            "default": 30000,
+            "minimum": 5000,
+            "maximum": 300000
+          }
+        },
+        "additionalProperties": false,
+        "description": "Create or resume one project-scoped agent instance lease"
+      }
+    },
+    {
+      "name": "heartbeat",
+      "maintain": false,
+      "request_schema": {
+        "type": "object",
+        "required": [
+          "registration_id"
+        ],
+        "properties": {
+          "registration_id": {
+            "type": "string",
+            "description": "Opaque live registration identifier",
+            "maxLength": 64
+          },
+          "status": {
+            "type": "object",
+            "description": "Presence status, at most 8192 bytes"
+          }
+        },
+        "additionalProperties": false,
+        "description": "Renew one registration lease and replace its bounded status"
+      }
+    },
+    {
+      "name": "list_agents",
+      "maintain": false,
+      "request_schema": {
+        "type": "object",
+        "required": [
+          "registration_id"
+        ],
+        "properties": {
+          "registration_id": {
+            "type": "string",
+            "description": "Opaque live registration identifier",
+            "maxLength": 64
+          }
+        },
+        "additionalProperties": false,
+        "description": "List live agent instances in the caller's project"
+      }
+    },
+    {
+      "name": "send",
+      "maintain": true,
+      "request_schema": {
+        "type": "object",
+        "required": [
+          "registration_id",
+          "recipient_agent_id",
+          "idempotency_key",
+          "content"
+        ],
+        "properties": {
+          "registration_id": {
+            "type": "string",
+            "description": "Opaque live registration identifier",
+            "maxLength": 64
+          },
+          "recipient_agent_id": {
+            "type": "string",
+            "description": "Stable mailbox owner",
+            "maxLength": 128
+          },
+          "idempotency_key": {
+            "type": "string",
+            "description": "Sender-scoped message key",
+            "maxLength": 256
+          },
+          "content": {
+            "type": "string",
+            "description": "UTF-8 message text; tab and line breaks allowed",
+            "maxLength": 65536
+          },
+          "content_type": {
+            "type": "string",
+            "description": "Message media type",
+            "maxLength": 128
+          },
+          "ttl_ms": {
+            "type": "integer",
+            "description": "Time before undelivered mail becomes a dead letter",
+            "default": 604800000,
+            "minimum": 60000,
+            "maximum": 2592000000
+          }
+        },
+        "additionalProperties": false,
+        "description": "Durably enqueue one idempotent message to a stable agent mailbox"
+      }
+    },
+    {
+      "name": "receive",
+      "maintain": true,
+      "request_schema": {
+        "type": "object",
+        "required": [
+          "registration_id"
+        ],
+        "properties": {
+          "registration_id": {
+            "type": "string",
+            "description": "Opaque live registration identifier",
+            "maxLength": 64
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Maximum messages",
+            "default": 8,
+            "minimum": 1,
+            "maximum": 32
+          },
+          "visibility_timeout_ms": {
+            "type": "integer",
+            "description": "Delivery lease duration",
+            "default": 30000,
+            "minimum": 1000,
+            "maximum": 300000
+          }
+        },
+        "additionalProperties": false,
+        "description": "Lease a bounded ordered batch from the registered agent mailbox"
+      }
+    },
+    {
+      "name": "ack",
+      "maintain": true,
+      "request_schema": {
+        "type": "object",
+        "required": [
+          "registration_id",
+          "receipt_token"
+        ],
+        "properties": {
+          "registration_id": {
+            "type": "string",
+            "description": "Opaque live registration identifier",
+            "maxLength": 64
+          },
+          "receipt_token": {
+            "type": "string",
+            "description": "Delivery lease receipt",
+            "maxLength": 64
+          },
+          "delivery_ref": {
+            "type": "string",
+            "description": "Adapter-owned admission evidence",
+            "maxLength": 256
+          }
+        },
+        "additionalProperties": false,
+        "description": "Idempotently acknowledge a current delivery receipt"
+      }
+    },
+    {
+      "name": "reserve",
+      "maintain": true,
+      "request_schema": {
+        "type": "object",
+        "required": [
+          "registration_id",
+          "resource"
+        ],
+        "properties": {
+          "registration_id": {
+            "type": "string",
+            "description": "Opaque live registration identifier",
+            "maxLength": 64
+          },
+          "resource": {
+            "type": "string",
+            "description": "resource: identifier or canonical file:/// URI",
+            "maxLength": 4096
+          },
+          "operation_key": {
+            "type": "string",
+            "description": "Idempotent acquisition key",
+            "maxLength": 256
+          },
+          "lease_id": {
+            "type": "string",
+            "description": "Existing lease to renew",
+            "maxLength": 64
+          },
+          "ttl_ms": {
+            "type": "integer",
+            "description": "Reservation lease duration",
+            "default": 30000,
+            "minimum": 5000,
+            "maximum": 300000
+          }
+        },
+        "additionalProperties": false,
+        "description": "Acquire or renew an advisory project-scoped resource lease"
+      }
+    },
+    {
+      "name": "list_reservations",
+      "maintain": false,
+      "request_schema": {
+        "type": "object",
+        "required": [
+          "registration_id"
+        ],
+        "properties": {
+          "registration_id": {
+            "type": "string",
+            "description": "Opaque live registration identifier",
+            "maxLength": 64
+          },
+          "resource": {
+            "type": "string",
+            "description": "resource: identifier or canonical file:/// URI",
+            "maxLength": 4096
+          }
+        },
+        "additionalProperties": false,
+        "description": "List active reservations, optionally only those conflicting with a resource"
+      }
+    },
+    {
+      "name": "release",
+      "maintain": true,
+      "request_schema": {
+        "type": "object",
+        "required": [
+          "registration_id",
+          "lease_id"
+        ],
+        "properties": {
+          "registration_id": {
+            "type": "string",
+            "description": "Opaque live registration identifier",
+            "maxLength": 64
+          },
+          "lease_id": {
+            "type": "string",
+            "description": "Reservation lease identifier",
+            "maxLength": 64
+          }
+        },
+        "additionalProperties": false,
+        "description": "Idempotently release an advisory resource lease owned by the caller"
+      }
+    },
+    {
+      "name": "unregister",
+      "maintain": false,
+      "request_schema": {
+        "type": "object",
+        "required": [
+          "registration_id"
+        ],
+        "properties": {
+          "registration_id": {
+            "type": "string",
+            "description": "Opaque live registration identifier",
+            "maxLength": 64
+          }
+        },
+        "additionalProperties": false,
+        "description": "End one agent instance without deleting durable mail"
+      }
+    }
+  ]
+}

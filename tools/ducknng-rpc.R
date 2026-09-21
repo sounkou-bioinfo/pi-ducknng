@@ -127,15 +127,7 @@ rpc_json <- function(value) {
   ))
 }
 
-# A dispatch function returns list(flags, payload, keep_running) or, to answer
-# later from the same NNG context, list(deferred = TRUE, deadline, retry).
-# retry() returns a reply when the wait is satisfied and NULL otherwise; the
-# serve loop calls it after each dispatched request and once the deadline
-# passes, with final = TRUE.
-rpc_deferred <- function(deadline_ms, retry) {
-  list(deferred = TRUE, deadline_ms = deadline_ms, retry = retry)
-}
-
+# A dispatch function returns list(flags, payload, keep_running).
 rpc_error_reply <- function(error) {
   list(
     frame = rpc_encode_frame(
@@ -192,92 +184,32 @@ rpc_handle_request <- function(request, manifest, manifest_raw, dispatch) {
   if (!is.list(arguments) || is.null(names(arguments))) {
     stop("RPC call payload must be a JSON object")
   }
-  reply <- dispatch(frame$name, arguments)
-  if (isTRUE(reply$deferred)) {
-    reply$name <- frame$name
-    return(reply)
-  }
-  rpc_result_reply(frame$name, reply)
+  rpc_result_reply(frame$name, dispatch(frame$name, arguments))
 }
 
-rpc_now_ms <- function() {
-  floor(as.numeric(Sys.time()) * 1000)
-}
-
-# Serves ducknng RPC on one NNG REP socket. Each context holds one outstanding
-# request, so a deferred reply occupies its context without blocking the
-# others. keep_alive() is polled every poll_ms and stops the loop when FALSE.
-rpc_serve <- function(listen, locator, manifest, dispatch, contexts = 1L,
+# Serves ducknng RPC on one NNG REP socket, one request at a time.
+# keep_alive() is polled every poll_ms and stops the loop when FALSE.
+rpc_serve <- function(listen, locator, manifest, dispatch,
                       keep_alive = function() TRUE, poll_ms = 1000L) {
   socket <- nanonext::socket("rep", listen = listen)
   on.exit(close(socket), add = TRUE)
   listener <- attr(socket, "listener")[[1L]]
   writeLines(attr(listener, "url"), locator)
-
   manifest_raw <- rpc_json(manifest)
-  signal <- nanonext::cv()
-  handles <- lapply(seq_len(contexts), function(index) nanonext::context(socket))
-  receive <- function(index) {
-    nanonext::recv_aio(handles[[index]], mode = "raw", cv = signal)
-  }
-  pending <- lapply(seq_len(contexts), receive)
-  parked <- vector("list", contexts)
-
-  # A failed send means the requester is gone; NNG has already dropped it.
-  reply <- function(index, outcome) {
-    nanonext::send(handles[[index]], outcome$frame, mode = "raw", block = TRUE)
-    pending[[index]] <<- receive(index)
-    invisible(NULL)
-  }
-
-  settle <- function(index, final) {
-    waiting <- parked[[index]]
-    outcome <- tryCatch(
-      {
-        value <- waiting$retry(final)
-        if (is.null(value)) NULL else rpc_result_reply(waiting$name, value)
-      },
-      error = rpc_error_reply
-    )
-    if (is.null(outcome)) return(TRUE)
-    parked[index] <<- list(NULL)
-    reply(index, outcome)
-    outcome$keep_running
-  }
 
   repeat {
-    nanonext::until(signal, poll_ms)
-    running <- TRUE
-    dispatched <- FALSE
-    for (index in seq_len(contexts)) {
-      aio <- pending[[index]]
-      if (is.null(aio) || nanonext::unresolved(aio)) next
-      request <- aio$data
-      pending[index] <- list(NULL)
-      if (nanonext::is_error_value(request)) {
-        pending[[index]] <- receive(index)
-        next
-      }
-      outcome <- tryCatch(
-        rpc_handle_request(request, manifest, manifest_raw, dispatch),
-        error = rpc_error_reply
-      )
-      dispatched <- TRUE
-      if (isTRUE(outcome$deferred)) {
-        parked[[index]] <- outcome
-        next
-      }
-      reply(index, outcome)
-      running <- running && outcome$keep_running
+    request <- nanonext::recv(socket, mode = "raw", block = poll_ms)
+    if (nanonext::is_error_value(request)) {
+      if (!keep_alive()) break
+      next
     }
-    now <- rpc_now_ms()
-    for (index in seq_len(contexts)) {
-      waiting <- parked[[index]]
-      if (is.null(waiting)) next
-      final <- now >= waiting$deadline_ms
-      if (dispatched || final) running <- settle(index, final) && running
-    }
-    if (!running || !keep_alive()) break
+    outcome <- tryCatch(
+      rpc_handle_request(request, manifest, manifest_raw, dispatch),
+      error = rpc_error_reply
+    )
+    # A failed send means the requester is gone; NNG has already dropped it.
+    nanonext::send(socket, outcome$frame, mode = "raw", block = TRUE)
+    if (!outcome$keep_running || !keep_alive()) break
   }
 }
 

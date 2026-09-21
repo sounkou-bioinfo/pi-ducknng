@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   COORDINATION_TOOLS,
   coordinationEnvelope,
+  coordinationErrorCode,
   coordinationResource,
   registerCoordinationAdapter,
 } from "../extensions/pi-ducknng/coordination.ts";
@@ -125,15 +126,11 @@ function coordinationClient({ mail = [inboxMessage], expireFirst = [] } = {}) {
         };
       }
       if (expiring.delete(method)) {
-        throw new Error("registration_expired: registration is missing or expired");
+        throw new Error(
+          "ducknng: SQL method failed: Invalid Input Error: registration_expired: registration is missing or expired",
+        );
       }
-      if (method === "receive") {
-        if (pending.length === 0) {
-          await new Promise((resolve) => setTimeout(resolve, Math.min(args.wait_ms ?? 0, 50)));
-          return { messages: [] };
-        }
-        return { messages: pending.splice(0) };
-      }
+      if (method === "receive") return { messages: pending.splice(0) };
       if (method === "send") {
         return { message_id: "sent-1", recipient_seen: true, replayed: false };
       }
@@ -183,8 +180,7 @@ test("background delivery steers an envelope, records it, and acknowledges", asy
       data.message_id === "message-1" && data.path === "steer",
   ));
   const receive = client.calls.find(({ method }) => method === "receive");
-  assert.ok(receive.args.wait_ms > 0, "background receive waits server-side");
-  assert.equal(receive.options.timeoutMs, receive.args.wait_ms + 5000);
+  assert.equal(receive.args.wait_ms, undefined, "receive never asks the endpoint to wait");
   assert.ok(client.calls.some(({ method }) => method === "unregister"));
   assert.equal(client.claimed.size, 0, "shutdown releases the owned URL");
   assert.deepEqual(harness.notifications, []);
@@ -264,8 +260,6 @@ test("one-shot modes pull mail through the inbox tool", async () => {
   assert.equal(result.details.messages[0].receipt_token, undefined);
   const ack = client.calls.find(({ method }) => method === "ack");
   assert.equal(ack.args.delivery_ref, "tool:coordination_inbox-call:message-1");
-  const receive = client.calls.find(({ method }) => method === "receive");
-  assert.equal(receive.options.timeoutMs, 6000);
 });
 
 test("an expired registration is renewed before the call is retried", async () => {
@@ -345,4 +339,12 @@ test("envelopes escape attribute text and resources resolve paths", () => {
   assert.match(envelope, /from="a&quot;&lt;b&gt;"/);
   assert.equal(coordinationResource("resource:build/lock", "/x"), "resource:build/lock");
   assert.equal(coordinationResource("@src/a b.R", "/x"), "file:///x/src/a%20b.R");
+});
+
+test("error codes are read through the ducknng SQL error wrapper", () => {
+  assert.equal(coordinationErrorCode(new Error(
+    "ducknng: SQL method failed: Invalid Input Error: mailbox_full: recipient mailbox holds 1 unacknowledged messages",
+  )), "mailbox_full");
+  assert.equal(coordinationErrorCode(new Error("unauthorized: no grant")), "unauthorized");
+  assert.equal(coordinationErrorCode(new Error("Connection refused")), undefined);
 });

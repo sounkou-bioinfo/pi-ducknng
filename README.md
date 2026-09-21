@@ -2,7 +2,7 @@
 
 # pi-ducknng
 
-[![](https://img.shields.io/badge/lifecycle-experimental-orange.svg)](https://lifecycle.r-lib.org/articles/stages.html#experimental)
+<a href="https://lifecycle.r-lib.org/articles/stages.html#experimental"><img src="https://img.shields.io/badge/lifecycle-experimental-orange.svg" alt="Lifecycle: experimental" /></a>
 
 `pi-ducknng` lets Pi agents discover and call manifested ducknng
 endpoints. It ships two endpoints: a persistent R session and a durable
@@ -16,9 +16,10 @@ An endpoint is placed first and supplies a URL. Discovery and calls stay
 generic. DuckDB owns native extension loading and host-language calls.
 The hard-vendored ducknng release owns transport, mbedTLS, identity,
 framing, manifests, sessions, AIO, cancellation, and codecs. The R
-endpoints compose `nanonext` and `mirai` and do not reproduce those
-layers. `make architecture` regenerates the SVG from
-`man/figures/architecture.mmd`.
+endpoint composes `nanonext` and `mirai` and does not reproduce those
+layers. The coordination endpoint has no host-language logic at all: its
+methods are SQL that ducknng serves. `make architecture` regenerates the
+SVG from `man/figures/architecture.mmd`.
 
 ## Pi package
 
@@ -41,6 +42,11 @@ On first use the package builds the pinned ducknng source, which
 requires Git, Make, CMake, Python, and a C/C++ toolchain. The R runtime
 must provide the packages listed under `Imports` in
 [`DESCRIPTION`](DESCRIPTION).
+
+For `tls+tcp://` and `wss://` endpoints, point `PI_DUCKNNG_TLS_CA_FILE`
+at the CA that signed the server certificate. For mutual TLS, also point
+`PI_DUCKNNG_TLS_CERT_KEY_FILE` at a PEM file holding the client
+certificate and key. The paths never enter tool schemas or results.
 
 ## Persistent R
 
@@ -66,13 +72,12 @@ survives across fresh DuckDB clients.
 
 > AGENT_DUCKNNG_MANIFEST_CALL_OK
 >
-> Manifested methods: `eval` (JSON → Arrow, persistent R process),
-> `close` (JSON → JSON).
+> Manifested methods: `eval` (JSON → Arrow), `close` (JSON → JSON).
 >
-> Both eval calls succeeded in endpoint process **320648**. Endpoint
-> closed successfully.
+> Both eval calls succeeded in endpoint process **446638**, retaining
+> `mpg_by_cyl`. Endpoint closed successfully.
 >
-> First call decoded rows:
+> First decoded result:
 >
 > | cyl |                mpg |
 > |----:|-------------------:|
@@ -80,7 +85,7 @@ survives across fresh DuckDB clients.
 > |   6 | 19.742857142857144 |
 > |   8 |               15.1 |
 >
-> Second call, using persisted `mpg_by_cyl`:
+> Second decoded result:
 >
 > | cyl |                mpg |     delta_from_4cyl |
 > |----:|-------------------:|--------------------:|
@@ -99,14 +104,15 @@ success receipt.
 
 ## Durable agent coordination
 
-Start the coordination endpoint independently of any Pi session, with
-its DuckDB state in a private directory. It listens on `ipc://` beside
-the database, so the address survives restarts and only the directory’s
-owner can connect:
+The coordination endpoint is a DuckDB database whose methods are [SQL
+files](coordination/methods) served by ducknng. Start it independently
+of any Pi session, with its state in a private directory. It listens on
+`ipc://` beside the database, so the address survives restarts and only
+the directory’s owner can connect:
 
 ``` sh
 install -d -m 700 "$HOME/.local/state/pi-ducknng"
-Rscript --vanilla tools/pi-coordination-endpoint.R \
+node tools/pi-coordination-endpoint.ts \
   "$HOME/.local/state/pi-ducknng/coordination.url" \
   "$HOME/.local/state/pi-ducknng/coordination.duckdb"
 ```
@@ -126,7 +132,7 @@ The attached session gets five tools: `coordination_send`,
 `coordination_release`. The registration behind them never enters the
 model’s context.
 
-- **Delivery.** An interactive session waits on its mailbox in the
+- **Delivery.** An interactive session polls its mailbox in the
   background and steers each message into the conversation. A one-shot
   `pi -p` run pulls mail with `coordination_inbox`. Every message
   arrives framed with its sender and message ID and is marked as coming
@@ -142,8 +148,25 @@ model’s context.
   session holds a path, Pi’s `edit` and `write` tools refuse to touch
   it.
 
-This first endpoint is for one user on one machine and has no
-authentication beyond filesystem permissions.
+Over `ipc://`, filesystem permissions are the only authentication. To
+serve agents on several hosts or users, start the endpoint on mutual TLS
+with a grants file that names which certificate may act as which agent:
+
+``` sh
+cat > grants.json <<'JSON'
+[{"peer_identity": "tls:cn:reviewer", "project_id": "my-project", "agent_id": "reviewer"},
+ {"peer_identity": "tls:cn:planner", "project_id": "my-project", "agent_id": "*"}]
+JSON
+PI_DUCKNNG_COORDINATION_TLS_CERT_KEY_FILE=server.pem \
+PI_DUCKNNG_COORDINATION_TLS_CA_FILE=ca.pem \
+PI_DUCKNNG_COORDINATION_GRANTS_FILE=grants.json \
+  node tools/pi-coordination-endpoint.ts coordination.url coordination.duckdb \
+  tls+tcp://0.0.0.0:7400
+```
+
+Every call must then present a certificate from that CA. A certificate
+may register only the agents it is granted, and a registration ID is
+useless to any other certificate.
 
 A host process that owns a `pi-agent-core` `AgentHarness` can attach a
 lane to a mailbox. Each message is committed to the lane before it is
@@ -187,9 +210,9 @@ the endpoint’s own methods rather than trusting either agent’s report.
     'send and the release both succeeded.')"
 ```
 
-> AGENT_COORDINATION_SENT - Live agents: `planner` - Message ID:
-> `91c4089a-1d71-4a8a-bd9b-e905cd8de765` - Recipient seen: false -
-> Fencing value: 1 - Reservation released: true
+> AGENT_COORDINATION_SENT - Live agents: planner - Message ID:
+> 9000a0fe-9353-4752-b62b-582559cbc2a8 - Recipient seen: false - Fencing
+> value: 1 - Reservation released: true
 
 ``` sh
 '/root/pi-ducknng/node_modules/.bin/pi' --provider 'openai-codex' --model 'gpt-6-astra' --no-extensions --thinking 'medium' -e './extensions/pi-ducknng/index.ts' --no-session -p \
@@ -209,8 +232,7 @@ the endpoint’s own methods rather than trusting either agent’s report.
 
 > AGENT_COORDINATION_REPLIED
 >
-> Sender: planner  
-> Message ID: 91c4089a-1d71-4a8a-bd9b-e905cd8de765
+> Sender: planner Message ID: 9000a0fe-9353-4752-b62b-582559cbc2a8
 >
 > ``` text
 > Review mpg by cylinder count in datasets::mtcars.
@@ -228,7 +250,7 @@ the endpoint’s own methods rather than trusting either agent’s report.
 > Reply: The 4-cylinder group has the highest mean mpg at
 > 26.663636363636364.
 >
-> Reply message ID: b3619f9e-012f-4ea6-8eb2-c179fc54e9a5
+> Reply message ID: 722f82ae-38f5-4fd3-85f7-0a8997980788
 >
 > Persistent R adapter closed.
 
@@ -241,11 +263,9 @@ verifier <- rpc_call(url, "register", list(
   project_id = "readme", agent_id = "planner",
   instance_id = "readme-verifier", operation_key = "verify"
 ))
-inbox <- rpc_call(
-  url, "receive",
-  list(registration_id = verifier$registration_id, wait_ms = 5000),
-  timeout_ms = 10000
-)$messages
+inbox <- rpc_call(url, "receive", list(
+  registration_id = verifier$registration_id
+))$messages
 reservations <- rpc_call(url, "list_reservations", list(
   registration_id = verifier$registration_id
 ))$reservations
@@ -287,7 +307,7 @@ make site
 |:----------------------------------|:---------------------|
 | DuckDB                            | 1.5.4                |
 | `@duckdb/node-api`                | 1.5.4-r.1            |
-| ducknng                           | `v0.1.1-duckdb1.5.4` |
+| ducknng                           | `v0.1.2-duckdb1.5.4` |
 | `@earendil-works/pi-coding-agent` | 0.86.1               |
 | `@earendil-works/pi-agent-core`   | 0.86.1               |
 

@@ -18,3 +18,4 @@ vendor/
 ^vignettes/.*\.Rmd\.orig$
 ^_pkgdown\.yml$
 ^docs$
+^coordination$
