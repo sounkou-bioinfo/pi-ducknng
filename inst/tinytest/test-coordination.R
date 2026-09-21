@@ -43,9 +43,15 @@ expect_error(dispatch(store, "send", list(
   recipient_agent_id = "bob",
   idempotency_key = "message-1",
   content = "different content"
-)), pattern = "idempotency_key")
+)), pattern = "^idempotency_conflict: ")
 
 bob <- register("bob", "bob-1")
+expect_false(sent$recipient_seen) # bob has not registered yet
+expect_error(
+  dispatch(store, "receive", list(registration_id = "missing")),
+  pattern = "^registration_expired: "
+)
+
 first_delivery <- dispatch(store, "receive", list(
   registration_id = bob$registration_id,
   visibility_timeout_ms = 1000
@@ -99,7 +105,7 @@ expect_error(dispatch(store, "reserve", list(
   resource = "file:///tmp/project",
   operation_key = "reserve-parent",
   ttl_ms = 5000
-)), pattern = "conflicts")
+)), pattern = "^resource_conflict: .* reserved by alice")
 
 clock <- clock + 5001
 expired_replay <- dispatch(store, "reserve", list(
@@ -175,7 +181,7 @@ expect_error(dispatch(store, "send", list(
   recipient_agent_id = "recipient",
   idempotency_key = "blocked-key",
   content = "blocked"
-)), pattern = "pending message limit")
+)), pattern = "^mailbox_full: ")
 recipient <- register("recipient", "recipient-1")
 delivery <- dispatch(store, "receive", list(
   registration_id = recipient$registration_id
@@ -195,3 +201,83 @@ after_retention <- dispatch(store, "send", list(
 expect_false(identical(after_retention$message_id, first$message_id))
 close_store(store)
 unlink(c(limited_database, paste0(limited_database, ".wal")))
+
+# Message text keeps line breaks and tabs; identifiers still reject them.
+clock <- 3000000
+text_database <- tempfile(fileext = ".duckdb")
+store <- open_store(text_database, now = now)
+writer <- register("writer", "writer-1")
+reader <- register("reader", "reader-1")
+multiline <- "first line\n\tsecond line\r\nthird"
+dispatch(store, "send", list(
+  registration_id = writer$registration_id,
+  recipient_agent_id = "reader",
+  idempotency_key = "multiline",
+  content = multiline
+))
+expect_identical(
+  dispatch(store, "receive", list(
+    registration_id = reader$registration_id
+  ))$messages[[1L]]$content,
+  multiline
+)
+expect_error(dispatch(store, "send", list(
+  registration_id = writer$registration_id,
+  recipient_agent_id = "reader\nbob",
+  idempotency_key = "bad-recipient",
+  content = "x"
+)), pattern = "^invalid_argument: recipient_agent_id")
+expect_error(dispatch(store, "send", list(
+  registration_id = writer$registration_id,
+  recipient_agent_id = "reader",
+  idempotency_key = "bell",
+  content = "ring\a"
+)), pattern = "^invalid_argument: content")
+
+# Mail for an unseen recipient is flagged and becomes a dead letter at expiry.
+unseen <- dispatch(store, "send", list(
+  registration_id = writer$registration_id,
+  recipient_agent_id = "nobody",
+  idempotency_key = "dead-letter",
+  content = "lost",
+  ttl_ms = 60000
+))
+expect_false(unseen$recipient_seen)
+clock <- clock + 60001
+writer <- register("writer", "writer-1", "register-writer-after-expiry")
+nobody <- register("nobody", "nobody-1")
+expect_length(dispatch(store, "receive", list(
+  registration_id = nobody$registration_id
+))$messages, 0L)
+states <- DBI::dbGetQuery(
+  store$connection,
+  "SELECT state FROM coordination_messages WHERE idempotency_key = 'dead-letter'"
+)$state
+expect_identical(states, "expired")
+
+# Canonical file URIs are percent-encoded; conflicts are listed without
+# exposing another owner's lease ID.
+lease <- dispatch(store, "reserve", list(
+  registration_id = writer$registration_id,
+  resource = "file:///tmp/a%20b/c#d/",
+  operation_key = "encoded"
+))
+expect_identical(lease$resource, "file:///tmp/a%20b/c%23d")
+listed <- dispatch(store, "list_reservations", list(
+  registration_id = nobody$registration_id,
+  resource = "file:///tmp/a%20b"
+))$reservations
+expect_length(listed, 1L)
+expect_identical(listed[[1L]]$owner_agent_id, "writer")
+expect_false(listed[[1L]]$owned_by_caller)
+expect_null(listed[[1L]]$lease_id)
+own <- dispatch(store, "list_reservations", list(
+  registration_id = writer$registration_id
+))$reservations
+expect_identical(own[[1L]]$lease_id, lease$lease_id)
+expect_length(dispatch(store, "list_reservations", list(
+  registration_id = writer$registration_id,
+  resource = "file:///tmp/other"
+))$reservations, 0L)
+close_store(store)
+unlink(c(text_database, paste0(text_database, ".wal")))

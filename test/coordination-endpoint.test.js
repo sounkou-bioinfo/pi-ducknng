@@ -7,111 +7,188 @@ import test from "node:test";
 
 import piDucknngExtension from "../extensions/pi-ducknng/index.ts";
 
-async function waitForLocator(path, child) {
+const ROOT = resolve(import.meta.dirname, "..");
+
+async function startEndpoint(work) {
+  const locator = resolve(work, `endpoint-${Date.now()}.url`);
+  const child = spawn(
+    process.env.RSCRIPT ?? "Rscript",
+    [
+      "--vanilla",
+      "tools/pi-coordination-endpoint.R",
+      locator,
+      resolve(work, "coordination.duckdb"),
+    ],
+    { cwd: ROOT, stdio: "ignore" },
+  );
   const deadline = Date.now() + 15000;
   while (Date.now() < deadline) {
     if (child.exitCode !== null) {
       throw new Error(`coordination endpoint exited with ${child.exitCode}`);
     }
-    try {
-      const url = (await readFile(path, "utf8")).trim();
-      if (url) return url;
-    } catch (error) {
-      if (error.code !== "ENOENT") throw error;
-    }
+    const url = (await readFile(locator, "utf8").catch(() => "")).trim();
+    if (url) return { child, url };
     await new Promise((resolveDelay) => setTimeout(resolveDelay, 50));
   }
   throw new Error("timed out waiting for coordination endpoint");
 }
 
-function loadTools() {
+async function stopEndpoint(child) {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  child.kill();
+  await new Promise((resolveExit) => child.once("exit", resolveExit));
+}
+
+function waitFor(predicate, timeout, label) {
+  const deadline = Date.now() + timeout;
+  return new Promise((resolveWait, reject) => {
+    const check = () => {
+      if (predicate()) return resolveWait();
+      if (Date.now() >= deadline) return reject(new Error(`timed out: ${label}`));
+      setTimeout(check, 20);
+    };
+    check();
+  });
+}
+
+function session({ url, agent, mode, sessionId }) {
+  const flags = new Map([
+    ["ducknng-coordination-url", url],
+    ["ducknng-coordination-project", "project-one"],
+    ["ducknng-agent-id", agent],
+  ]);
   const tools = new Map();
+  const handlers = new Map();
+  const steered = [];
+  const entries = [];
+  const notifications = [];
+  let active = [];
   piDucknngExtension({
     registerTool(definition) {
       tools.set(definition.name, definition);
+      active.push(definition.name);
     },
     registerCommand() {},
     registerFlag() {},
-    getFlag() {},
-    on() {},
+    getFlag: (name) => flags.get(name),
+    getActiveTools: () => [...active],
+    setActiveTools(names) {
+      active = [...names];
+    },
+    on(event, handler) {
+      const registered = handlers.get(event) ?? [];
+      registered.push(handler);
+      handlers.set(event, registered);
+    },
+    sendMessage(message, options) {
+      steered.push({ message, options, at: Date.now() });
+    },
+    appendEntry(customType, data) {
+      entries.push({ type: "custom", customType, data });
+    },
   });
-  return tools;
-}
-
-async function call(tools, url, method, args) {
-  const response = await tools.get("ducknng_call").execute(
-    method,
-    { url, method, arguments: args },
-    new AbortController().signal,
-  );
-  return response.details.result;
-}
-
-test("coordination endpoint exposes durable manifested mail", async () => {
-  const work = await mkdtemp(resolve(tmpdir(), "pi-ducknng-coordination-test-"));
-  const locator = resolve(work, "endpoint.url");
-  const database = resolve(work, "coordination.duckdb");
-  const child = spawn(
-    process.env.RSCRIPT ?? "Rscript",
-    ["--vanilla", "tools/pi-coordination-endpoint.R", locator, database],
-    { cwd: resolve(import.meta.dirname, ".."), stdio: "ignore" },
-  );
-  try {
-    const url = await waitForLocator(locator, child);
-    const tools = loadTools();
-    const described = await tools.get("ducknng_describe").execute(
-      "describe",
-      { url },
-      new AbortController().signal,
-    );
-    const methods = described.details.manifest.methods.map(({ name }) => name);
-    assert.deepEqual(methods, [
-      "register",
-      "heartbeat",
-      "list_agents",
-      "send",
-      "receive",
-      "ack",
-      "reserve",
-      "release",
-      "unregister",
-    ]);
-    assert.ok(!methods.includes("eval"));
-
-    const alice = await call(tools, url, "register", {
-      project_id: "project-one",
-      agent_id: "alice",
-      instance_id: "alice-session",
-      operation_key: "register-alice",
-    });
-    const sent = await call(tools, url, "send", {
-      registration_id: alice.registration_id,
-      recipient_agent_id: "bob",
-      idempotency_key: "handoff-1",
-      content: "Read the handoff.",
-    });
-    const bob = await call(tools, url, "register", {
-      project_id: "project-one",
-      agent_id: "bob",
-      instance_id: "bob-session",
-      operation_key: "register-bob",
-    });
-    const received = await call(tools, url, "receive", {
-      registration_id: bob.registration_id,
-      visibility_timeout_ms: 5000,
-    });
-    assert.equal(received.messages[0].message_id, sent.message_id);
-    const acknowledged = await call(tools, url, "ack", {
-      registration_id: bob.registration_id,
-      receipt_token: received.messages[0].receipt_token,
-      delivery_ref: "test-session-entry",
-    });
-    assert.equal(acknowledged.acknowledged, true);
-  } finally {
-    if (child.exitCode === null && child.signalCode === null) {
-      child.kill();
-      await new Promise((resolveExit) => child.once("exit", resolveExit));
+  const context = {
+    mode,
+    cwd: "/work/project",
+    sessionManager: {
+      getSessionId: () => sessionId,
+      getEntries: () => entries,
+    },
+    isIdle: () => true,
+    hasPendingMessages: () => false,
+    ui: {
+      notify(message) {
+        notifications.push(message);
+      },
+    },
+  };
+  const emit = async (event, payload = { type: event }) => {
+    let result;
+    for (const handler of handlers.get(event) ?? []) {
+      result = await handler(payload, context);
     }
+    return result;
+  };
+  const tool = async (name, params, id = `${name}-${Date.now()}`) =>
+    (await tools.get(name).execute(id, params, new AbortController().signal, undefined, context))
+      .details;
+  return { emit, tool, tools, steered, notifications };
+}
+
+test("two Pi sessions coordinate through the manifested endpoint", async () => {
+  const work = await mkdtemp(resolve(tmpdir(), "pi-ducknng-coordination-test-"));
+  let endpoint = await startEndpoint(work);
+  const url = endpoint.url;
+  assert.match(url, /^ipc:\/\/.*coordination\.ipc$/);
+  const alice = session({ url, agent: "alice", mode: "print", sessionId: "alice-session" });
+  const bob = session({ url, agent: "bob", mode: "tui", sessionId: "bob-session" });
+  try {
+    await alice.emit("session_start");
+    await bob.emit("session_start");
+
+    await assert.rejects(
+      alice.tools.get("ducknng_describe").execute("describe", { url }),
+      /owned by the coordination adapter/,
+    );
+
+    const agents = await alice.tool("coordination_agents", {});
+    assert.deepEqual(agents.agents.map(({ agent_id }) => agent_id), ["alice", "bob"]);
+
+    const sentAt = Date.now();
+    const sent = await alice.tool("coordination_send", {
+      recipient: "bob",
+      content: "Review src/model.R.\nReply with one sentence.",
+    });
+    assert.equal(sent.recipient_seen, true);
+    await waitFor(() => bob.steered.length === 1, 5000, "bob steering");
+    assert.ok(bob.steered[0].at - sentAt < 2000, "waiting receive delivers promptly");
+    assert.match(bob.steered[0].message.content, /from="alice"/);
+    assert.match(bob.steered[0].message.content, /Review src\/model\.R\.\nReply/);
+
+    const typo = await alice.tool("coordination_send", { recipient: "bbo", content: "x" });
+    assert.equal(typo.recipient_seen, false);
+
+    const lease = await bob.tool("coordination_reserve", { resource: "src" });
+    assert.equal(lease.resource, "file:///work/project/src");
+    const blocked = await alice.emit("tool_call", {
+      type: "tool_call",
+      toolCallId: "edit-1",
+      toolName: "edit",
+      input: { path: "src/model.R" },
+    });
+    assert.equal(blocked?.block, true);
+    assert.match(blocked.reason, /held by bob/);
+    const own = await bob.emit("tool_call", {
+      type: "tool_call",
+      toolCallId: "edit-2",
+      toolName: "write",
+      input: { path: "src/model.R" },
+    });
+    assert.equal(own, undefined);
+    await bob.tool("coordination_release", { resource: "src" });
+    const allowed = await alice.emit("tool_call", {
+      type: "tool_call",
+      toolCallId: "edit-3",
+      toolName: "edit",
+      input: { path: "src/model.R" },
+    });
+    assert.equal(allowed, undefined);
+
+    await stopEndpoint(endpoint.child);
+    endpoint = await startEndpoint(work);
+    assert.equal(endpoint.url, url, "the ipc address is stable across restarts");
+    await alice.tool("coordination_send", { recipient: "bob", content: "after restart" });
+    await waitFor(() => bob.steered.length === 2, 15000, "delivery after restart");
+    assert.match(bob.steered[1].message.content, /after restart/);
+
+    const reply = await bob.tool("coordination_send", { recipient: "alice", content: "done" });
+    assert.ok(reply.message_id);
+    const inbox = await alice.tool("coordination_inbox", { wait_ms: 2000 });
+    assert.deepEqual(inbox.messages.map(({ content }) => content), ["done"]);
+  } finally {
+    await alice.emit("session_shutdown");
+    await bob.emit("session_shutdown");
+    await stopEndpoint(endpoint.child);
     await rm(work, { recursive: true, force: true });
   }
 });

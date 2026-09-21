@@ -254,7 +254,11 @@ async function startREndpoint(root: string): Promise<REndpoint> {
   const child = spawn(
     process.env.RSCRIPT ?? "Rscript",
     ["--vanilla", endpointScript, locator],
-    { cwd: root, stdio: ["ignore", "pipe", "pipe"] },
+    {
+      cwd: root,
+      env: { ...process.env, PI_DUCKNNG_PARENT_PID: String(process.pid) },
+      stdio: ["ignore", "pipe", "pipe"],
+    },
   );
   const processOutput = collectProcessOutput(child);
   const observer = observeChild(child);
@@ -394,6 +398,7 @@ async function rpcCallThroughDucknng(
   url: string,
   method: string,
   args: Record<string, unknown>,
+  timeoutMs = 5000,
 ): Promise<unknown> {
   const frameHex = Buffer.from(buildRpcCallFrame(method, args)).toString("hex");
   const { instance, connection } = await openDucknngConnection(extensionPath);
@@ -401,7 +406,7 @@ async function rpcCallThroughDucknng(
     const reader = await connection.runAndReadAll(RPC_CALL_SQL, {
       url,
       frame_hex: frameHex,
-      timeout: 5000,
+      timeout: timeoutMs,
       tls_config_id: 0,
     });
     const [row] = reader.getRowObjects();
@@ -464,6 +469,15 @@ let localEndpoint: REndpoint | undefined;
 let localEndpointStart: Promise<REndpoint> | undefined;
 const manifests = new Map<string, EndpointManifest>();
 const endpointTurns = new Map<string, Promise<void>>();
+const adapterOwnedUrls = new Set<string>();
+
+function refuseAdapterOwnedUrl(url: string): void {
+  if (adapterOwnedUrls.has(url)) {
+    throw new Error(
+      "this URL is owned by the coordination adapter; use the coordination_* tools",
+    );
+  }
+}
 
 async function withEndpointTurn<T>(
   url: string,
@@ -518,11 +532,7 @@ async function describeEndpoint(url: string): Promise<EndpointManifest> {
   });
 }
 
-async function callEndpointNow(
-  url: string,
-  method: string,
-  args: Record<string, unknown> | undefined,
-): Promise<Record<string, unknown>> {
+function declaredJsonMethod(url: string, method: string): EndpointMethod {
   const manifest = manifests.get(url);
   if (!manifest) {
     throw new Error("call ducknng_describe for this URL before invoking a method");
@@ -538,7 +548,34 @@ async function callEndpointNow(
       `ducknng_call does not support request format: ${String(descriptor.request_payload_format)}`,
     );
   }
+  return descriptor;
+}
 
+// Coordination requests may wait server-side, so they bypass the per-URL turn
+// that orders model calls; the endpoint answers each NNG context separately.
+async function callCoordinationEndpoint(
+  url: string,
+  method: string,
+  args: Record<string, unknown>,
+  options: { timeoutMs?: number } = {},
+): Promise<unknown> {
+  declaredJsonMethod(url, method);
+  const extensionPath = await ensureDucknngExtension(PACKAGE_ROOT);
+  return await rpcCallThroughDucknng(
+    extensionPath,
+    url,
+    method,
+    args,
+    options.timeoutMs,
+  );
+}
+
+async function callEndpointNow(
+  url: string,
+  method: string,
+  args: Record<string, unknown> | undefined,
+): Promise<Record<string, unknown>> {
+  declaredJsonMethod(url, method);
   const extensionPath = await ensureDucknngExtension(PACKAGE_ROOT);
   const response = await rpcCallThroughDucknng(
     extensionPath,
@@ -693,6 +730,7 @@ export default function piDucknngExtension(pi: ExtensionAPI): void {
     execute: async (_toolCallId, params, signal) => {
       signal?.throwIfAborted();
       if (!params.url) throw new Error("url is required");
+      refuseAdapterOwnedUrl(params.url);
       const manifest = await describeEndpoint(params.url);
       signal?.throwIfAborted();
       const result: Record<string, unknown> = {
@@ -721,6 +759,7 @@ export default function piDucknngExtension(pi: ExtensionAPI): void {
       signal?.throwIfAborted();
       if (!params.url) throw new Error("url is required");
       if (!params.method) throw new Error("method is required");
+      refuseAdapterOwnedUrl(params.url);
       const result = await callEndpoint(
         params.url,
         params.method,
@@ -737,8 +776,9 @@ export default function piDucknngExtension(pi: ExtensionAPI): void {
 
   registerCoordinationAdapter(pi, {
     describe: describeEndpoint,
-    call: async (url, method, args) =>
-      (await callEndpoint(url, method, args)).result,
+    call: callCoordinationEndpoint,
+    claim: (url) => adapterOwnedUrls.add(url),
+    release: (url) => adapterOwnedUrls.delete(url),
   });
 
   pi.on("session_shutdown", async () => {

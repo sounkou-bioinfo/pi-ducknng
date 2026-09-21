@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { spawn } from "node:child_process";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { resolve } from "node:path";
 import test from "node:test";
 
 import piDucknngExtension from "../extensions/pi-ducknng/index.ts";
@@ -64,7 +67,16 @@ test("model tools discover and call the ducknng manifest", async () => {
   const { tools, shutdown } = loadTools();
   assert.deepEqual(
     [...tools.keys()],
-    ["persistent_r_start", "ducknng_describe", "ducknng_call"],
+    [
+      "persistent_r_start",
+      "ducknng_describe",
+      "ducknng_call",
+      "coordination_send",
+      "coordination_inbox",
+      "coordination_agents",
+      "coordination_reserve",
+      "coordination_release",
+    ],
   );
   const signal = new AbortController().signal;
   try {
@@ -209,5 +221,49 @@ test("model tools discover and call the ducknng manifest", async () => {
     assert.deepEqual(closed.details.result, { closed: true });
   } finally {
     await shutdown();
+  }
+});
+
+function exited(child) {
+  return new Promise((resolveExit) => {
+    if (child.exitCode !== null || child.signalCode !== null) resolveExit();
+    else child.once("exit", resolveExit);
+  });
+}
+
+test("R endpoint outlives idle polls and exits with its parent", async () => {
+  const work = await mkdtemp(resolve(tmpdir(), "pi-ducknng-parent-test-"));
+  const parent = spawn("sleep", ["60"], { stdio: "ignore" });
+  const endpoint = spawn(
+    process.env.RSCRIPT ?? "Rscript",
+    ["--vanilla", "tools/pi-r-endpoint.R", resolve(work, "endpoint.url")],
+    {
+      cwd: resolve(import.meta.dirname, ".."),
+      env: { ...process.env, PI_DUCKNNG_PARENT_PID: String(parent.pid) },
+      stdio: "ignore",
+    },
+  );
+  try {
+    const deadline = Date.now() + 15000;
+    while (Date.now() < deadline) {
+      const url = await readFile(resolve(work, "endpoint.url"), "utf8").catch(() => "");
+      if (url.trim()) break;
+      await new Promise((resolveDelay) => setTimeout(resolveDelay, 50));
+    }
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 3000));
+    assert.equal(endpoint.exitCode, null, "endpoint exited while its parent lived");
+    parent.kill();
+    await exited(parent);
+    const stopped = Date.now();
+    await Promise.race([
+      exited(endpoint),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("endpoint outlived its parent")), 5000)),
+    ]);
+    assert.ok(Date.now() - stopped < 5000);
+  } finally {
+    parent.kill();
+    endpoint.kill("SIGKILL");
+    await rm(work, { recursive: true, force: true });
   }
 });

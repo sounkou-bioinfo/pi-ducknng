@@ -57,7 +57,7 @@ if (check_only) {
 if (length(args) != 0L) {
   stop("usage: precompile-vignettes.R [--check]", call. = FALSE)
 }
-if (!nzchar(Sys.which("pi"))) {
+if (!nzchar(Sys.which(Sys.getenv("PIKNIT_PI", unset = "pi")))) {
   stop("pi is required to precompile live-agent vignettes", call. = FALSE)
 }
 required <- c("knitr", "piknit")

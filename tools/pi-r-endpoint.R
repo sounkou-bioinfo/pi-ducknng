@@ -64,7 +64,7 @@ eval_manifest <- function() {
     )
   )
   close_method$closes_session <- TRUE
-  rpc_manifest_raw("piducknng-r", list(eval_method, close_method))
+  rpc_manifest("piducknng-r", list(eval_method, close_method))
 }
 
 arrow_payload <- function(value) {
@@ -130,6 +130,14 @@ endpoint_dispatch <- function(method, arguments, profile) {
   stop("unknown RPC method")
 }
 
+# The endpoint lives as long as the process that placed it. Without a parent
+# PID it runs until close.
+parent_keep_alive <- function() {
+  parent <- suppressWarnings(as.integer(Sys.getenv("PI_DUCKNNG_PARENT_PID")))
+  if (is.na(parent) || parent <= 0L) return(function() TRUE)
+  function() rpc_process_alive(parent)
+}
+
 main <- function(locator) {
   profile <- paste0("piducknng-endpoint-", Sys.getpid())
   mirai::daemons(1L, .compute = profile)
@@ -145,10 +153,11 @@ main <- function(locator) {
   )
   mirai::collect_mirai(initialized)
   rpc_serve(
+    "tcp://127.0.0.1:0",
     locator,
     eval_manifest(),
     function(method, arguments) endpoint_dispatch(method, arguments, profile),
-    receive_timeout = 30000L
+    keep_alive = parent_keep_alive()
   )
 }
 

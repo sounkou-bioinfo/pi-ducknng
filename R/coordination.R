@@ -1,5 +1,24 @@
+COORDINATION_SCHEMA_VERSION <- 1L
+COORDINATION_ERROR_CODES <- c(
+  "invalid_argument", "registration_expired", "idempotency_conflict",
+  "mailbox_full", "receipt_invalid", "lease_invalid", "resource_conflict",
+  "unknown_method"
+)
+COORDINATION_DEFAULT_MESSAGE_TTL_MS <- 604800000
+
 coordination_now_ms <- function() {
   floor(as.numeric(Sys.time()) * 1000)
+}
+
+# Coordination failures travel as "code: detail" ducknng error text so clients
+# can branch on the code without parsing the detail.
+coordination_fail <- function(code, ...) {
+  stopifnot(code %in% COORDINATION_ERROR_CODES)
+  message <- paste0(code, ": ", paste0(..., collapse = ""))
+  stop(structure(
+    class = c("coordination_error", "error", "condition"),
+    list(message = message, call = NULL, code = code)
+  ))
 }
 
 coordination_open <- function(path, now = coordination_now_ms,
@@ -28,6 +47,7 @@ coordination_open <- function(path, now = coordination_now_ms,
   store$now <- now
   store$acknowledged_retention_ms <- acknowledged_retention_ms
   store$max_pending_per_mailbox <- as.numeric(max_pending_per_mailbox)
+  store$maintained_at_ms <- -Inf
 
   statements <- c(
     paste(
@@ -61,6 +81,7 @@ coordination_open <- function(path, now = coordination_now_ms,
       "receipt_token VARCHAR, lease_expires_at_ms BIGINT,",
       "acked_at_ms BIGINT, delivery_ref VARCHAR,",
       "delivery_capability VARCHAR, ack_instance_id VARCHAR,",
+      "expires_at_ms BIGINT NOT NULL, expired_at_ms BIGINT,",
       "UNIQUE (project_id, sender_agent_id, idempotency_key))"
     ),
     paste(
@@ -85,15 +106,16 @@ coordination_open <- function(path, now = coordination_now_ms,
     DBI::dbExecute(
       store$connection,
       paste(
-        "INSERT INTO coordination_meta VALUES (TRUE, 1)",
+        "INSERT INTO coordination_meta VALUES (TRUE, ?)",
         "ON CONFLICT (singleton) DO NOTHING"
-      )
+      ),
+      params = list(COORDINATION_SCHEMA_VERSION)
     )
-    versions <- DBI::dbGetQuery(
+    version <- DBI::dbGetQuery(
       store$connection,
       "SELECT schema_version FROM coordination_meta WHERE singleton"
-    )
-    if (nrow(versions) != 1L || versions$schema_version[[1L]] != 1L) {
+    )$schema_version
+    if (!identical(as.integer(version), COORDINATION_SCHEMA_VERSION)) {
       stop("unsupported coordination database schema")
     }
   })
@@ -108,17 +130,40 @@ coordination_close <- function(store) {
   invisible(NULL)
 }
 
+# Identifiers and tokens: one bounded string without control characters.
 coordination_string <- function(arguments, name, required = TRUE,
                                 default = NULL, max_bytes = 256L) {
   value <- arguments[[name]]
   if (is.null(value)) {
-    if (required) stop(name, " is required")
+    if (required) coordination_fail("invalid_argument", name, " is required")
     return(default)
   }
   valid <- is.character(value) && length(value) == 1L && !is.na(value) &&
-    nzchar(value) && !grepl("[[:cntrl:]]", value) &&
+    nzchar(value) && validUTF8(value) && !grepl("[[:cntrl:]]", value) &&
     nchar(value, type = "bytes") <= max_bytes
-  if (!valid) stop(name, " must be one bounded non-empty string")
+  if (!valid) {
+    coordination_fail(
+      "invalid_argument", name, " must be one non-empty string of at most ",
+      max_bytes, " bytes without control characters"
+    )
+  }
+  enc2utf8(value)
+}
+
+# Message text: UTF-8 that may contain tabs and line breaks.
+coordination_text <- function(arguments, name, max_bytes) {
+  value <- arguments[[name]]
+  valid <- is.character(value) && length(value) == 1L && !is.na(value) &&
+    nzchar(value) && validUTF8(value) &&
+    !grepl("[\x01-\x08\x0B\x0C\x0E-\x1F\x7F]", value, perl = TRUE) &&
+    nchar(value, type = "bytes") <= max_bytes
+  if (!valid) {
+    coordination_fail(
+      "invalid_argument", name, " must be non-empty UTF-8 text of at most ",
+      max_bytes, " bytes; only tab, line feed, and carriage return control ",
+      "characters are allowed"
+    )
+  }
   enc2utf8(value)
 }
 
@@ -127,17 +172,22 @@ coordination_integer <- function(arguments, name, default, minimum, maximum) {
   if (is.null(value)) return(default)
   valid <- is.numeric(value) && length(value) == 1L && is.finite(value) &&
     value == floor(value) && value >= minimum && value <= maximum
-  if (!valid) stop(name, " is outside its allowed integer range")
+  if (!valid) {
+    coordination_fail(
+      "invalid_argument", name, " must be an integer from ", minimum,
+      " to ", format(maximum, scientific = FALSE)
+    )
+  }
   as.numeric(value)
 }
 
 coordination_arguments <- function(arguments, allowed) {
-  if (!is.list(arguments) || is.null(names(arguments))) {
-    stop("coordination arguments must be a JSON object")
+  if (!is.list(arguments) || (length(arguments) > 0L && is.null(names(arguments)))) {
+    coordination_fail("invalid_argument", "arguments must be a JSON object")
   }
   unexpected <- setdiff(names(arguments), allowed)
   if (length(unexpected) > 0L) {
-    stop("unexpected coordination argument: ", unexpected[[1L]])
+    coordination_fail("invalid_argument", "unexpected argument ", unexpected[[1L]])
   }
   arguments
 }
@@ -146,16 +196,38 @@ coordination_uuid <- function(connection) {
   DBI::dbGetQuery(connection, "SELECT uuid()::VARCHAR AS id")$id[[1L]]
 }
 
+# Expires overdue queued mail into dead letters and deletes records whose
+# retention ended. Runs at most once per second.
 coordination_maintain <- function(store, now) {
+  if (now - store$maintained_at_ms < 1000) return(invisible(NULL))
+  store$maintained_at_ms <- now
   cutoff <- now - store$acknowledged_retention_ms
   DBI::dbWithTransaction(store$connection, {
     DBI::dbExecute(
       store$connection,
       paste(
-        "DELETE FROM coordination_messages WHERE state = 'acked'",
-        "AND acked_at_ms < ?"
+        "UPDATE coordination_messages SET state = 'queued', receipt_token = NULL,",
+        "lease_expires_at_ms = NULL WHERE state = 'leased'",
+        "AND lease_expires_at_ms <= ?"
       ),
-      params = list(cutoff)
+      params = list(now)
+    )
+    DBI::dbExecute(
+      store$connection,
+      paste(
+        "UPDATE coordination_messages SET state = 'expired', expired_at_ms = ?",
+        "WHERE state = 'queued' AND expires_at_ms <= ?"
+      ),
+      params = list(now, now)
+    )
+    DBI::dbExecute(
+      store$connection,
+      paste(
+        "DELETE FROM coordination_messages WHERE",
+        "(state = 'acked' AND acked_at_ms < ?)",
+        "OR (state = 'expired' AND expired_at_ms < ?)"
+      ),
+      params = list(cutoff, cutoff)
     )
     DBI::dbExecute(
       store$connection,
@@ -191,7 +263,7 @@ coordination_registration <- function(store, registration_id, now) {
   )
   if (nrow(row) != 1L || !is.na(row$unregistered_at_ms[[1L]]) ||
       row$expires_at_ms[[1L]] <= now) {
-    stop("registration is missing or expired")
+    coordination_fail("registration_expired", "registration is missing or expired")
   }
   row[1L, , drop = FALSE]
 }
@@ -232,7 +304,9 @@ coordination_register <- function(store, arguments) {
       params = list(project_id, instance_id)
     )
     if (nrow(existing) == 1L && existing$agent_id[[1L]] != agent_id) {
-      stop("instance_id is already bound to another agent_id")
+      coordination_fail(
+        "invalid_argument", "instance_id is already bound to another agent_id"
+      )
     }
     reuse <- nrow(existing) == 1L &&
       identical(existing$operation_key[[1L]], operation_key) &&
@@ -285,11 +359,13 @@ coordination_heartbeat <- function(store, arguments) {
   )
   status <- arguments$status
   if (is.null(status)) status <- structure(list(), names = character())
-  if (!is.list(status) || is.null(names(status))) {
-    stop("status must be a JSON object")
+  if (!is.list(status) || (length(status) > 0L && is.null(names(status)))) {
+    coordination_fail("invalid_argument", "status must be a JSON object")
   }
   status_json <- jsonlite::toJSON(status, auto_unbox = TRUE, null = "null")
-  if (nchar(status_json, type = "bytes") > 8192L) stop("status is too large")
+  if (nchar(status_json, type = "bytes") > 8192L) {
+    coordination_fail("invalid_argument", "status is larger than 8192 bytes")
+  }
   now <- store$now()
   registration <- coordination_registration(store, registration_id, now)
   previous_ttl <- DBI::dbGetQuery(
@@ -353,10 +429,22 @@ coordination_list_agents <- function(store, arguments) {
   list(server_time_ms = now, agents = agents)
 }
 
+coordination_recipient_seen <- function(store, project, recipient, sender) {
+  if (identical(recipient, sender)) return(TRUE)
+  DBI::dbGetQuery(
+    store$connection,
+    paste(
+      "SELECT count(*) AS count FROM coordination_agents",
+      "WHERE project_id = ? AND agent_id = ?"
+    ),
+    params = list(project, recipient)
+  )$count[[1L]] > 0
+}
+
 coordination_send <- function(store, arguments) {
   arguments <- coordination_arguments(arguments, c(
     "registration_id", "recipient_agent_id", "idempotency_key",
-    "content", "content_type"
+    "content", "content_type", "ttl_ms"
   ))
   registration_id <- coordination_string(
     arguments, "registration_id", max_bytes = 64L
@@ -367,24 +455,26 @@ coordination_send <- function(store, arguments) {
   idempotency_key <- coordination_string(
     arguments, "idempotency_key", max_bytes = 256L
   )
-  content <- coordination_string(
-    arguments, "content", max_bytes = 65536L
-  )
+  content <- coordination_text(arguments, "content", max_bytes = 65536L)
   content_type <- coordination_string(
     arguments, "content_type", required = FALSE,
     default = "text/plain", max_bytes = 128L
+  )
+  ttl_ms <- coordination_integer(
+    arguments, "ttl_ms", COORDINATION_DEFAULT_MESSAGE_TTL_MS, 60000, 2592000000
   )
   now <- store$now()
   registration <- coordination_registration(store, registration_id, now)
   project <- registration$project_id[[1L]]
   sender <- registration$agent_id[[1L]]
+  recipient_seen <- coordination_recipient_seen(store, project, recipient, sender)
 
   DBI::dbWithTransaction(store$connection, (function() {
     existing <- DBI::dbGetQuery(
       store$connection,
       paste(
         "SELECT message_id, recipient_agent_id, content, content_type,",
-        "sequence_number, created_at_ms FROM coordination_messages",
+        "sequence_number, created_at_ms, expires_at_ms FROM coordination_messages",
         "WHERE project_id = ? AND sender_agent_id = ? AND idempotency_key = ?"
       ),
       params = list(project, sender, idempotency_key)
@@ -393,12 +483,20 @@ coordination_send <- function(store, arguments) {
       same <- identical(existing$recipient_agent_id[[1L]], recipient) &&
         identical(existing$content[[1L]], content) &&
         identical(existing$content_type[[1L]], content_type)
-      if (!same) stop("idempotency_key was already used for another message")
+      if (!same) {
+        coordination_fail(
+          "idempotency_conflict",
+          "idempotency_key was already used for another message"
+        )
+      }
       return(list(
         message_id = existing$message_id[[1L]],
+        project_id = project,
         recipient_agent_id = recipient,
+        recipient_seen = recipient_seen,
         sequence_number = existing$sequence_number[[1L]],
         created_at_ms = existing$created_at_ms[[1L]],
+        expires_at_ms = existing$expires_at_ms[[1L]],
         replayed = TRUE
       ))
     }
@@ -407,12 +505,17 @@ coordination_send <- function(store, arguments) {
       store$connection,
       paste(
         "SELECT count(*) AS count FROM coordination_messages",
-        "WHERE project_id = ? AND recipient_agent_id = ? AND state != 'acked'"
+        "WHERE project_id = ? AND recipient_agent_id = ?",
+        "AND state IN ('queued', 'leased')"
       ),
       params = list(project, recipient)
     )$count[[1L]]
     if (pending >= store$max_pending_per_mailbox) {
-      stop("recipient mailbox has reached its pending message limit")
+      coordination_fail(
+        "mailbox_full", "recipient mailbox holds ",
+        format(store$max_pending_per_mailbox, scientific = FALSE),
+        " unacknowledged messages"
+      )
     }
 
     sequence_row <- DBI::dbGetQuery(
@@ -443,24 +546,29 @@ coordination_send <- function(store, arguments) {
       value
     }
     message_id <- coordination_uuid(store$connection)
+    expires <- now + ttl_ms
     DBI::dbExecute(
       store$connection,
       paste(
         "INSERT INTO coordination_messages (message_id, project_id,",
         "sender_agent_id, recipient_agent_id, idempotency_key,",
-        "sequence_number, content, content_type, created_at_ms, state)",
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued')"
+        "sequence_number, content, content_type, created_at_ms, state,",
+        "expires_at_ms)",
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?)"
       ),
       params = list(
         message_id, project, sender, recipient, idempotency_key,
-        sequence_number, content, content_type, now
+        sequence_number, content, content_type, now, expires
       )
     )
     list(
       message_id = message_id,
+      project_id = project,
       recipient_agent_id = recipient,
+      recipient_seen = recipient_seen,
       sequence_number = sequence_number,
       created_at_ms = now,
+      expires_at_ms = expires,
       replayed = FALSE
     )
   })())
@@ -478,9 +586,11 @@ coordination_expire_deliveries <- function(store, project, agent, now) {
   )
 }
 
+# wait_ms is validated here and honored by the endpoint, which may hold the
+# reply until mail arrives or the wait ends.
 coordination_receive <- function(store, arguments) {
   arguments <- coordination_arguments(arguments, c(
-    "registration_id", "limit", "visibility_timeout_ms"
+    "registration_id", "limit", "visibility_timeout_ms", "wait_ms"
   ))
   registration_id <- coordination_string(
     arguments, "registration_id", max_bytes = 64L
@@ -489,6 +599,7 @@ coordination_receive <- function(store, arguments) {
   visibility <- coordination_integer(
     arguments, "visibility_timeout_ms", 30000, 1000, 300000
   )
+  coordination_integer(arguments, "wait_ms", 0, 0, 25000)
   now <- store$now()
   registration <- coordination_registration(store, registration_id, now)
   project <- registration$project_id[[1L]]
@@ -501,11 +612,11 @@ coordination_receive <- function(store, arguments) {
       store$connection,
       paste0(
         "SELECT message_id, sender_agent_id, sequence_number, content, ",
-        "content_type, created_at_ms FROM coordination_messages ",
+        "content_type, created_at_ms, expires_at_ms FROM coordination_messages ",
         "WHERE project_id = ? AND recipient_agent_id = ? AND state = 'queued' ",
-        "ORDER BY sequence_number LIMIT ", as.integer(limit)
+        "AND expires_at_ms > ? ORDER BY sequence_number LIMIT ", as.integer(limit)
       ),
-      params = list(project, agent)
+      params = list(project, agent, now)
     )
     messages <- lapply(seq_len(nrow(rows)), function(index) {
       receipt <- coordination_uuid(store$connection)
@@ -522,12 +633,14 @@ coordination_receive <- function(store, arguments) {
       list(
         message_id = rows$message_id[[index]],
         receipt_token = receipt,
+        project_id = project,
         sender_agent_id = rows$sender_agent_id[[index]],
         recipient_agent_id = agent,
         sequence_number = rows$sequence_number[[index]],
         content = rows$content[[index]],
         content_type = rows$content_type[[index]],
         created_at_ms = rows$created_at_ms[[index]],
+        expires_at_ms = rows$expires_at_ms[[index]],
         lease_expires_at_ms = deadline
       )
     })
@@ -563,7 +676,9 @@ coordination_ack <- function(store, arguments) {
       ),
       params = list(project, agent, receipt)
     )
-    if (nrow(row) != 1L) stop("receipt is missing, expired, or stale")
+    if (nrow(row) != 1L) {
+      coordination_fail("receipt_invalid", "receipt is missing, expired, or stale")
+    }
     if (identical(row$state[[1L]], "acked")) {
       return(list(
         message_id = row$message_id[[1L]],
@@ -576,7 +691,7 @@ coordination_ack <- function(store, arguments) {
     }
     if (!identical(row$state[[1L]], "leased") ||
         row$lease_expires_at_ms[[1L]] <= now) {
-      stop("receipt is missing, expired, or stale")
+      coordination_fail("receipt_invalid", "receipt is missing, expired, or stale")
     }
     DBI::dbExecute(
       store$connection,
@@ -601,6 +716,21 @@ coordination_ack <- function(store, arguments) {
   })())
 }
 
+# Percent-encodes every byte outside RFC 3986 path characters.
+coordination_encode_path <- function(path) {
+  safe <- as.integer(charToRaw(paste0(
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789",
+    "-._~!$&'()*+,;=:@/"
+  )))
+  bytes <- as.integer(charToRaw(enc2utf8(path)))
+  encoded <- ifelse(
+    bytes %in% safe,
+    vapply(bytes, function(byte) rawToChar(as.raw(byte)), ""),
+    sprintf("%%%02X", bytes)
+  )
+  paste(encoded, collapse = "")
+}
+
 # Registered agents are distinct producers in one conflict namespace. File URIs
 # are normalized lexically for overlap checks; the endpoint never opens the path.
 coordination_resource <- function(value) {
@@ -613,27 +743,26 @@ coordination_resource <- function(value) {
       value,
       perl = TRUE
     ) && !grepl("//|(^|/)\\.\\.?(/|$)", sub("^resource:", "", value), perl = TRUE)
-    if (!valid) stop("resource: identifier is not canonical")
+    if (!valid) coordination_fail("invalid_argument", "resource: identifier is not canonical")
     return(value)
   }
   if (!startsWith(value, "file:///")) {
-    stop("resource must use resource: or file:/// syntax")
+    coordination_fail("invalid_argument", "resource must use resource: or file:/// syntax")
   }
   encoded_path <- sub("^file://", "", value)
   if (grepl("%(?![0-9A-Fa-f]{2})", encoded_path, perl = TRUE)) {
-    stop("file resource has invalid URL encoding")
+    coordination_fail("invalid_argument", "file resource has invalid URL encoding")
   }
-  path <- tryCatch(
-    utils::URLdecode(encoded_path),
-    error = function(error) stop("file resource has invalid URL encoding")
-  )
+  path <- utils::URLdecode(encoded_path)
   parts <- strsplit(path, "/", fixed = TRUE)[[1L]]
-  if (!startsWith(path, "/") || any(parts %in% c(".", "..")) ||
+  if (!validUTF8(path) || !startsWith(path, "/") || any(parts %in% c(".", "..")) ||
       grepl("//", path, fixed = TRUE) || grepl("[[:cntrl:]]", path)) {
-    stop("file resource must be an absolute canonical lexical path")
+    coordination_fail(
+      "invalid_argument", "file resource must be an absolute canonical lexical path"
+    )
   }
   if (nchar(path) > 1L) path <- sub("/+$", "", path)
-  paste0("file://", path)
+  paste0("file://", coordination_encode_path(path))
 }
 
 coordination_resources_conflict <- function(left, right) {
@@ -646,6 +775,19 @@ coordination_resources_conflict <- function(left, right) {
   if (identical(left_path, "/") || identical(right_path, "/")) return(TRUE)
   startsWith(left_path, paste0(right_path, "/")) ||
     startsWith(right_path, paste0(left_path, "/"))
+}
+
+coordination_active_reservations <- function(store, project, now) {
+  DBI::dbGetQuery(
+    store$connection,
+    paste(
+      "SELECT resource, lease_id, owner_agent_id, owner_instance_id,",
+      "fencing_value, expires_at_ms FROM coordination_reservations",
+      "WHERE project_id = ? AND released_at_ms IS NULL AND expires_at_ms > ?",
+      "ORDER BY resource, fencing_value"
+    ),
+    params = list(project, now)
+  )
 }
 
 coordination_reserve <- function(store, arguments) {
@@ -684,7 +826,9 @@ coordination_reserve <- function(store, arguments) {
       )
       valid <- nrow(row) == 1L && is.na(row$released_at_ms[[1L]]) &&
         row$expires_at_ms[[1L]] > now && identical(row$resource[[1L]], resource)
-      if (!valid) stop("reservation lease is missing, expired, or stale")
+      if (!valid) {
+        coordination_fail("lease_invalid", "reservation lease is missing, expired, or stale")
+      }
       DBI::dbExecute(
         store$connection,
         "UPDATE coordination_reservations SET expires_at_ms = ? WHERE lease_id = ?",
@@ -696,7 +840,8 @@ coordination_reserve <- function(store, arguments) {
         fencing_value = row$fencing_value[[1L]],
         expires_at_ms = expires,
         replayed = FALSE,
-        renewed = TRUE
+        renewed = TRUE,
+        active = TRUE
       ))
     }
 
@@ -711,7 +856,9 @@ coordination_reserve <- function(store, arguments) {
     )
     if (nrow(prior) == 1L) {
       if (!identical(prior$resource[[1L]], resource)) {
-        stop("operation_key was already used for another resource")
+        coordination_fail(
+          "idempotency_conflict", "operation_key was already used for another resource"
+        )
       }
       return(list(
         lease_id = prior$lease_id[[1L]],
@@ -725,15 +872,7 @@ coordination_reserve <- function(store, arguments) {
       ))
     }
 
-    active <- DBI::dbGetQuery(
-      store$connection,
-      paste(
-        "SELECT resource, owner_agent_id, expires_at_ms",
-        "FROM coordination_reservations WHERE project_id = ?",
-        "AND released_at_ms IS NULL AND expires_at_ms > ?"
-      ),
-      params = list(project, now)
-    )
+    active <- coordination_active_reservations(store, project, now)
     conflict <- vapply(
       active$resource,
       coordination_resources_conflict,
@@ -742,9 +881,10 @@ coordination_reserve <- function(store, arguments) {
     )
     if (any(conflict)) {
       row <- active[which(conflict)[[1L]], , drop = FALSE]
-      stop(
-        "resource conflicts with active reservation held by ",
-        row$owner_agent_id[[1L]], " until ", row$expires_at_ms[[1L]]
+      coordination_fail(
+        "resource_conflict", row$resource[[1L]], " is reserved by ",
+        row$owner_agent_id[[1L]], " until ",
+        format(row$expires_at_ms[[1L]], scientific = FALSE)
       )
     }
 
@@ -799,6 +939,46 @@ coordination_reserve <- function(store, arguments) {
   })())
 }
 
+# Lists active reservations in the caller's project, optionally only those
+# that conflict with one resource. Lease IDs are returned only to their owner.
+coordination_list_reservations <- function(store, arguments) {
+  arguments <- coordination_arguments(arguments, c("registration_id", "resource"))
+  registration_id <- coordination_string(
+    arguments, "registration_id", max_bytes = 64L
+  )
+  resource <- if (is.null(arguments$resource)) {
+    NULL
+  } else {
+    coordination_resource(arguments$resource)
+  }
+  now <- store$now()
+  registration <- coordination_registration(store, registration_id, now)
+  active <- coordination_active_reservations(
+    store, registration$project_id[[1L]], now
+  )
+  if (!is.null(resource)) {
+    keep <- vapply(
+      active$resource, coordination_resources_conflict, logical(1L),
+      right = resource
+    )
+    active <- active[keep, , drop = FALSE]
+  }
+  caller <- registration$instance_id[[1L]]
+  reservations <- lapply(seq_len(nrow(active)), function(index) {
+    mine <- identical(active$owner_instance_id[[index]], caller)
+    entry <- list(
+      resource = active$resource[[index]],
+      owner_agent_id = active$owner_agent_id[[index]],
+      owned_by_caller = mine,
+      fencing_value = active$fencing_value[[index]],
+      expires_at_ms = active$expires_at_ms[[index]]
+    )
+    if (mine) entry$lease_id <- active$lease_id[[index]]
+    entry
+  })
+  list(server_time_ms = now, resource = resource, reservations = reservations)
+}
+
 coordination_release <- function(store, arguments) {
   arguments <- coordination_arguments(arguments, c("registration_id", "lease_id"))
   registration_id <- coordination_string(
@@ -819,7 +999,9 @@ coordination_release <- function(store, arguments) {
       registration$instance_id[[1L]]
     )
   )
-  if (nrow(row) != 1L) stop("reservation lease is missing or belongs to another owner")
+  if (nrow(row) != 1L) {
+    coordination_fail("lease_invalid", "reservation lease is missing or belongs to another owner")
+  }
   replayed <- !is.na(row$released_at_ms[[1L]])
   if (!replayed) {
     DBI::dbExecute(
@@ -854,7 +1036,7 @@ coordination_unregister <- function(store, arguments) {
     ),
     params = list(registration_id)
   )
-  if (nrow(row) != 1L) stop("registration is missing")
+  if (nrow(row) != 1L) coordination_fail("registration_expired", "registration is missing")
   replayed <- !is.na(row$unregistered_at_ms[[1L]])
   if (!replayed) {
     DBI::dbExecute(
@@ -870,7 +1052,7 @@ coordination_unregister <- function(store, arguments) {
 }
 
 coordination_dispatch <- function(store, method, arguments) {
-  if (method %in% c("register", "send", "receive", "ack", "reserve", "release")) {
+  if (!method %in% c("heartbeat", "list_agents", "list_reservations", "unregister")) {
     coordination_maintain(store, store$now())
   }
   switch(
@@ -882,8 +1064,9 @@ coordination_dispatch <- function(store, method, arguments) {
     receive = coordination_receive(store, arguments),
     ack = coordination_ack(store, arguments),
     reserve = coordination_reserve(store, arguments),
+    list_reservations = coordination_list_reservations(store, arguments),
     release = coordination_release(store, arguments),
     unregister = coordination_unregister(store, arguments),
-    stop("unknown coordination method")
+    coordination_fail("unknown_method", method)
   )
 }

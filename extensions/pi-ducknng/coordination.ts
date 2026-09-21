@@ -1,20 +1,36 @@
+import { homedir } from "node:os";
+import { isAbsolute, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import type {
   ExtensionAPI,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
+import { Type } from "@sinclair/typebox";
 
 const DELIVERY_ENTRY_TYPE = "piducknng.coordination.delivery";
 const MESSAGE_TYPE = "piducknng_coordination";
 const DEFAULT_TTL_MS = 30_000;
-const DEFAULT_POLL_MS = 2_000;
+const RECEIVE_WAIT_MS = 20_000;
+const RESERVATION_TTL_MS = 120_000;
+const REQUIRED_METHODS = ["register", "heartbeat", "receive", "ack", "unregister"];
+export const COORDINATION_TOOLS = [
+  "coordination_send",
+  "coordination_inbox",
+  "coordination_agents",
+  "coordination_reserve",
+  "coordination_release",
+];
 
-type CoordinationClient = {
+export type CoordinationClient = {
   describe(url: string): Promise<{ methods: Array<{ name: string }> }>;
   call(
     url: string,
     method: string,
     args: Record<string, unknown>,
+    options?: { timeoutMs?: number },
   ): Promise<unknown>;
+  claim?(url: string): void;
+  release?(url: string): void;
 };
 
 type CoordinationConfig = {
@@ -28,7 +44,7 @@ type Registration = {
   heartbeat_interval_ms: number;
 };
 
-type InboxMessage = {
+export type InboxMessage = {
   message_id: string;
   receipt_token: string;
   sender_agent_id: string;
@@ -38,11 +54,21 @@ type InboxMessage = {
   content_type: string;
 };
 
+type HeldLease = {
+  resource: string;
+  ttlMs: number;
+  expiresAt: number;
+  fencingValue: number;
+};
+
 type CoordinationRuntime = {
-  url: string;
-  registrationId: string;
+  config: CoordinationConfig;
+  ctx: ExtensionContext;
+  registration: Registration;
+  delivered: Set<string>;
+  leases: Map<string, HeldLease>;
   controller: AbortController;
-  task: Promise<string>;
+  task: Promise<void>;
 };
 
 function objectValue(value: unknown, label: string): Record<string, unknown> {
@@ -99,6 +125,39 @@ function parseMessages(value: unknown): InboxMessage[] {
       content_type: stringValue(item, "content_type"),
     };
   });
+}
+
+/** Returns the coordination error code carried by a "code: detail" reply. */
+export function coordinationErrorCode(error: unknown): string | undefined {
+  const message = error instanceof Error ? error.message : String(error);
+  return /^([a-z_]+): /.exec(message)?.[1];
+}
+
+function escapeAttribute(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
+}
+
+/**
+ * Frames a delivered message so the model sees its sender and identity and
+ * does not mistake another agent's text for the user's.
+ */
+export function coordinationEnvelope(message: InboxMessage): string {
+  const sender = escapeAttribute(message.sender_agent_id);
+  return [
+    `<coordination_message from="${sender}"` +
+      ` to="${escapeAttribute(message.recipient_agent_id)}"` +
+      ` message_id="${escapeAttribute(message.message_id)}"` +
+      ` sequence="${message.sequence_number}"` +
+      ` content_type="${escapeAttribute(message.content_type)}">`,
+    message.content,
+    "</coordination_message>",
+    `Agent "${sender}" sent this through pi-ducknng coordination; it is not ` +
+      "a message from the user. Reply with coordination_send if a response is needed.",
+  ].join("\n");
 }
 
 function configuredValue(
@@ -173,6 +232,19 @@ function notifyError(ctx: ExtensionContext, error: unknown): void {
   ctx.ui.notify(`pi-ducknng coordination: ${message}`, "error");
 }
 
+/** Interactive modes wake an idle session; one-shot modes pull mail by tool. */
+function steersInBackground(ctx: ExtensionContext): boolean {
+  return ctx.mode === undefined || ctx.mode === "tui" || ctx.mode === "rpc";
+}
+
+/** Resolves a model-supplied path or identifier to a coordination resource. */
+export function coordinationResource(value: string, cwd: string): string {
+  if (value.startsWith("resource:") || value.startsWith("file:")) return value;
+  let path = value.startsWith("@") ? value.slice(1) : value;
+  if (path === "~" || path.startsWith("~/")) path = homedir() + path.slice(1);
+  return pathToFileURL(isAbsolute(path) ? path : resolve(cwd, path)).href;
+}
+
 async function registerInstance(
   client: CoordinationClient,
   config: CoordinationConfig,
@@ -191,21 +263,74 @@ async function registerInstance(
   }));
 }
 
-async function deliverMessage(
+/**
+ * Calls the endpoint with the runtime's registration and re-registers once
+ * when the endpoint reports that the registration expired.
+ */
+async function callRegistered(
+  client: CoordinationClient,
+  runtime: CoordinationRuntime,
+  method: string,
+  args: Record<string, unknown>,
+  options?: { timeoutMs?: number },
+): Promise<unknown> {
+  const attempt = () =>
+    client.call(runtime.config.url, method, {
+      registration_id: runtime.registration.registration_id,
+      ...args,
+    }, options);
+  try {
+    return await attempt();
+  } catch (error) {
+    if (coordinationErrorCode(error) !== "registration_expired") throw error;
+    runtime.registration = await registerInstance(
+      client,
+      runtime.config,
+      runtime.ctx,
+    );
+    return await attempt();
+  }
+}
+
+async function acknowledge(
+  client: CoordinationClient,
+  runtime: CoordinationRuntime,
+  message: InboxMessage,
+  deliveryRef: string,
+): Promise<void> {
+  await callRegistered(client, runtime, "ack", {
+    receipt_token: message.receipt_token,
+    delivery_ref: deliveryRef,
+  });
+}
+
+function recordDelivery(
+  pi: ExtensionAPI,
+  runtime: CoordinationRuntime,
+  message: InboxMessage,
+  path: "steer" | "tool",
+): void {
+  pi.appendEntry(DELIVERY_ENTRY_TYPE, {
+    message_id: message.message_id,
+    sender_agent_id: message.sender_agent_id,
+    sequence_number: message.sequence_number,
+    path,
+  });
+  runtime.delivered.add(message.message_id);
+}
+
+async function steerMessage(
   pi: ExtensionAPI,
   client: CoordinationClient,
-  ctx: ExtensionContext,
-  url: string,
-  registrationId: string,
+  runtime: CoordinationRuntime,
   message: InboxMessage,
-  delivered: Set<string>,
   signal: AbortSignal,
 ): Promise<void> {
   signal.throwIfAborted();
-  if (!delivered.has(message.message_id)) {
+  if (!runtime.delivered.has(message.message_id)) {
     pi.sendMessage({
       customType: MESSAGE_TYPE,
-      content: message.content,
+      content: coordinationEnvelope(message),
       display: true,
       details: {
         message_id: message.message_id,
@@ -215,88 +340,95 @@ async function deliverMessage(
         content_type: message.content_type,
       },
     }, { triggerTurn: true, deliverAs: "steer" });
-    pi.appendEntry(DELIVERY_ENTRY_TYPE, {
-      message_id: message.message_id,
-      sender_agent_id: message.sender_agent_id,
-      sequence_number: message.sequence_number,
-    });
-    delivered.add(message.message_id);
+    recordDelivery(pi, runtime, message, "steer");
   }
-  await client.call(url, "ack", {
-    registration_id: registrationId,
-    receipt_token: message.receipt_token,
-    delivery_ref: `${ctx.sessionManager.getSessionId()}:${message.message_id}`,
-  });
+  await acknowledge(
+    client,
+    runtime,
+    message,
+    `steer:${runtime.ctx.sessionManager.getSessionId()}:${message.message_id}`,
+  );
+}
+
+async function renewLeases(
+  client: CoordinationClient,
+  runtime: CoordinationRuntime,
+): Promise<void> {
+  const now = Date.now();
+  for (const [leaseId, lease] of runtime.leases) {
+    if (lease.expiresAt - now > lease.ttlMs / 2) continue;
+    try {
+      const renewed = objectValue(
+        await callRegistered(client, runtime, "reserve", {
+          resource: lease.resource,
+          lease_id: leaseId,
+          ttl_ms: lease.ttlMs,
+        }),
+        "coordination reservation",
+      );
+      lease.expiresAt = Date.now() + lease.ttlMs;
+      lease.fencingValue = numberValue(renewed, "fencing_value");
+    } catch (error) {
+      if (coordinationErrorCode(error) === "lease_invalid") {
+        runtime.leases.delete(leaseId);
+      }
+      throw error;
+    }
+  }
 }
 
 async function runAdapter(
   pi: ExtensionAPI,
   client: CoordinationClient,
-  config: CoordinationConfig,
-  ctx: ExtensionContext,
-  initialRegistration: Registration,
+  runtime: CoordinationRuntime,
   signal: AbortSignal,
-): Promise<string> {
-  let registration = initialRegistration;
-  let nextHeartbeat = Date.now() + registration.heartbeat_interval_ms;
+): Promise<void> {
+  let nextHeartbeat = Date.now() + runtime.registration.heartbeat_interval_ms;
   let failures = 0;
-  const delivered = deliveredMessageIds(ctx);
+  const receives = steersInBackground(runtime.ctx);
 
   while (!signal.aborted) {
     try {
       if (Date.now() >= nextHeartbeat) {
-        await client.call(config.url, "heartbeat", {
-          registration_id: registration.registration_id,
+        await callRegistered(client, runtime, "heartbeat", {
           status: {
-            idle: ctx.isIdle(),
-            pending_messages: ctx.hasPendingMessages(),
+            idle: runtime.ctx.isIdle(),
+            pending_messages: runtime.ctx.hasPendingMessages(),
           },
         });
-        nextHeartbeat = Date.now() + registration.heartbeat_interval_ms;
+        await renewLeases(client, runtime);
+        nextHeartbeat = Date.now() + runtime.registration.heartbeat_interval_ms;
       }
-      const messages = parseMessages(await client.call(config.url, "receive", {
-        registration_id: registration.registration_id,
-        limit: 8,
-        visibility_timeout_ms: 30_000,
-      }));
-      for (const message of messages) {
-        signal.throwIfAborted();
-        await deliverMessage(
-          pi,
+      const waitMs = Math.max(
+        0,
+        Math.min(RECEIVE_WAIT_MS, nextHeartbeat - Date.now()),
+      );
+      if (receives) {
+        const messages = parseMessages(await callRegistered(
           client,
-          ctx,
-          config.url,
-          registration.registration_id,
-          message,
-          delivered,
-          signal,
-        );
+          runtime,
+          "receive",
+          { limit: 8, visibility_timeout_ms: 30_000, wait_ms: waitMs },
+          { timeoutMs: waitMs + 5_000 },
+        ));
+        for (const message of messages) {
+          await steerMessage(pi, client, runtime, message, signal);
+        }
+      } else {
+        await sleep(waitMs, signal);
       }
       failures = 0;
     } catch (error) {
       if (signal.aborted) break;
       failures += 1;
-      if (failures === 1) notifyError(ctx, error);
-      if (failures >= 3) {
-        try {
-          registration = await registerInstance(client, config, ctx);
-          nextHeartbeat = Date.now() + registration.heartbeat_interval_ms;
-          failures = 0;
-        } catch (registrationError) {
-          if (failures === 3) notifyError(ctx, registrationError);
-        }
+      if (failures === 1) notifyError(runtime.ctx, error);
+      try {
+        await sleep(Math.min(1_000 * 2 ** failures, 10_000), signal);
+      } catch {
+        break;
       }
     }
-    try {
-      await sleep(
-        Math.min(DEFAULT_POLL_MS * Math.max(failures, 1), 10_000),
-        signal,
-      );
-    } catch {
-      break;
-    }
   }
-  return registration.registration_id;
 }
 
 async function stopRuntime(
@@ -304,17 +436,79 @@ async function stopRuntime(
   runtime: CoordinationRuntime,
 ): Promise<void> {
   runtime.controller.abort();
-  const registrationId = await runtime.task.catch(
-    () => runtime.registrationId,
-  );
+  await runtime.task.catch(() => undefined);
+  for (const leaseId of runtime.leases.keys()) {
+    try {
+      await client.call(runtime.config.url, "release", {
+        registration_id: runtime.registration.registration_id,
+        lease_id: leaseId,
+      });
+    } catch {
+      // Unreleased leases expire on the endpoint.
+    }
+  }
+  runtime.leases.clear();
   try {
-    await client.call(runtime.url, "unregister", {
-      registration_id: registrationId,
+    await client.call(runtime.config.url, "unregister", {
+      registration_id: runtime.registration.registration_id,
     });
   } catch {
     // Presence expires by lease when the endpoint is unavailable.
   }
+  client.release?.(runtime.config.url);
 }
+
+function toolResult(value: unknown, text?: string) {
+  return {
+    content: [{ type: "text" as const, text: text ?? JSON.stringify(value, null, 2) }],
+    details: value,
+  };
+}
+
+const SendParameters = Type.Object(
+  {
+    recipient: Type.String({ description: "Stable agent ID of the recipient mailbox" }),
+    content: Type.String({ description: "Message text; line breaks are allowed" }),
+    content_type: Type.Optional(
+      Type.String({ description: "Media type of content, default text/plain" }),
+    ),
+  },
+  { additionalProperties: false },
+);
+const InboxParameters = Type.Object(
+  {
+    wait_ms: Type.Optional(Type.Integer({
+      minimum: 0,
+      maximum: 25_000,
+      description: "Wait up to this long for mail when the mailbox is empty",
+    })),
+    limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 32 })),
+  },
+  { additionalProperties: false },
+);
+const EmptyParameters = Type.Object({}, { additionalProperties: false });
+const ReserveParameters = Type.Object(
+  {
+    resource: Type.String({
+      description: "A file or directory path, a file:/// URI, or a resource: identifier",
+    }),
+    ttl_ms: Type.Optional(Type.Integer({
+      minimum: 5_000,
+      maximum: 300_000,
+      description: "Lease duration; this session renews held leases until release",
+    })),
+  },
+  { additionalProperties: false },
+);
+const ReleaseParameters = Type.Object(
+  {
+    lease_id: Type.Optional(Type.String()),
+    resource: Type.Optional(Type.String({
+      description: "Release this session's lease on this path or identifier",
+    })),
+  },
+  { additionalProperties: false },
+);
 
 export function registerCoordinationAdapter(
   pi: ExtensionAPI,
@@ -340,40 +534,217 @@ export function registerCoordinationAdapter(
     lifecycle = result.catch(() => undefined);
     return result;
   };
+  const attached = (): CoordinationRuntime => {
+    if (!runtime) {
+      throw new Error(
+        "coordination is not attached; set PI_DUCKNNG_COORDINATION_URL, " +
+          "PI_DUCKNNG_COORDINATION_PROJECT, and PI_DUCKNNG_AGENT_ID",
+      );
+    }
+    return runtime;
+  };
+
+  pi.registerTool({
+    name: "coordination_send",
+    label: "Send coordination message",
+    description:
+      "Durably send a message to another agent's mailbox in this coordination project.",
+    parameters: SendParameters,
+    execute: async (toolCallId, params) => {
+      const active = attached();
+      const sent = objectValue(await callRegistered(client, active, "send", {
+        recipient_agent_id: params.recipient,
+        idempotency_key: `${active.ctx.sessionManager.getSessionId()}:${toolCallId}`,
+        content: params.content,
+        ...(params.content_type ? { content_type: params.content_type } : {}),
+      }), "coordination send reply");
+      return toolResult(sent);
+    },
+  });
+
+  pi.registerTool({
+    name: "coordination_inbox",
+    label: "Read coordination inbox",
+    description:
+      "Receive and acknowledge messages sent to this agent, optionally waiting for new mail.",
+    parameters: InboxParameters,
+    execute: async (toolCallId, params, signal) => {
+      const active = attached();
+      const waitMs = params.wait_ms ?? 0;
+      const messages = parseMessages(await callRegistered(
+        client,
+        active,
+        "receive",
+        { limit: params.limit ?? 8, visibility_timeout_ms: 30_000, wait_ms: waitMs },
+        { timeoutMs: waitMs + 5_000 },
+      ));
+      const delivered = [];
+      for (const message of messages) {
+        signal?.throwIfAborted();
+        const repeated = active.delivered.has(message.message_id);
+        if (!repeated) recordDelivery(pi, active, message, "tool");
+        await acknowledge(client, active, message, `tool:${toolCallId}:${message.message_id}`);
+        delivered.push({ ...message, receipt_token: undefined, previously_delivered: repeated });
+      }
+      const text = delivered.length === 0
+        ? "No coordination messages."
+        : messages.map(coordinationEnvelope).join("\n\n");
+      return toolResult({ messages: delivered }, text);
+    },
+  });
+
+  pi.registerTool({
+    name: "coordination_agents",
+    label: "List coordination agents",
+    description:
+      "List live agents and active resource reservations in this coordination project.",
+    parameters: EmptyParameters,
+    execute: async () => {
+      const active = attached();
+      const agents = objectValue(
+        await callRegistered(client, active, "list_agents", {}),
+        "coordination agents reply",
+      );
+      const reservations = objectValue(
+        await callRegistered(client, active, "list_reservations", {}),
+        "coordination reservations reply",
+      );
+      return toolResult({
+        self: active.config.agentId,
+        agents: agents.agents,
+        reservations: reservations.reservations,
+      });
+    },
+  });
+
+  pi.registerTool({
+    name: "coordination_reserve",
+    label: "Reserve coordination resource",
+    description:
+      "Take an advisory lease on a path or resource: identifier. While held, other " +
+      "coordinated agents' edit and write tools are blocked on reserved paths.",
+    parameters: ReserveParameters,
+    execute: async (toolCallId, params, _signal, _onUpdate, ctx) => {
+      const active = attached();
+      if (!params.resource) throw new Error("resource is required");
+      const ttlMs = params.ttl_ms ?? RESERVATION_TTL_MS;
+      const reserved = objectValue(await callRegistered(client, active, "reserve", {
+        resource: coordinationResource(params.resource, ctx.cwd),
+        operation_key: `${active.ctx.sessionManager.getSessionId()}:${toolCallId}`,
+        ttl_ms: ttlMs,
+      }), "coordination reservation");
+      const leaseId = stringValue(reserved, "lease_id");
+      if (reserved.active !== false) {
+        active.leases.set(leaseId, {
+          resource: stringValue(reserved, "resource"),
+          ttlMs,
+          expiresAt: numberValue(reserved, "expires_at_ms"),
+          fencingValue: numberValue(reserved, "fencing_value"),
+        });
+      }
+      return toolResult(reserved);
+    },
+  });
+
+  pi.registerTool({
+    name: "coordination_release",
+    label: "Release coordination resource",
+    description: "Release a lease taken by this session with coordination_reserve.",
+    parameters: ReleaseParameters,
+    execute: async (_toolCallId, params, _signal, _onUpdate, ctx) => {
+      const active = attached();
+      let leaseId = params.lease_id;
+      if (!leaseId && params.resource) {
+        const resource = coordinationResource(params.resource, ctx.cwd);
+        const listed = objectValue(
+          await callRegistered(client, active, "list_reservations", { resource }),
+          "coordination reservations reply",
+        );
+        const own = (listed.reservations as Array<Record<string, unknown>>)
+          .find((reservation) => reservation.owned_by_caller === true);
+        leaseId = typeof own?.lease_id === "string" ? own.lease_id : undefined;
+      }
+      if (!leaseId) throw new Error("no lease held by this session matches the request");
+      const released = await callRegistered(client, active, "release", {
+        lease_id: leaseId,
+      });
+      active.leases.delete(leaseId);
+      return toolResult(released);
+    },
+  });
+
+  // Reservations held by other coordinated sessions block Pi's own file edits.
+  pi.on("tool_call", async (event, ctx) => {
+    const active = runtime;
+    if (!active || (event.toolName !== "edit" && event.toolName !== "write")) {
+      return undefined;
+    }
+    const path = (event.input as Record<string, unknown>).path;
+    if (typeof path !== "string" || !path) return undefined;
+    try {
+      const listed = objectValue(
+        await callRegistered(client, active, "list_reservations", {
+          resource: coordinationResource(path, ctx.cwd),
+        }),
+        "coordination reservations reply",
+      );
+      const held = (listed.reservations as Array<Record<string, unknown>>)
+        .filter((reservation) => reservation.owned_by_caller !== true);
+      if (held.length === 0) return undefined;
+      const holders = held
+        .map((reservation) =>
+          `${String(reservation.resource)} (held by ${String(reservation.owner_agent_id)})`)
+        .join(", ");
+      return {
+        block: true,
+        reason:
+          `${path} is reserved: ${holders}. Coordinate with coordination_send ` +
+          "or wait for the reservation to be released.",
+      };
+    } catch (error) {
+      notifyError(ctx, error);
+      return undefined;
+    }
+  });
 
   pi.on("session_start", async (_event, ctx) =>
     await serializeLifecycle(async () => {
       if (runtime) {
-        const active = runtime;
+        const previous = runtime;
         runtime = undefined;
-        await stopRuntime(client, active);
+        await stopRuntime(client, previous);
       }
       try {
         const config = coordinationConfig(pi);
-        if (!config) return;
+        if (!config) {
+          if (typeof pi.getActiveTools === "function") {
+            pi.setActiveTools(
+              pi.getActiveTools().filter((name) => !COORDINATION_TOOLS.includes(name)),
+            );
+          }
+          return;
+        }
         const manifest = await client.describe(config.url);
         const declared = new Set(manifest.methods.map((method) => method.name));
-        for (const method of ["register", "heartbeat", "receive", "ack", "unregister"]) {
+        for (const method of REQUIRED_METHODS) {
           if (!declared.has(method)) {
             throw new Error(`coordination endpoint does not declare ${method}`);
           }
         }
+        client.claim?.(config.url);
         const registration = await registerInstance(client, config, ctx);
         const controller = new AbortController();
-        const task = runAdapter(
-          pi,
-          client,
+        const started: CoordinationRuntime = {
           config,
           ctx,
           registration,
-          controller.signal,
-        );
-        runtime = {
-          url: config.url,
-          registrationId: registration.registration_id,
+          delivered: deliveredMessageIds(ctx),
+          leases: new Map(),
           controller,
-          task,
+          task: Promise.resolve(),
         };
+        started.task = runAdapter(pi, client, started, controller.signal);
+        runtime = started;
       } catch (error) {
         notifyError(ctx, error);
       }
