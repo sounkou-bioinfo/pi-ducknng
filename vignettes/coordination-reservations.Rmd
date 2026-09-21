@@ -1,0 +1,284 @@
+---
+title: "Keep agents off each other's files with reservations"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Keep agents off each other's files with reservations}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+
+
+A reservation is an advisory lease on a resource, held by one session for a
+bounded time. Two agents editing one tree can use reservations to split it
+between them. Pi's `edit` and `write` tools check them before every call.
+
+## Take a reservation
+
+
+``` bash
+node tools/pi-coordination-endpoint.ts \
+  "$STATE/coordination.url" "$STATE/coordination.duckdb" > "$STATE/endpoint.log" 2>&1 &
+echo $! > "$STATE/endpoint.pid"
+until [ -s "$STATE/coordination.url" ]; do sleep 0.1; done
+```
+
+File resources are canonical `file:///` URIs. A reservation covers the
+directory it names and everything below it. `docs-writer` reserves the
+scratch directory for five minutes. This guide prints URIs relative to the
+checkout:
+
+
+``` r
+url <- guide_url()
+repo <- paste0("file://", normalizePath("."))
+relative <- function(text) {
+  gsub(repo, ".", gsub(paste0(repo, "/"), "", text, fixed = TRUE), fixed = TRUE)
+}
+uri <- function(path) paste0(repo, "/", path)
+
+writer <- register("docs-writer", ttl_ms = 300000)
+held <- rpc_call(url, "reserve", list(
+  registration_id = writer$registration_id,
+  resource = uri(".guide-scratch"),
+  operation_key = "scratch", ttl_ms = 300000
+))
+held$resource <- relative(held$resource)
+show(held, c("resource", "fencing_value", "replayed", "renewed"))
+#> {
+#>   "resource": ".guide-scratch",
+#>   "fencing_value": 1,
+#>   "replayed": false,
+#>   "renewed": false
+#> }
+```
+
+## A Pi agent is refused
+
+
+
+A live Pi session, agent `editor`, is asked to write a file inside the
+reserved directory:
+
+``` sh
+'pi' --provider 'openai-codex' --model 'gpt-6-astra' --no-extensions --thinking 'medium' -e './extensions/pi-ducknng/index.ts' --no-session -p \
+  "$(printf %s \
+    'You are agent `editor`. Use the write tool to create ' \
+    '`.guide-scratch/notes.md` containing one line, `draft`. ' \
+    'If the write is refused, do not retry it and do not ' \
+    'write the file any other way. Call coordination_agents ' \
+    'to see which agent holds the reservation. Report the ' \
+    'refusal reason and the holder, beginning with ' \
+    '`AGENT_EDIT_BLOCKED` only when the write was refused ' \
+    'because another agent reserved the path.')"
+```
+
+> AGENT_EDIT_BLOCKED: Write refused because `.guide-scratch/notes.md` is covered by the `.guide-scratch` reservation held by `docs-writer`. No retry or alternative write attempted.
+
+The adapter refused the tool call before it ran, so the file does not exist:
+
+
+``` r
+file.exists(".guide-scratch/notes.md")
+#> [1] FALSE
+```
+
+The check covers Pi's `edit` and `write` tools. A command run through `bash`
+is not checked, so reservations coordinate agents that cooperate. They do
+not confine one that does not.
+
+## What conflicts
+
+A file reservation conflicts with the same path, with any path below it,
+and with any directory above it. Paths are compared by segment, so a
+sibling whose name merely starts the same way is free:
+
+
+``` r
+tester <- register("tester", ttl_ms = 300000)
+try_reserve <- function(who, resource, key = resource) {
+  reply <- tryCatch(
+    rpc_call(url, "reserve", list(
+      registration_id = who$registration_id, resource = resource, operation_key = key
+    )),
+    error = function(error) error
+  )
+  if (inherits(reply, "error")) relative(failure(stop(reply))) else "reserved"
+}
+knitr::kable(data.frame(
+  resource = c(".guide-scratch/data/raw.csv", ".", ".guide-scratchpad"),
+  result = c(
+    try_reserve(tester, uri(".guide-scratch/data/raw.csv")),
+    try_reserve(tester, repo),
+    try_reserve(tester, uri(".guide-scratchpad"))
+  )
+))
+```
+
+
+
+|resource                    |result                                                                           |
+|:---------------------------|:--------------------------------------------------------------------------------|
+|.guide-scratch/data/raw.csv |resource_conflict: .guide-scratch is reserved by docs-writer until 1790027378680 |
+|.                           |resource_conflict: .guide-scratch is reserved by docs-writer until 1790027378680 |
+|.guide-scratchpad           |reserved                                                                         |
+
+
+
+The time in the refusal is when the lease ends, in Unix milliseconds.
+
+`resource:` identifiers name things that are not files, such as a database
+migration or a deploy slot. They conflict only when they are equal, so
+`resource:db` and `resource:db/migrations` are two different resources:
+
+
+``` r
+knitr::kable(data.frame(
+  caller = c("tester", "docs-writer", "docs-writer"),
+  resource = c("resource:db/migrations", "resource:db/migrations", "resource:db"),
+  result = c(
+    try_reserve(tester, "resource:db/migrations"),
+    try_reserve(writer, "resource:db/migrations"),
+    try_reserve(writer, "resource:db")
+  )
+))
+```
+
+
+
+|caller      |resource               |result                                                                              |
+|:-----------|:----------------------|:-----------------------------------------------------------------------------------|
+|tester      |resource:db/migrations |reserved                                                                            |
+|docs-writer |resource:db/migrations |resource_conflict: resource:db/migrations is reserved by tester until 1790027120969 |
+|docs-writer |resource:db            |reserved                                                                            |
+
+
+
+## Renewal, replay, and release
+
+A holder renews by presenting its `lease_id`. Retrying the original
+acquisition with the same `operation_key` returns the same lease instead of
+a second one:
+
+
+``` r
+renewed <- rpc_call(url, "reserve", list(
+  registration_id = writer$registration_id, resource = uri(".guide-scratch"),
+  lease_id = held$lease_id, ttl_ms = 300000
+))
+replayed <- rpc_call(url, "reserve", list(
+  registration_id = writer$registration_id, resource = uri(".guide-scratch"),
+  operation_key = "scratch"
+))
+knitr::kable(data.frame(
+  call = c("renew", "replay"),
+  same_lease = c(renewed$lease_id, replayed$lease_id) == held$lease_id,
+  fencing_value = c(renewed$fencing_value, replayed$fencing_value),
+  renewed = c(renewed$renewed, replayed$renewed),
+  replayed = c(renewed$replayed, replayed$replayed)
+))
+```
+
+
+
+|call   |same_lease | fencing_value|renewed |replayed |
+|:------|:----------|-------------:|:-------|:--------|
+|renew  |TRUE       |             1|TRUE    |FALSE    |
+|replay |TRUE       |             1|FALSE   |TRUE     |
+
+
+
+Only the instance that holds a lease can renew or release it:
+
+
+``` r
+failure(rpc_call(url, "reserve", list(
+  registration_id = tester$registration_id, resource = uri(".guide-scratch"),
+  lease_id = held$lease_id
+)))
+#> [1] "lease_invalid: reservation lease is missing, expired, or stale"
+```
+
+Release is idempotent. Once it is released, the next holder receives a
+larger fencing value:
+
+
+``` r
+released <- rpc_call(url, "release", list(
+  registration_id = writer$registration_id, lease_id = held$lease_id))
+again <- rpc_call(url, "release", list(
+  registration_id = writer$registration_id, lease_id = held$lease_id))
+next_holder <- rpc_call(url, "reserve", list(
+  registration_id = tester$registration_id, resource = uri(".guide-scratch/data"),
+  operation_key = "data"
+))
+show(list(
+  released = released$released, released_again = again$replayed,
+  first_fencing_value = held$fencing_value, next_fencing_value = next_holder$fencing_value
+))
+#> {
+#>   "released": true,
+#>   "released_again": true,
+#>   "first_fencing_value": 1,
+#>   "next_fencing_value": 5
+#> }
+```
+
+Fencing values increase across the whole project. A store that remembers the
+largest value it has accepted can refuse a write from a holder whose lease
+already passed to someone else, even one that paused through its whole TTL.
+
+## Expiry
+
+A lease ends at its TTL even if its holder never releases it. Unregistering
+does not end it early, so a holder that leaves without releasing blocks the
+resource until then. The shortest TTL is five seconds:
+
+
+``` r
+deployer <- register("deployer")
+brief <- rpc_call(url, "reserve", list(
+  registration_id = deployer$registration_id, resource = "resource:deploy",
+  operation_key = "deploy", ttl_ms = 5000
+))
+invisible(rpc_call(url, "unregister", list(registration_id = deployer$registration_id)))
+before <- try_reserve(writer, "resource:deploy", "deploy-now")
+Sys.sleep(5.5)
+after <- try_reserve(writer, "resource:deploy", "deploy-later")
+c(before = before, after = after)
+#>                                                                           before
+#> "resource_conflict: resource:deploy is reserved by deployer until 1790027096242"
+#>                                                                            after
+#>                                                                       "reserved"
+```
+
+What each agent holds is one call away:
+
+
+``` r
+active <- rpc_call(url, "list_reservations", list(registration_id = writer$registration_id))
+knitr::kable(data.frame(
+  resource = relative(vapply(active$reservations, `[[`, "", "resource")),
+  owner = vapply(active$reservations, `[[`, "", "owner_agent_id"),
+  fencing_value = vapply(active$reservations, `[[`, 0, "fencing_value"),
+  mine = vapply(active$reservations, `[[`, TRUE, "owned_by_caller")
+))
+```
+
+
+
+|resource               |owner       | fencing_value|mine  |
+|:----------------------|:-----------|-------------:|:-----|
+|.guide-scratch/data    |tester      |             5|FALSE |
+|.guide-scratchpad      |tester      |             2|FALSE |
+|resource:db            |docs-writer |             4|TRUE  |
+|resource:db/migrations |tester      |             3|FALSE |
+|resource:deploy        |docs-writer |             7|TRUE  |
+
+
+
+
+
+
+
+> GUIDE_RESERVATIONS_VERIFIED: the gate refused a live agent, conflicts followed the path tree, and fencing values increased

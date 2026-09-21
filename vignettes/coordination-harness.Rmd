@@ -1,0 +1,71 @@
+---
+title: "Embed coordination in an AgentHarness host"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Embed coordination in an AgentHarness host}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+
+
+An interactive Pi session acknowledges a message once Pi's public API accepts
+it. A host process that owns a `pi-agent-core` `AgentHarness` can do better:
+it commits the message to a lane of a durable session before it
+acknowledges. `attachCoordinationLane` does that for one mailbox and one lane.
+
+Three rules make it safe to crash anywhere:
+
+- **Commit, then acknowledge.** The acknowledgement names the lane entry as its
+  `delivery_ref`.
+- **Reconcile redeliveries.** A redelivered message is matched to its existing
+  lane entry by message ID, so a lost acknowledgement never queues a second
+  copy.
+- **Never drive.** The adapter queues with `steer` while a run is in progress
+  and with `nextRun` otherwise. Starting runs, operation recovery and the
+  model stay with the host.
+
+## A host in forty lines
+
+The example uses a faux model provider, so it needs no credentials. The
+session, the lane, the endpoint and the recovery path are real:
+
+
+``` bash
+sed -n '/^let opened/,/^await coordination.ready/p' tools/examples/harness-lane.ts
+#> let opened = await openLane();
+#> const coordination = attachCoordinationLane({
+#>   client, url, projectId: "guide", agentId: "worker", instanceId: "host-1",
+#>   lane: opened.lane, context, visibilityTimeoutMs: 1000,
+#> });
+#> await coordination.ready;
+```
+
+It sends two messages to the lane's mailbox. It drops the acknowledgement of
+the second to stand in for a crash just after the lane commit, then reopens
+the session from disk:
+
+
+``` bash
+node tools/examples/harness-lane.ts
+#> queued in the lane before its acknowledgement: 1 entry
+#> after a lost ack and redelivery: 1 lane entry for the message
+#> both acknowledgements name the same lane entry: true
+#> after reopening the session: 2 entries, in order: true
+```
+
+The redelivered message was recognised and acknowledged again with the same
+lane entry. Both entries survive the restart, in order. The full script is
+[`tools/examples/harness-lane.ts`](https://github.com/sounkou-bioinfo/pi-ducknng/blob/main/tools/examples/harness-lane.ts),
+and [`test/coordination-harness.test.js`](https://github.com/sounkou-bioinfo/pi-ducknng/blob/main/test/coordination-harness.test.js)
+checks the same behaviour.
+
+## Choosing a durable session
+
+A lane commit is only as durable as the session behind it. `JsonlSessionRepo`
+writes to disk; an in-memory repository gives the same ordering but loses
+everything with the process. The registration declares
+`harness_lane_commit` either way, so choose the repository that makes that
+claim true.
+
+> GUIDE_HARNESS_VERIFIED: lane commit before acknowledgement, reconciliation, and recovery from disk

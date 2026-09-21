@@ -197,6 +197,9 @@ export function attachCoordinationLane(
   const run = async () => {
     let nextHeartbeat = Date.now() + heartbeatIntervalMs;
     let failures = 0;
+    // Lease expiry publishes no hint, so after a failure poll quickly until
+    // any message this adapter held has become visible again.
+    let fastPollUntil = 0;
     while (!controller.signal.aborted) {
       try {
         if (Date.now() >= nextHeartbeat) {
@@ -217,8 +220,9 @@ export function attachCoordinationLane(
         }
         failures = 0;
         if (messages.length === 0) {
+          const quiet = subscription && Date.now() >= fastPollUntil;
           await wakeup.wait(
-            Math.max(0, Math.min(subscription ? Math.max(pollMs, 5_000) : pollMs,
+            Math.max(0, Math.min(quiet ? Math.max(pollMs, 5_000) : pollMs,
               nextHeartbeat - Date.now())),
             controller.signal,
           );
@@ -226,6 +230,7 @@ export function attachCoordinationLane(
       } catch (error) {
         if (controller.signal.aborted) return;
         failures += 1;
+        fastPollUntil = Date.now() + visibilityTimeoutMs + pollMs;
         options.onError?.(error);
         await abortable(Math.min(250 * 2 ** failures, 5_000), controller.signal);
       }

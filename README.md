@@ -49,13 +49,12 @@ the same R process across calls:
 
 > AGENT_DUCKNNG_MANIFEST_CALL_OK
 >
-> Manifested methods: `eval` (JSON → Arrow, persistent R process),
-> `close` (JSON → JSON).
+> Manifested methods: `eval` (JSON → Arrow), `close` (JSON → JSON).
 >
-> Both eval calls succeeded in endpoint process **749848**. Endpoint
-> closed successfully.
+> Both eval calls succeeded in endpoint process `856895`, retaining
+> `mpg_by_cyl`. Endpoint closed successfully.
 >
-> First call decoded rows:
+> **First call — decoded rows**
 >
 > | cyl |                mpg |
 > |----:|-------------------:|
@@ -63,7 +62,7 @@ the same R process across calls:
 > |   6 | 19.742857142857144 |
 > |   8 |               15.1 |
 >
-> Second call decoded rows, using persisted `mpg_by_cyl`:
+> **Second call — decoded rows**
 >
 > | cyl |                mpg |     delta_from_4cyl |
 > |----:|-------------------:|--------------------:|
@@ -111,7 +110,7 @@ workers that have not started yet:
     'the send was stored.')"
 ```
 
-> AGENT_FANOUT_SENT broadcast_id=2a24c3b6-f31d-404f-82bb-94dc5c44a951
+> AGENT_FANOUT_SENT broadcast_id=2eba694a-0623-4006-9373-b0c4106c8574
 > recipients=w-cyl,w-gear,w-am
 
 Each worker is its own `pi -p` process with this prompt:
@@ -168,9 +167,9 @@ cat("COORDINATION_FANIN_VERIFIED",
 ```
 
     COORDINATION_FANIN_VERIFIED
-    w-gear: gear: spread 8.43 (3=16.11, 4=24.53, 5=21.38)
-    w-cyl: cyl: spread 11.56 (4=26.66, 6=19.74, 8=15.10)
     w-am: am: spread 7.24 (0=17.15, 1=24.39)
+    w-cyl: cyl: spread 11.56 (4=26.66, 6=19.74, 8=15.10)
+    w-gear: gear: spread 8.43 (3=16.11, 4=24.53, 5=21.38)
 
 ``` r
 Sys.sleep(1.5)
@@ -191,8 +190,8 @@ The lead gathers the answers:
 
 > AGENT_FANIN_DONE
 >
-> gear: spread 8.43 (3=16.11, 4=24.53, 5=21.38) cyl: spread 11.56
-> (4=26.66, 6=19.74, 8=15.10) am: spread 7.24 (0=17.15, 1=24.39)
+> am: spread 7.24 (0=17.15, 1=24.39) cyl: spread 11.56 (4=26.66,
+> 6=19.74, 8=15.10) gear: spread 8.43 (3=16.11, 4=24.53, 5=21.38)
 >
 > Largest spread: **cyl (11.56)**.
 
@@ -274,7 +273,7 @@ register_as reviewer
 register_as intruder || true
 ```
 
-    {"agent_id":"reviewer","events.url":"wss://127.0.0.1:45581/events"}
+    {"agent_id":"reviewer","events.url":"wss://127.0.0.1:36787/events"}
     unauthorized: tls:cn:intruder has no grant for readme/reviewer
 
 The granted certificate registers and learns its `wss://` hint listener.
@@ -293,14 +292,49 @@ runs it against a real harness.
 
 ## Guides
 
+Every guide is executed. Its outputs, including what the live agents
+said, are recorded when the guide is built.
+
+**Persistent R**
+
 - [An agent calls persistent
   R](https://sounkou-bioinfo.github.io/pi-ducknng/articles/agent-product-path.html):
   state that survives across calls.
 - [An active binding in a selected
   environment](https://sounkou-bioinfo.github.io/pi-ducknng/articles/agent-active-binding.html):
   the `envir` and `enclos` controls.
-- [`THESIS.md`](THESIS.md): the contracts, owners and invariants, and
-  the tests that prove them.
+
+**Coordination**
+
+- [Hand work between agents through a durable
+  mailbox](https://sounkou-bioinfo.github.io/pi-ducknng/articles/coordination-mailbox.html):
+  offline mail, idempotent sends, leases, acknowledgement, and the
+  envelope an agent sees.
+- [Fan a question out and gather the
+  answers](https://sounkou-bioinfo.github.io/pi-ducknng/articles/coordination-fanout.html):
+  recipient lists, a live broadcast to two workers, and replies threaded
+  by `in_reply_to`.
+- [Keep agents off each other’s files with
+  reservations](https://sounkou-bioinfo.github.io/pi-ducknng/articles/coordination-reservations.html):
+  a live agent refused by the edit gate, path-tree conflicts, renewal,
+  and fencing values.
+- [Recover from crashes and
+  restarts](https://sounkou-bioinfo.github.io/pi-ducknng/articles/coordination-durability.html):
+  an endpoint killed mid-lease, redelivery after restart, and dead
+  letters.
+
+**Deployment**
+
+- [Serve agents across hosts with mutual
+  TLS](https://sounkou-bioinfo.github.io/pi-ducknng/articles/coordination-mtls.html):
+  in-memory PEM, grants, refused impersonation, and hints over `wss://`.
+- [Embed coordination in an AgentHarness
+  host](https://sounkou-bioinfo.github.io/pi-ducknng/articles/coordination-harness.html):
+  a mailbox delivered into a harness lane, with one lane entry per
+  message even when an acknowledgement is lost.
+
+[`THESIS.md`](THESIS.md) lists the contracts, owners and invariants, and
+the tests that prove them.
 
 ## Pinned runtime
 

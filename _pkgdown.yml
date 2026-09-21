@@ -40,11 +40,23 @@ navbar:
       href: https://github.com/sounkou-bioinfo/pi-ducknng/blob/main/THESIS.md
 
 articles:
-  - title: Guides
-    navbar: Guides
+  - title: Persistent R
+    navbar: Persistent R
     contents:
       - agent-product-path
       - agent-active-binding
+  - title: Coordination
+    navbar: Coordination
+    contents:
+      - coordination-mailbox
+      - coordination-fanout
+      - coordination-reservations
+      - coordination-durability
+  - title: Deployment
+    navbar: Deployment
+    contents:
+      - coordination-mtls
+      - coordination-harness
 
 reference:
   - title: Package

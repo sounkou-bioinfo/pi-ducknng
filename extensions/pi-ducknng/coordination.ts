@@ -319,6 +319,14 @@ export function coordinationResource(value: string, cwd: string): string {
   return pathToFileURL(isAbsolute(path) ? path : resolve(cwd, path)).href;
 }
 
+/** Shows a file resource relative to the session's working directory when it lies inside it. */
+export function displayResource(resource: string, cwd: string): string {
+  const base = pathToFileURL(resolve(cwd)).href;
+  if (resource === base) return ".";
+  if (!resource.startsWith(`${base}/`)) return resource;
+  return decodeURIComponent(resource.slice(base.length + 1));
+}
+
 async function registerInstance(
   client: CoordinationClient,
   config: CoordinationConfig,
@@ -461,6 +469,9 @@ async function runAdapter(
 ): Promise<void> {
   let nextHeartbeat = Date.now() + runtime.registration.heartbeat_interval_ms;
   let failures = 0;
+  // Lease expiry publishes no hint, so after a failure poll quickly until any
+  // message this session held has become visible again.
+  let fastPollUntil = 0;
   const receives = steersInBackground(runtime.ctx);
 
   while (!signal.aborted) {
@@ -488,7 +499,9 @@ async function runAdapter(
         }
       }
       if (messages.length === 0) {
-        const pollMs = runtime.subscription ? FALLBACK_POLL_MS : POLL_MS;
+        const pollMs = runtime.subscription && Date.now() >= fastPollUntil
+          ? FALLBACK_POLL_MS
+          : POLL_MS;
         await runtime.wakeup.wait(
           Math.max(0, Math.min(pollMs, nextHeartbeat - Date.now())),
           signal,
@@ -498,6 +511,7 @@ async function runAdapter(
     } catch (error) {
       if (signal.aborted) break;
       failures += 1;
+      fastPollUntil = Date.now() + 30_000 + POLL_MS;
       if (failures === 1) notifyError(runtime.ctx, error);
       try {
         await sleep(Math.min(1_000 * 2 ** failures, 10_000), signal);
@@ -704,7 +718,7 @@ export function registerCoordinationAdapter(
     description:
       "List live agents and active resource reservations in this coordination project.",
     parameters: EmptyParameters,
-    execute: async () => {
+    execute: async (_toolCallId, _params, _signal, _onUpdate, ctx) => {
       const active = attached();
       const agents = objectValue(
         await callRegistered(client, active, "list_agents", {}),
@@ -714,10 +728,15 @@ export function registerCoordinationAdapter(
         await callRegistered(client, active, "list_reservations", {}),
         "coordination reservations reply",
       );
+      const listed = (reservations.reservations as Array<Record<string, unknown>>)
+        .map((reservation) => ({
+          ...reservation,
+          resource: displayResource(String(reservation.resource), ctx.cwd),
+        }));
       return toolResult({
         self: active.config.agentId,
         agents: agents.agents,
-        reservations: reservations.reservations,
+        reservations: listed,
       });
     },
   });
@@ -798,7 +817,8 @@ export function registerCoordinationAdapter(
       if (held.length === 0) return undefined;
       const holders = held
         .map((reservation) =>
-          `${String(reservation.resource)} (held by ${String(reservation.owner_agent_id)})`)
+          `${displayResource(String(reservation.resource), ctx.cwd)} ` +
+          `(held by ${String(reservation.owner_agent_id)})`)
         .join(", ");
       return {
         block: true,

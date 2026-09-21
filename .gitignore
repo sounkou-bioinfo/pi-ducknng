@@ -2,3 +2,4 @@
 .quarto/
 docs/
 node_modules/
+.guide-scratch/

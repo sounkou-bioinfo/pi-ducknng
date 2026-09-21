@@ -25,8 +25,9 @@ check-readme:
 	@grep -q 'unauthorized: tls:cn:intruder has no grant' README.md
 	@! grep -qF '$(CURDIR)' README.md
 
+# ONLY=name[,name] rebuilds a subset of the guides.
 vignettes:
-	PATH="$(DOCS_PATH)" Rscript --vanilla scripts/precompile-vignettes.R
+	PATH="$(DOCS_PATH)" Rscript --vanilla scripts/precompile-vignettes.R $(if $(ONLY),--only $(ONLY))
 
 check-vignettes:
 	Rscript --vanilla scripts/precompile-vignettes.R --check

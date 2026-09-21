@@ -236,3 +236,17 @@ rpc_call <- function(url, method, arguments = structure(list(), names = characte
   if (decoded$type == DUCKNNG_RPC_ERROR) stop(decoded$error, call. = FALSE)
   jsonlite::fromJSON(rawToChar(decoded$payload), simplifyVector = FALSE)
 }
+
+# Fetches an endpoint's ducknng manifest.
+rpc_describe <- function(url, timeout_ms = 5000L) {
+  socket <- nanonext::socket("req", dial = url)
+  on.exit(close(socket), add = TRUE)
+  status <- nanonext::send(socket, rpc_encode_frame(DUCKNNG_RPC_MANIFEST),
+                           mode = "raw", block = timeout_ms)
+  if (!identical(status, 0L)) stop("failed to send the manifest request")
+  reply <- nanonext::recv(socket, mode = "raw", block = timeout_ms)
+  if (nanonext::is_error_value(reply)) stop("timed out waiting for the manifest")
+  decoded <- rpc_decode_frame(reply)
+  if (decoded$type == DUCKNNG_RPC_ERROR) stop(decoded$error, call. = FALSE)
+  jsonlite::fromJSON(rawToChar(decoded$payload), simplifyVector = FALSE)
+}

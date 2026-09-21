@@ -1,0 +1,171 @@
+---
+title: "Hand work between agents through a durable mailbox"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Hand work between agents through a durable mailbox}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include = FALSE}
+source("tools/guides/setup.R")
+```
+
+The coordination endpoint is a mailbox service for agents that do not share a
+process. A Pi session reaches it through its `coordination_*` tools. This guide
+makes the same calls from R so that every step and every reply is visible.
+
+## Start the endpoint
+
+The endpoint is a Node process that serves SQL methods from ducknng. It owns
+one DuckDB file and listens on an `ipc://` socket beside it:
+
+```{bash}
+node tools/pi-coordination-endpoint.ts \
+  "$STATE/coordination.url" "$STATE/coordination.duckdb" > "$STATE/endpoint.log" 2>&1 &
+echo $! > "$STATE/endpoint.pid"
+until [ -s "$STATE/coordination.url" ]; do sleep 0.1; done
+```
+
+Its manifest lists the coordination methods, in the `sql_method` family, next
+to ducknng's built-in control methods:
+
+```{r}
+url <- guide_url()
+manifest <- rpc_describe(url)
+methods <- Filter(function(m) identical(m$family, "sql_method"), manifest$methods)
+knitr::kable(data.frame(
+  method = vapply(methods, `[[`, "", "name"),
+  purpose = vapply(methods, function(m) m$request_schema$description, "")
+))
+```
+
+## Mail for an agent that is not running
+
+A mailbox belongs to a stable `(project, agent)` pair, not to a session, so
+`alice` can write to `bob` before `bob` has ever started:
+
+```{r}
+alice <- register("alice")
+sent <- rpc_call(url, "send", list(
+  registration_id = alice$registration_id,
+  recipient_agent_id = "bob",
+  idempotency_key = "handoff-1",
+  content = "Review the draft.\nReply with one sentence."
+))
+show(sent, c("message_id", "recipient_seen", "sequence_number", "replayed"))
+```
+
+`recipient_seen` is `false` because no `bob` has registered yet. That is how a
+misspelled recipient shows up. The mail is stored anyway, and unless someone
+receives it, it becomes a dead letter after its time to live, 7 days by
+default.
+
+## Retrying is safe
+
+The idempotency key makes a retried send return the original message.
+Reusing the key for different content is refused:
+
+```{r}
+again <- rpc_call(url, "send", list(
+  registration_id = alice$registration_id,
+  recipient_agent_id = "bob",
+  idempotency_key = "handoff-1",
+  content = "Review the draft.\nReply with one sentence."
+))
+c(same_message = identical(again$message_id, sent$message_id), replayed = again$replayed)
+failure(rpc_call(url, "send", list(
+  registration_id = alice$registration_id,
+  recipient_agent_id = "bob",
+  idempotency_key = "handoff-1",
+  content = "Something else."
+)))
+```
+
+The Pi tool derives the key from the session and tool call IDs, so a tool call
+that Pi retries cannot deliver twice.
+
+## Leases, redelivery, and acknowledgement
+
+`receive` leases each message for a visibility timeout. If the receiver
+crashes before it acknowledges, the lease expires and the same message
+returns with a new receipt:
+
+```{r}
+bob <- register("bob")
+first <- rpc_call(url, "receive", list(
+  registration_id = bob$registration_id, visibility_timeout_ms = 1000
+))$messages[[1]]
+cat(first$content, "\n")
+Sys.sleep(1.2)
+second <- rpc_call(url, "receive", list(registration_id = bob$registration_id))$messages[[1]]
+c(same_message = identical(first$message_id, second$message_id),
+  new_receipt = !identical(first$receipt_token, second$receipt_token))
+```
+
+Only the current receipt acknowledges the message. Acknowledging twice is
+harmless, and an old receipt is refused:
+
+```{r}
+acked <- rpc_call(url, "ack", list(
+  registration_id = bob$registration_id, receipt_token = second$receipt_token
+))
+replay <- rpc_call(url, "ack", list(
+  registration_id = bob$registration_id, receipt_token = second$receipt_token
+))
+c(acknowledged = acked$acknowledged, replayed = replay$replayed)
+failure(rpc_call(url, "ack", list(
+  registration_id = bob$registration_id, receipt_token = first$receipt_token
+)))
+length(rpc_call(url, "receive", list(registration_id = bob$registration_id))$messages)
+```
+
+## What the receiving agent reads
+
+The Pi adapter frames each message before it reaches the model. The frame
+names the sender and the message ID and says the text is not from the user,
+so another agent's words cannot pass as the user's instructions:
+
+```{bash}
+node --input-type=module -e '
+const { coordinationEnvelope } = await import("./extensions/pi-ducknng/coordination.ts");
+console.log(coordinationEnvelope({
+  message_id: "7c1e", receipt_token: "r", sender_agent_id: "alice",
+  recipient_agent_id: "bob", sequence_number: 1,
+  content: "Review the draft.\nReply with one sentence.", content_type: "text/plain",
+}));'
+```
+
+In an interactive session the adapter steers that text into the conversation
+as soon as a wake-up hint arrives. In a one-shot `pi -p` run the model pulls
+it with `coordination_inbox`.
+
+## Failures carry codes
+
+Every refusal carries one of eight codes ahead of its detail, so a client can
+branch on the code:
+
+```{r}
+failure(rpc_call(url, "receive", list(registration_id = "not-a-registration")))
+failure(rpc_call(url, "send", list(
+  registration_id = alice$registration_id, recipient_agent_id = "bob",
+  idempotency_key = "bad", content = "ring\a"
+)))
+failure(rpc_call(url, "send", list(
+  registration_id = alice$registration_id, recipient_agent_id = "bob",
+  idempotency_key = "extra", content = "x", priority = "high"
+)))
+```
+
+```{r, include = FALSE}
+stopifnot(
+  identical(again$message_id, sent$message_id),
+  identical(first$message_id, second$message_id),
+  isTRUE(acked$acknowledged)
+)
+system2("kill", readLines(file.path(guide_state, "endpoint.pid")))
+```
+
+```{r, echo = FALSE, results = "asis"}
+cat("> GUIDE_MAILBOX_VERIFIED: offline mail, idempotent send, lease redelivery, and acknowledgement\n")
+```

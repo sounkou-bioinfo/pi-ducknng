@@ -113,7 +113,8 @@ only latency, because polling still repairs it.
   value from a project-wide counter. Retrying with the same `operation_key`
   replays the original result. Reacquiring after release or expiry requires a
   new key. Renewal presents the `lease_id`, and `release` affects only the
-  caller's own lease. `list_reservations` returns lease IDs only to their
+  caller's own lease. A lease ends only by release or at its TTL, not when
+  its holder unregisters. `list_reservations` returns lease IDs only to their
   owner.
 
 ## Pi coordination adapter
@@ -129,7 +130,10 @@ registers again and retries the call once.
 The adapter subscribes to the mailbox's hints when the endpoint offers them,
 through one long-lived DuckDB instance and NNG SUB socket that it owns and
 closes at shutdown. A hint wakes it at once. Without hints it polls every
-second, and with them it polls every five seconds to repair lost hints. In
+second, and with them it polls every five seconds to repair lost hints. An
+expired delivery lease returns mail to the queue without publishing a hint,
+so after any failed call the adapter polls every second again until a lease
+it may have held has run out. In
 the `tui` and `rpc` modes it receives in the background. It injects each new message with
 `pi.sendMessage(..., { triggerTurn: true, deliverAs: "steer" })`, appends a
 session entry holding the message ID, and then acknowledges. In the one-shot
@@ -158,7 +162,8 @@ The adapter gives the model five tools:
 - `coordination_release` releases a lease by ID or resource.
 
 While a session is attached, its `edit` and `write` tool calls are blocked
-when another instance holds a conflicting reservation. This gate covers only
+when another instance holds a conflicting reservation. The refusal names the
+holder and prints paths relative to the working directory. This gate covers only
 Pi's own file tools, not writes made through `bash`. It lets the call through
 when the endpoint is unreachable.
 
@@ -172,7 +177,8 @@ the extension module. The adapter registers with `adapter_kind` set to
 `receive` and first looks for a lane entry that already carries the
 message ID, in the lane's queues or its transcript. Only if none exists does
 it admit the envelope, with `steer` while an operation runs and with `nextRun`
-otherwise. It acknowledges with the lane entry ID as `delivery_ref`. A lost
+otherwise. It follows the same fast-poll rule after a failed call as the Pi
+adapter. It acknowledges with the lane entry ID as `delivery_ref`. A lost
 acknowledgement therefore leads to redelivery and reconciliation, never to a
 second lane entry. The commit is durable only when the harness session uses a
 durable `SessionRepo` such as `JsonlSessionRepo`. The adapter never calls
@@ -258,8 +264,29 @@ and replying with `in_reply_to`. The endpoint's own methods confirm the three
 replies before the lead gathers them. Finally the README starts a mutual-TLS
 endpoint with in-memory PEM and a grants file, registers the granted
 certificate, and shows the ungranted one refused. `make readme` rejects output
-that lacks any receipt or that contains a machine-local path. Two precomputed pkgdown articles exercise
-state persistence and an active binding in a selected environment.
+that lacks any receipt or that contains a machine-local path.
+
+Eight precomputed pkgdown guides carry the rest of the executable evidence,
+and `make vignettes` rejects any that lacks its receipts or contains the
+checkout path:
+
+- `agent-product-path` and `agent-active-binding`: live agents persist R
+  state and evaluate an active binding in a selected environment;
+- `coordination-mailbox`: the manifest, offline mail, idempotent send, lease
+  redelivery, acknowledgement, the envelope, and error codes;
+- `coordination-fanout`: recipient lists with unseen recipients, a live
+  broadcast to two concurrent `pi -p` workers, and replies that the endpoint
+  confirms share one `in_reply_to`;
+- `coordination-reservations`: a live agent's `write` refused by the edit
+  gate, path-tree and `resource:` conflicts, renewal, replay, idempotent
+  release, increasing fencing values, and expiry;
+- `coordination-durability`: an endpoint killed with `SIGKILL` while a lease
+  is outstanding, redelivery after a restart on the same address, and a dead
+  letter;
+- `coordination-mtls`: an endpoint on in-memory PEM with grants, refused
+  impersonation and takeover, and a wake-up hint over `wss://`;
+- `coordination-harness`: `tools/examples/harness-lane.ts` delivers into an
+  `AgentHarness` lane, drops an acknowledgement, and reopens the session.
 
 `test/pi-extension.test.js` covers the following:
 

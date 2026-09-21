@@ -6,6 +6,7 @@ import {
   coordinationEnvelope,
   coordinationErrorCode,
   coordinationResource,
+  displayResource,
   registerCoordinationAdapter,
 } from "../extensions/pi-ducknng/coordination.ts";
 
@@ -339,6 +340,10 @@ test("envelopes escape attribute text and resources resolve paths", () => {
   assert.match(envelope, /from="a&quot;&lt;b&gt;"/);
   assert.equal(coordinationResource("resource:build/lock", "/x"), "resource:build/lock");
   assert.equal(coordinationResource("@src/a b.R", "/x"), "file:///x/src/a%20b.R");
+  assert.equal(displayResource("file:///x/src/a%20b.R", "/x"), "src/a b.R");
+  assert.equal(displayResource("file:///x", "/x"), ".");
+  assert.equal(displayResource("file:///xy/a", "/x"), "file:///xy/a");
+  assert.equal(displayResource("resource:build/lock", "/x"), "resource:build/lock");
 });
 
 test("error codes are read through the ducknng SQL error wrapper", () => {

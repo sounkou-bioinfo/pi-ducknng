@@ -1,0 +1,197 @@
+---
+title: "Fan a question out and gather the answers"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Fan a question out and gather the answers}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+
+
+Parallel research is one question sent to many agents and their answers
+gathered back. A single `send` can address one agent, a list of up to 256,
+or every other live agent in the project. Each recipient gets its own copy,
+leased and acknowledged independently. The copies share a `broadcast_id`,
+which the answers name in `in_reply_to`.
+
+## Addressing many mailboxes
+
+
+``` bash
+node tools/pi-coordination-endpoint.ts \
+  "$STATE/coordination.url" "$STATE/coordination.duckdb" > "$STATE/endpoint.log" 2>&1 &
+echo $! > "$STATE/endpoint.pid"
+until [ -s "$STATE/coordination.url" ]; do sleep 0.1; done
+```
+
+A list delivers to every named mailbox, whether or not its agent has
+started. Here `reviewer` is registered and `tester` has never run:
+
+
+``` r
+url <- guide_url()
+planner <- register("planner")
+reviewer <- register("reviewer")
+plan <- list(
+  registration_id = planner$registration_id,
+  recipient_agent_ids = list("reviewer", "tester", "reviewer"),
+  idempotency_key = "plan-review",
+  content = "Review the plan and test it."
+)
+listed <- rpc_call(url, "send", plan)
+show(listed, c("broadcast_id", "recipient_count"))
+#> {
+#>   "broadcast_id": "bf6035ef-bc5b-4361-a22f-1ec0e5e1cf33",
+#>   "recipient_count": 2
+#> }
+knitr::kable(data.frame(
+  recipient = vapply(listed$messages, `[[`, "", "recipient_agent_id"),
+  seen = vapply(listed$messages, `[[`, TRUE, "recipient_seen")
+))
+```
+
+
+
+|recipient |seen  |
+|:---------|:-----|
+|reviewer  |TRUE  |
+|tester    |FALSE |
+
+
+
+The duplicate collapsed, and `seen` flags the recipient that has never
+registered. The whole send is one idempotent operation. A retry returns the
+same `broadcast_id`, and reusing the key for a different list is refused:
+
+
+``` r
+identical(rpc_call(url, "send", plan)$broadcast_id, listed$broadcast_id)
+#> [1] TRUE
+plan$recipient_agent_ids <- list("reviewer")
+failure(rpc_call(url, "send", plan))
+#> [1] "idempotency_conflict: idempotency_key was already used for another message"
+```
+
+If any recipient's mailbox is full, no copy is written. Each recipient then
+leases and acknowledges its own copy:
+
+
+``` r
+copy <- rpc_call(url, "receive", list(registration_id = reviewer$registration_id))$messages[[1]]
+show(copy, c("sender_agent_id", "broadcast_id", "recipient_count", "content"))
+#> {
+#>   "sender_agent_id": "planner",
+#>   "broadcast_id": "bf6035ef-bc5b-4361-a22f-1ec0e5e1cf33",
+#>   "recipient_count": 2,
+#>   "content": "Review the plan and test it."
+#> }
+invisible(rpc_call(url, "ack", list(
+  registration_id = reviewer$registration_id, receipt_token = copy$receipt_token)))
+for (done in list(planner, reviewer)) {
+  invisible(rpc_call(url, "unregister", list(registration_id = done$registration_id)))
+}
+```
+
+## A live broadcast
+
+`broadcast` addresses every agent that is live at send time, so here the
+workers start first. Each is its own `pi -p` process, with this prompt:
+
+
+``` bash
+cat tools/guides/fanout-worker.md
+#> You are a worker in a small parallel study. Call coordination_inbox with wait_ms 25000; if it returns no message, call it again, at most four times. Read the lead's broadcast. Your agent ID names your statistic: w-mean computes the mean and w-median the median of datasets::mtcars$mpg. Start the persistent R adapter, follow its ducknng manifest, compute the statistic, and close the adapter. Reply to the sender with coordination_send, setting in_reply_to to the broadcast's broadcast_id, in one line of the form `<agent ID>: <statistic> mpg = <value, 2 decimals>`. Begin your final answer with `AGENT_WORKER_REPLIED <agent ID>` only when you received the broadcast and your reply was stored, followed by the reply line.
+```
+
+
+
+
+``` bash
+for worker in w-mean w-median; do
+  PI_DUCKNNG_AGENT_ID="$worker" timeout 900 pi --provider openai-codex \
+    --model gpt-6-astra --thinking medium --no-extensions \
+    -e ./extensions/pi-ducknng/index.ts --no-session \
+    -p "$(cat tools/guides/fanout-worker.md)" > "$STATE/$worker.out" 2>&1 &
+  echo $! >> "$STATE/workers.pid"
+done
+```
+
+The endpoint shows when both workers are live:
+
+
+``` r
+observer <- register("observer")
+live <- character()
+for (attempt in 1:600) {
+  agents <- rpc_call(url, "list_agents", list(registration_id = observer$registration_id))$agents
+  live <- sort(vapply(agents, function(a) a$agent_id, ""))
+  if (all(c("w-mean", "w-median") %in% live)) break
+  Sys.sleep(0.1)
+}
+invisible(rpc_call(url, "unregister", list(registration_id = observer$registration_id)))
+setdiff(live, "observer")
+#> [1] "w-mean"   "w-median"
+```
+
+
+
+The lead broadcasts. Its send also publishes a wake-up hint for each
+worker's mailbox, so a worker waiting in `coordination_inbox` wakes when the
+hint arrives instead of at its next poll:
+
+``` sh
+'pi' --provider 'openai-codex' --model 'gpt-6-astra' --no-extensions --thinking 'medium' -e './extensions/pi-ducknng/index.ts' --no-session -p \
+  "$(printf %s \
+    'You are agent `lead`. Call coordination_agents to see ' \
+    'who is live, then make one coordination_send call with ' \
+    'broadcast true and this content: `What is your statistic ' \
+    'of datasets::mtcars$mpg? Your agent ID names the ' \
+    'statistic: w-mean the mean, w-median the median. Reply ' \
+    'in_reply_to this broadcast.` Report the live agents, the ' \
+    'broadcast ID, and how many recipients it reached, ' \
+    'beginning with `AGENT_BROADCAST_SENT` only when the send ' \
+    'reached every live worker.')"
+```
+
+> AGENT_BROADCAST_SENT
+> Live agents: lead, w-mean, w-median.
+> Broadcast ID: 75d29d42-8672-45e9-9a0f-76d7c609e3fb.
+> Reached: 2 recipients—all live workers.
+
+
+``` bash
+while read -r pid; do tail --pid="$pid" -f /dev/null; done < "$STATE/workers.pid"
+grep -h -A1 '^AGENT_WORKER_REPLIED' "$STATE"/w-*.out
+#> AGENT_WORKER_REPLIED w-mean
+#> w-mean: mean mpg = 20.09
+#> --
+#> AGENT_WORKER_REPLIED w-median
+#> w-median: median mpg = 19.20
+```
+
+## Gathering the answers
+
+Every answer names the broadcast it answers. The endpoint shows both, in the
+lead's mailbox:
+
+
+``` r
+gather <- register("lead", instance = "gatherer")
+answers <- rpc_call(url, "receive", list(registration_id = gather$registration_id, limit = 8))$messages
+threads <- unique(vapply(answers, function(m) m$in_reply_to %||% "", ""))
+for (answer in answers) {
+  invisible(rpc_call(url, "ack", list(
+    registration_id = gather$registration_id, receipt_token = answer$receipt_token)))
+}
+vapply(answers, function(m) m$content, "")
+#> [1] "w-mean: mean mpg = 20.09"     "w-median: median mpg = 19.20"
+length(threads) == 1L && nzchar(threads)
+#> [1] TRUE
+```
+
+
+
+
+
+> GUIDE_FANOUT_VERIFIED: one broadcast reached both live workers and both answers name it

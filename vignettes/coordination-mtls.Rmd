@@ -1,0 +1,182 @@
+---
+title: "Serve agents across hosts with mutual TLS"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Serve agents across hosts with mutual TLS}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+
+
+On `ipc://`, filesystem permissions decide who may connect. Agents on other
+hosts or other accounts need a network listener. There, the question
+"who is calling?" must be answered by something stronger than the agent ID a
+client types. On mutual TLS, the endpoint answers it with the client's
+certificate. A grants file then decides which certificate may act as which
+agent.
+
+## Certificates
+
+A throwaway CA signs a server certificate for `127.0.0.1` and client
+certificates for three identities. In production these come from your own
+PKI:
+
+
+``` bash
+install -d -m 700 "$STATE/tls" && cd "$STATE/tls"
+openssl req -x509 -newkey rsa:2048 -nodes -keyout ca.key -out ca.pem -days 1 \
+  -subj /CN=guide-ca 2> /dev/null
+issue() {
+  openssl req -newkey rsa:2048 -nodes -keyout "$1.key" -out "$1.csr" -subj "/CN=$2" 2> /dev/null
+  printf '%b\n' "$3" > "$1.ext"
+  openssl x509 -req -in "$1.csr" -CA ca.pem -CAkey ca.key -CAcreateserial \
+    -out "$1.crt" -days 1 -extfile "$1.ext" 2> /dev/null
+}
+issue server 127.0.0.1 'subjectAltName=IP:127.0.0.1\nextendedKeyUsage=serverAuth'
+for client in lead reviewer intruder; do issue "$client" "$client" 'extendedKeyUsage=clientAuth'; done
+ls *.crt
+#> intruder.crt
+#> lead.crt
+#> reviewer.crt
+#> server.crt
+```
+
+## Grants and the listener
+
+The identity ducknng verifies has the form `tls:cn:<common name>`. The grants
+file allows `lead` to act as any agent in `guide`, and `reviewer` only as
+`reviewer`:
+
+
+``` bash
+cat > "$STATE/grants.json" <<'JSON'
+[{"peer_identity": "tls:cn:lead", "project_id": "guide", "agent_id": "*"},
+ {"peer_identity": "tls:cn:reviewer", "project_id": "guide", "agent_id": "reviewer"}]
+JSON
+```
+
+ducknng holds TLS material in memory, so the endpoint reads PEM text straight
+from its environment. The same certificate secures the wake-up hint
+listener, which here uses `wss://`:
+
+
+``` bash
+PI_DUCKNNG_COORDINATION_TLS_CERT_PEM="$(cat "$STATE/tls/server.crt")" \
+PI_DUCKNNG_COORDINATION_TLS_KEY_PEM="$(cat "$STATE/tls/server.key")" \
+PI_DUCKNNG_COORDINATION_TLS_CA_PEM="$(cat "$STATE/tls/ca.pem")" \
+PI_DUCKNNG_COORDINATION_GRANTS_FILE="$STATE/grants.json" \
+PI_DUCKNNG_COORDINATION_EVENTS_URL="wss://127.0.0.1:0/events" \
+  node tools/pi-coordination-endpoint.ts "$STATE/mtls.url" "$STATE/mtls.duckdb" \
+  tls+tcp://127.0.0.1:0 > "$STATE/mtls.log" 2>&1 &
+echo $! > "$STATE/mtls.pid"
+until [ -s "$STATE/mtls.url" ]; do sleep 0.1; done
+cat "$STATE/mtls.url" | sed 's/:[0-9]*$/:<port>/'
+#> tls+tcp://127.0.0.1:<port>
+```
+
+## Calling as a certificate
+
+A Pi session presents its certificate through `PI_DUCKNNG_TLS_CA_PEM`,
+`PI_DUCKNNG_TLS_CERT_PEM` and `PI_DUCKNNG_TLS_KEY_PEM`, or the matching
+`*_FILE` variables. `tools/coordination-call.ts` reads the same variables, so
+a small shell helper can call any method as any of the three identities:
+
+
+``` bash
+cat > "$STATE/as.sh" <<'SH'
+as() {
+  identity="$1"; shift
+  PI_DUCKNNG_TLS_CA_PEM="$(cat "$STATE/tls/ca.pem")" \
+  PI_DUCKNNG_TLS_CERT_PEM="$(cat "$STATE/tls/$identity.crt")" \
+  PI_DUCKNNG_TLS_KEY_PEM="$(cat "$STATE/tls/$identity.key")" \
+    node tools/coordination-call.ts "$(cat "$STATE/mtls.url")" "$@" 2>&1
+}
+register() {
+  as "$1" register '{"project_id": "'"$3"'", "agent_id": "'"$2"'",
+    "instance_id": "'"$1-$2"'", "operation_key": "guide"}' "${4:-agent_id}"
+}
+SH
+. "$STATE/as.sh"
+register lead planner guide
+register lead reviewer guide
+register reviewer reviewer guide
+#> {"agent_id":"planner"}
+#> {"agent_id":"reviewer"}
+#> {"agent_id":"reviewer"}
+```
+
+Everything outside the grants is refused before any state changes:
+
+
+``` bash
+. "$STATE/as.sh"
+register reviewer planner guide || true
+register reviewer reviewer other-project || true
+register intruder reviewer guide || true
+#> unauthorized: tls:cn:reviewer has no grant for guide/planner
+#> unauthorized: tls:cn:reviewer has no grant for other-project/reviewer
+#> unauthorized: tls:cn:intruder has no grant for guide/reviewer
+```
+
+## A registration belongs to its certificate
+
+Registration IDs are opaque, but they are not bearer tokens. A registration
+works only for the certificate that created it, and an instance cannot be
+taken over by another certificate, even one granted the same agent:
+
+
+``` bash
+. "$STATE/as.sh"
+id=$(register reviewer reviewer guide registration_id |
+  node -pe 'JSON.parse(require("fs").readFileSync(0, "utf8")).registration_id')
+as reviewer list_agents '{"registration_id": "'"$id"'"}' agents.length
+as lead list_agents '{"registration_id": "'"$id"'"}' || true
+as lead register '{"project_id": "guide", "agent_id": "reviewer",
+  "instance_id": "reviewer-reviewer", "operation_key": "takeover"}' || true
+#> {"agents.length":3}
+#> unauthorized: registration belongs to another peer identity
+#> unauthorized: instance_id is bound to another peer identity
+```
+
+## Wake-up hints over wss
+
+`register` also returns the hint listener and an opaque topic for the
+mailbox. A subscriber presenting a certificate wakes as soon as mail lands:
+
+
+``` bash
+PI_DUCKNNG_TLS_CA_PEM="$(cat "$STATE/tls/ca.pem")" \
+PI_DUCKNNG_TLS_CERT_PEM="$(cat "$STATE/tls/lead.crt")" \
+PI_DUCKNNG_TLS_KEY_PEM="$(cat "$STATE/tls/lead.key")" \
+URL="$(cat "$STATE/mtls.url")" node --input-type=module -e '
+const { ducknngCoordinationClient: client, subscribeCoordinationEvents } =
+  await import("./extensions/pi-ducknng/index.ts");
+const url = process.env.URL;
+await client.describe(url);
+const join = (agent) => client.call(url, "register", {
+  project_id: "guide", agent_id: agent, instance_id: `hint-${agent}`, operation_key: "hint" });
+const planner = await join("planner");
+const worker = await join("worker");
+let woke = 0;
+const subscription = await subscribeCoordinationEvents(
+  worker.events.url, worker.events.topic, () => { woke = Date.now(); });
+await new Promise((resolve) => setTimeout(resolve, 300));
+const sent = Date.now();
+await client.call(url, "send", { registration_id: planner.registration_id,
+  recipient_agent_id: "worker", idempotency_key: "wake", content: "new work" });
+while (!woke && Date.now() - sent < 3000) await new Promise((resolve) => setTimeout(resolve, 5));
+console.log(`hint listener: ${worker.events.url.replace(/:\d+/, ":<port>")}`);
+console.log(`woke ${woke ? "within 1 s: " + (woke - sent < 1000) : "never"}`);
+await subscription.close();
+process.exit(0);'
+#> hint listener: wss://127.0.0.1:<port>/events
+#> woke within 1 s: true
+```
+
+The hint carries only the topic, so a subscriber learns that mail arrived
+and nothing else. The mail itself still travels through `receive`.
+
+
+
+> GUIDE_MTLS_VERIFIED: grants admit only the named certificates, registrations stay with their certificate, and hints arrive over wss

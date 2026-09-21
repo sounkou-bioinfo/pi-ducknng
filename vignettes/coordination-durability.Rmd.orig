@@ -1,0 +1,143 @@
+---
+title: "Recover from crashes and restarts"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Recover from crashes and restarts}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include = FALSE}
+source("tools/guides/setup.R")
+```
+
+Coordination state lives in one DuckDB file that only the endpoint writes.
+Pi sessions, harness hosts, and the endpoint process itself may all die
+between two calls. This guide kills things on purpose and shows what
+survives.
+
+```{bash}
+start_endpoint() {
+  node tools/pi-coordination-endpoint.ts \
+    "$STATE/coordination.url" "$STATE/coordination.duckdb" >> "$STATE/endpoint.log" 2>&1 &
+  echo $! > "$STATE/endpoint.pid"
+  until [ -s "$STATE/coordination.url" ]; do sleep 0.1; done
+}
+declare -f start_endpoint > "$STATE/functions.sh"
+start_endpoint
+```
+
+## A crash in the middle of a delivery
+
+`bob` receives a message under a two-second lease and does not acknowledge
+it. Then the endpoint is killed without a chance to shut down:
+
+```{r}
+url <- guide_url()
+alice <- register("alice")
+bob <- rpc_call(url, "register", list(
+  project_id = "guide", agent_id = "bob", instance_id = "session-1",
+  operation_key = "start", adapter_kind = "pi_extension",
+  delivery_capability = "api_acceptance"
+))
+sent <- rpc_call(url, "send", list(
+  registration_id = alice$registration_id, recipient_agent_id = "bob",
+  idempotency_key = "report", content = "Summarize yesterday's run."
+))
+leased <- rpc_call(url, "receive", list(
+  registration_id = bob$registration_id, visibility_timeout_ms = 2000
+))$messages[[1]]
+identical(leased$message_id, sent$message_id)
+```
+
+```{bash}
+kill -9 "$(cat "$STATE/endpoint.pid")"
+sleep 1
+. "$STATE/functions.sh"
+rm "$STATE/coordination.url"
+start_endpoint
+echo "restarted"
+```
+
+The restarted endpoint listens on the same `ipc://` address, so clients need no
+new configuration. Registrations and mail were in the database file.
+Once the lease runs out, the same message comes back with a new receipt:
+
+```{r}
+identical(guide_url(), url)
+Sys.sleep(2.1)
+redelivered <- rpc_call(url, "receive", list(registration_id = bob$registration_id))$messages[[1]]
+c(same_message = identical(redelivered$message_id, sent$message_id),
+  new_receipt = !identical(redelivered$receipt_token, leased$receipt_token))
+```
+
+This is at-least-once delivery. An agent that did the work before the crash
+sees the message again, so the work itself must tolerate running twice.
+
+## What an acknowledgement proves
+
+A registration declares how strong its acknowledgements are, and each
+acknowledgement records that declaration. The Pi extension declares
+`api_acceptance`: Pi's public API accepted the message into the conversation.
+A host-owned `AgentHarness` lane declares `harness_lane_commit`, because the
+message was committed to a durable lane before the acknowledgement:
+
+```{r}
+acked <- rpc_call(url, "ack", list(
+  registration_id = bob$registration_id, receipt_token = redelivered$receipt_token,
+  delivery_ref = "steer:session-1"
+))
+show(acked, c("acknowledged", "delivery_capability", "receiver_instance_id"))
+lane <- rpc_call(url, "register", list(
+  project_id = "guide", agent_id = "bob", instance_id = "host-lane",
+  operation_key = "lane", adapter_kind = "agent_harness",
+  delivery_capability = "harness_lane_commit"
+))
+lane$delivery_capability
+```
+
+Neither is exactly-once execution. Each says only which boundary the message
+had crossed when it was acknowledged.
+
+## Mail nobody reads
+
+Mail sent to a mailbox that nobody drains becomes a dead letter at the end of
+its time to live. Here the time to live is the one-minute minimum:
+
+```{r}
+lost <- rpc_call(url, "send", list(
+  registration_id = alice$registration_id, recipient_agent_id = "nobody",
+  idempotency_key = "lost", content = "Anyone there?", ttl_ms = 60000
+))
+lost$recipient_seen
+Sys.sleep(61)
+nobody <- register("nobody")
+length(rpc_call(url, "receive", list(registration_id = nobody$registration_id))$messages)
+```
+
+Dead letters, like acknowledged mail, are deleted 30 days after they end.
+With the endpoint stopped, the database file shows every state:
+
+```{bash}
+kill "$(cat "$STATE/endpoint.pid")"
+sleep 1
+```
+
+```{r}
+connection <- DBI::dbConnect(suppressMessages(duckdb::duckdb()),
+  dbdir = file.path(guide_state, "coordination.duckdb"), read_only = TRUE)
+DBI::dbGetQuery(connection,
+  "SELECT recipient_agent_id, state FROM coordination_messages ORDER BY created_at_ms")
+DBI::dbDisconnect(connection, shutdown = TRUE)
+```
+
+```{r, include = FALSE}
+stopifnot(
+  identical(redelivered$message_id, sent$message_id),
+  identical(acked$delivery_capability, "api_acceptance")
+)
+```
+
+```{r, echo = FALSE, results = "asis"}
+cat("> GUIDE_DURABILITY_VERIFIED: a killed endpoint redelivers the leased message and keeps dead letters\n")
+```

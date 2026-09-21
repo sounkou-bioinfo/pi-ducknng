@@ -15,6 +15,37 @@ specs <- list(
     source = "agent-active-binding.Rmd.orig",
     output = "agent-active-binding.Rmd",
     receipt = "AGENT_VERIFIED_ACTIVE_BINDING"
+  ),
+  list(
+    source = "coordination-mailbox.Rmd.orig",
+    output = "coordination-mailbox.Rmd",
+    receipt = "GUIDE_MAILBOX_VERIFIED"
+  ),
+  list(
+    source = "coordination-fanout.Rmd.orig",
+    output = "coordination-fanout.Rmd",
+    receipt = c("AGENT_WORKER_REPLIED w-mean", "AGENT_WORKER_REPLIED w-median",
+                "AGENT_BROADCAST_SENT", "GUIDE_FANOUT_VERIFIED")
+  ),
+  list(
+    source = "coordination-reservations.Rmd.orig",
+    output = "coordination-reservations.Rmd",
+    receipt = c("AGENT_EDIT_BLOCKED", "GUIDE_RESERVATIONS_VERIFIED")
+  ),
+  list(
+    source = "coordination-durability.Rmd.orig",
+    output = "coordination-durability.Rmd",
+    receipt = "GUIDE_DURABILITY_VERIFIED"
+  ),
+  list(
+    source = "coordination-mtls.Rmd.orig",
+    output = "coordination-mtls.Rmd",
+    receipt = "GUIDE_MTLS_VERIFIED"
+  ),
+  list(
+    source = "coordination-harness.Rmd.orig",
+    output = "coordination-harness.Rmd",
+    receipt = "GUIDE_HARNESS_VERIFIED"
   )
 )
 
@@ -23,9 +54,15 @@ validate_output <- function(path, receipt) {
     stop("missing precompiled vignette: ", path, call. = FALSE)
   }
   lines <- readLines(path, warn = FALSE, encoding = "UTF-8")
-  receipt_line <- startsWith(lines, "> ") & grepl(receipt, lines, fixed = TRUE)
-  if (!any(receipt_line)) {
-    stop("missing live-agent receipt ", receipt, " in ", path, call. = FALSE)
+  for (expected in receipt) {
+    receipt_line <- grepl(paste0("^(> |#> )?", expected), lines) |
+      (startsWith(lines, "> ") & grepl(expected, lines, fixed = TRUE))
+    if (!any(receipt_line)) {
+      stop("missing receipt ", expected, " in ", path, call. = FALSE)
+    }
+  }
+  if (any(grepl(root, lines, fixed = TRUE))) {
+    stop("precompiled vignette contains the checkout path: ", path, call. = FALSE)
   }
   unavailable <- grepl(
     "\\[pi unavailable\\]|pi not on PATH|not run in this environment",
@@ -45,6 +82,15 @@ validate_output <- function(path, receipt) {
 output_dir <- file.path(root, "vignettes")
 args <- commandArgs(trailingOnly = TRUE)
 check_only <- identical(args, "--check")
+# --only name[,name] rebuilds a subset of the guides.
+if (length(args) == 2L && identical(args[[1L]], "--only")) {
+  wanted <- strsplit(args[[2L]], ",", fixed = TRUE)[[1L]]
+  names <- vapply(specs, function(spec) tools::file_path_sans_ext(spec$output), "")
+  unknown <- setdiff(wanted, names)
+  if (length(unknown) > 0L) stop("unknown vignette: ", unknown[[1L]], call. = FALSE)
+  specs <- specs[names %in% wanted]
+  args <- character()
+}
 
 if (check_only) {
   for (spec in specs) {
@@ -108,4 +154,4 @@ tryCatch(
   finally = unlink(staged[nzchar(staged)])
 )
 
-cat("precomputed two vignettes with openai-codex/gpt-5.4 agents\n")
+cat("precomputed", length(specs), "vignettes\n")

@@ -253,12 +253,40 @@ it against a real harness.
 
 ## Guides
 
+Every guide is executed. Its outputs, including what the live agents said,
+are recorded when the guide is built.
+
+**Persistent R**
+
 - [An agent calls persistent R](https://sounkou-bioinfo.github.io/pi-ducknng/articles/agent-product-path.html):
   state that survives across calls.
 - [An active binding in a selected environment](https://sounkou-bioinfo.github.io/pi-ducknng/articles/agent-active-binding.html):
   the `envir` and `enclos` controls.
-- [`THESIS.md`](THESIS.md): the contracts, owners and invariants, and the
-  tests that prove them.
+
+**Coordination**
+
+- [Hand work between agents through a durable mailbox](https://sounkou-bioinfo.github.io/pi-ducknng/articles/coordination-mailbox.html):
+  offline mail, idempotent sends, leases, acknowledgement, and the envelope
+  an agent sees.
+- [Fan a question out and gather the answers](https://sounkou-bioinfo.github.io/pi-ducknng/articles/coordination-fanout.html):
+  recipient lists, a live broadcast to two workers, and replies threaded by
+  `in_reply_to`.
+- [Keep agents off each other's files with reservations](https://sounkou-bioinfo.github.io/pi-ducknng/articles/coordination-reservations.html):
+  a live agent refused by the edit gate, path-tree conflicts, renewal, and
+  fencing values.
+- [Recover from crashes and restarts](https://sounkou-bioinfo.github.io/pi-ducknng/articles/coordination-durability.html):
+  an endpoint killed mid-lease, redelivery after restart, and dead letters.
+
+**Deployment**
+
+- [Serve agents across hosts with mutual TLS](https://sounkou-bioinfo.github.io/pi-ducknng/articles/coordination-mtls.html):
+  in-memory PEM, grants, refused impersonation, and hints over `wss://`.
+- [Embed coordination in an AgentHarness host](https://sounkou-bioinfo.github.io/pi-ducknng/articles/coordination-harness.html):
+  a mailbox delivered into a harness lane, with one lane entry per message
+  even when an acknowledgement is lost.
+
+[`THESIS.md`](THESIS.md) lists the contracts, owners and invariants, and the
+tests that prove them.
 
 ## Pinned runtime
 
