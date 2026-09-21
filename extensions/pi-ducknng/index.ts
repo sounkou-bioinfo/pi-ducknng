@@ -10,6 +10,7 @@ import {
 } from "@duckdb/node-api";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
+import { registerCoordinationAdapter } from "./coordination.ts";
 
 const execFileAsync = promisify(execFile);
 const PACKAGE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
@@ -734,8 +735,13 @@ export default function piDucknngExtension(pi: ExtensionAPI): void {
     },
   });
 
+  registerCoordinationAdapter(pi, {
+    describe: describeEndpoint,
+    call: async (url, method, args) =>
+      (await callEndpoint(url, method, args)).result,
+  });
+
   pi.on("session_shutdown", async () => {
     await disposeLocalEndpoint();
   });
-
 }

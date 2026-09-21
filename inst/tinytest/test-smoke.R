@@ -4,6 +4,6 @@ imports <- trimws(sub("\\s*\\(.*\\)$", "", imports))
 
 expect_equal(
   sort(imports),
-  sort(c("jsonlite", "mirai", "nanoarrow", "nanonext"))
+  sort(c("DBI", "duckdb", "jsonlite", "mirai", "nanoarrow", "nanonext"))
 )
 expect_equal(getNamespaceExports("piducknng"), character())

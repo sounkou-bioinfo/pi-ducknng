@@ -6,17 +6,28 @@ import piDucknngExtension from "../extensions/pi-ducknng/index.ts";
 
 function loadTools() {
   const tools = new Map();
-  let shutdown;
+  const handlers = new Map();
   piDucknngExtension({
     registerTool(definition) {
       tools.set(definition.name, definition);
     },
     registerCommand() {},
+    registerFlag() {},
+    getFlag() {},
     on(event, handler) {
-      if (event === "session_shutdown") shutdown = handler;
+      const registered = handlers.get(event) ?? [];
+      registered.push(handler);
+      handlers.set(event, registered);
     },
   });
-  return { tools, shutdown: () => shutdown?.() };
+  return {
+    tools,
+    shutdown: async () => {
+      for (const handler of handlers.get("session_shutdown") ?? []) {
+        await handler();
+      }
+    },
+  };
 }
 
 test("package manifest declares the Pi extension", async () => {

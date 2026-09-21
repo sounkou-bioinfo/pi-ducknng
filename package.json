@@ -2,7 +2,7 @@
   "name": "pi-ducknng",
   "version": "0.0.0",
   "private": false,
-  "description": "Pi integration for persistent R and NNG endpoints through DuckDB and ducknng.",
+  "description": "Pi integration for persistent R and durable local agent coordination through DuckDB and ducknng.",
   "license": "GPL-3.0-or-later",
   "type": "module",
   "engines": {
@@ -22,6 +22,7 @@
   "files": [
     "extensions/pi-ducknng",
     "tools",
+    "R/coordination.R",
     "vendor/ducknng/CMakeLists.txt",
     "vendor/ducknng/Makefile",
     "vendor/ducknng/description.yml",
@@ -60,7 +61,7 @@
     }
   },
   "devDependencies": {
-    "@earendil-works/pi-coding-agent": "^0.78.0",
+    "@earendil-works/pi-coding-agent": "^0.86.1",
     "@types/node": "^24.0.0",
     "typescript": "^5.8.3"
   },
