@@ -124,6 +124,8 @@ but treat `cancel` as best-effort control, not as a universal destructor guarant
 
 When the runtime is destroyed, it now cleans up its owned structures rather than leaving destruction partial. That includes runtime-owned registries and transport/service state.
 
+SQL-defined method registrations are the one registry state that is released only here. Replacing or unregistering a SQL method takes it out of the registry at once, but its handler SQL stays allocated until teardown so that a request already dispatched can finish with it. Repeatedly re-registering methods in a long-lived database therefore retains every past handler text; the cost is bounded by what the host registers.
+
 But that is fallback/runtime teardown behavior. It is **not** a substitute for explicit user-level cleanup in a long-lived database process, test suite, notebook, or interactive session.
 
 ## 5. Practical rule of thumb

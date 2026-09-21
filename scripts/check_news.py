@@ -37,7 +37,7 @@ def changed_files(base: str | None, head: str) -> list[str]:
                 for path in run_git(
                     ["diff", "--name-only", "--diff-filter=ACMR", f"{base}...{head}", "--"]
                 )
-                if path != NEWS_PATH and not path.startswith(".sync/")
+                if not path.startswith(".sync/")
             }
         )
 
@@ -46,7 +46,7 @@ def changed_files(base: str | None, head: str) -> list[str]:
     return sorted(
         path
         for path in tracked | untracked
-        if path != NEWS_PATH and not path.startswith(".sync/")
+        if not path.startswith(".sync/")
     )
 
 

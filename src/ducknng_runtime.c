@@ -1,4 +1,5 @@
 #include "ducknng_runtime.h"
+#include "ducknng_sql_method.h"
 #include "ducknng_manifest.h"
 #include "ducknng_nng_compat.h"
 #include "ducknng_util.h"
@@ -315,6 +316,7 @@ void ducknng_runtime_destroy(ducknng_runtime *rt) {
     }
     ducknng_runtime_http_profiles_reset(rt);
     ducknng_method_registry_destroy(&rt->registry);
+    ducknng_runtime_sql_methods_destroy(rt);
     ducknng_log_ring_destroy(&rt->log_ring);
     if (rt->execution_pool) {
         for (i = 0; i < rt->execution_pool_count; i++) {

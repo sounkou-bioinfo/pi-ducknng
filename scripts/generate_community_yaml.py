@@ -23,7 +23,7 @@ GIT_REF = subprocess.run(
 EXTENSION = {
     "name": "ducknng",
     "description": "Pure C DuckDB extension exposing a DuckDB-backed SQL and RPC server over NNG using Arrow IPC — with framed RPC, custom HTTP routes, TLS support, body codec layer, and admission controls",
-    "version": "0.1.1",
+    "version": "0.1.2",
     "language": "C",
     "build": "cmake",
     "license": "MIT",
@@ -185,7 +185,31 @@ FUNCTIONS = [
         RPC,
         "query_rpc(url, sql, tls_config_id)",
         "table",
-        "Execute SQL on a remote server and return result rows. For SELECT: opens session + auto-fetch. For DML: returns rows_changed.",
+        "Run read-only or idempotent remote SQL through a query session and return its rows.",
+    ),
+    af(
+        "ducknng_query_rpc_params",
+        "table",
+        RPC,
+        "query_rpc_params(url, sql, params, tls_config_id)",
+        "table",
+        "Run one parameterized read-only or idempotent remote statement and return its rows.",
+    ),
+    af(
+        "ducknng_prepare_query",
+        "table",
+        RPC,
+        "prepare_query(url, sql, tls_config_id)",
+        "table",
+        "Prepare one remote statement without executing it and expose its result schema.",
+    ),
+    af(
+        "ducknng_prepare_query_params",
+        "table",
+        RPC,
+        "prepare_query_params(url, sql, params, tls_config_id)",
+        "table",
+        "Bind a typed parameter tuple and expose the prepared remote result schema without execution.",
     ),
     af(
         "ducknng_run_rpc",
@@ -194,6 +218,14 @@ FUNCTIONS = [
         "run_rpc(url, sql, tls_config_id)",
         "table",
         "Execute SQL via the exec method. Returns rows_changed + metadata.",
+    ),
+    af(
+        "ducknng_run_rpc_params",
+        "table",
+        RPC,
+        "run_rpc_params(url, sql, params, tls_config_id)",
+        "table",
+        "Execute one parameterized statement through exec and return rows_changed plus metadata.",
     ),
     af(
         "ducknng_open_query",
@@ -530,6 +562,14 @@ FUNCTIONS = [
         "table",
         "Return the current request's auth context: peer_identity, peer_addr, authenticated columns.",
     ),
+    af(
+        "ducknng_request_subject",
+        "table",
+        ATH,
+        "request_subject()",
+        "table",
+        "Return the verified caller of the running SQL method: peer_identity, principal, subject, claims_json, authenticated.",
+    ),
     # ---- Monitoring ----
     af(
         "ducknng_read_monitor",
@@ -732,6 +772,14 @@ FUNCTIONS = [
         "register_exec_method(enable_default)",
         "BOOLEAN",
         "Register (or re-register) the default exec method. Pass TRUE to enable by default.",
+    ),
+    af(
+        "ducknng_register_sql_method",
+        "scalar",
+        REG,
+        "register_sql_method(name, handler_sql, request_schema_json, require_auth)",
+        "BOOLEAN",
+        "Register or replace a manifest-visible RPC method whose handler is server-owned SQL; callers send a JSON object payload.",
     ),
     af(
         "ducknng_set_method_auth",
@@ -1232,11 +1280,12 @@ def main():
     for fn in FUNCTIONS:
         by_kind[fn["kind"]] = by_kind.get(fn["kind"], 0) + 1
 
-    # Write description.yml
+    # The repository root descriptor is the minimal build/version input parsed
+    # by function_catalog/generate_function_catalog.py. Community metadata is
+    # generated only in the submission directories below.
     desc = build_description_yml()
-    (REPO_ROOT / "description.yml").write_text(desc)
     print(
-        f"description.yml: {len(FUNCTIONS)} functions across {len(categories)} categories: "
+        f"description.yml (community): {len(FUNCTIONS)} functions across {len(categories)} categories: "
         + ", ".join(f"{k}={len(v)}" for k, v in sorted(categories.items()))
     )
 

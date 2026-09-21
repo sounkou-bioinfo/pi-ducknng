@@ -196,6 +196,9 @@ typedef struct ducknng_runtime {
     int log_capture_enabled; /* 1 after ducknng_enable_log_capture() succeeds */
     atomic_uintptr_t current_request_service_ptr;
     ducknng_method_registry registry;
+    /* SQL-defined method entries, retained until runtime destroy so dispatch
+     * snapshots of replaced or unregistered methods stay valid. */
+    struct ducknng_sql_method *sql_methods;
     ducknng_log_ring log_ring;
 } ducknng_runtime;
 

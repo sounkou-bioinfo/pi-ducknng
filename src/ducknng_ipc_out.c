@@ -615,6 +615,60 @@ cleanup:
     return rc;
 }
 
+int ducknng_exec_request_with_params_to_ipc(duckdb_connection con,
+    const char *sql, int want_result, duckdb_value params,
+    uint8_t **out_bytes, size_t *out_len, char **errmsg) {
+    static const char *request_sql =
+        "SELECT ?::VARCHAR AS sql, ?::BOOLEAN AS want_result, ? AS params";
+    duckdb_prepared_statement stmt = NULL;
+    duckdb_result result;
+    duckdb_value sql_value = NULL;
+    duckdb_value want_result_value = NULL;
+    duckdb_logical_type params_type;
+    int rc = -1;
+    memset(&result, 0, sizeof(result));
+    if (!con || !sql || !sql[0] || !params || !out_bytes || !out_len) {
+        if (errmsg) *errmsg = ducknng_strdup(
+            "ducknng: invalid parameterized exec request arguments");
+        return -1;
+    }
+    params_type = duckdb_get_value_type(params);
+    if (!params_type || duckdb_get_type_id(params_type) != DUCKDB_TYPE_STRUCT) {
+        if (errmsg) *errmsg = ducknng_strdup(
+            "ducknng: exec parameters must be supplied as a STRUCT tuple");
+        return -1;
+    }
+    if (duckdb_prepare(con, request_sql, &stmt) == DuckDBError) {
+        if (errmsg) *errmsg = ducknng_strdup(stmt && duckdb_prepare_error(stmt)
+            ? duckdb_prepare_error(stmt)
+            : "ducknng: failed to prepare parameterized exec encoder");
+        goto cleanup;
+    }
+    sql_value = duckdb_create_varchar(sql);
+    want_result_value = duckdb_create_bool(want_result != 0);
+    if (!sql_value || !want_result_value ||
+        duckdb_bind_value(stmt, 1, sql_value) == DuckDBError ||
+        duckdb_bind_value(stmt, 2, want_result_value) == DuckDBError ||
+        duckdb_bind_value(stmt, 3, params) == DuckDBError) {
+        if (errmsg) *errmsg = ducknng_strdup(
+            "ducknng: failed to bind parameterized exec request fields");
+        goto cleanup;
+    }
+    if (duckdb_execute_prepared(stmt, &result) == DuckDBError) {
+        const char *detail = duckdb_result_error(&result);
+        if (errmsg) *errmsg = ducknng_strdup(detail && detail[0] ? detail :
+            "ducknng: failed to encode parameterized exec request");
+        goto cleanup;
+    }
+    rc = ducknng_result_to_ipc_stream(stmt, result, out_bytes, out_len, errmsg);
+cleanup:
+    if (result.internal_data) duckdb_destroy_result(&result);
+    if (sql_value) duckdb_destroy_value(&sql_value);
+    if (want_result_value) duckdb_destroy_value(&want_result_value);
+    if (stmt) duckdb_destroy_prepare(&stmt);
+    return rc;
+}
+
 /* -------------------------------------------------------------------------
  * Public API: query_open request → IPC
  * ---------------------------------------------------------------------- */
@@ -701,6 +755,68 @@ cleanup:
     return rc;
 }
 
+int ducknng_query_open_request_with_params_to_ipc(duckdb_connection con,
+    const char *sql, uint64_t batch_rows, uint64_t batch_bytes,
+    duckdb_value params, uint8_t **out_bytes, size_t *out_len, char **errmsg) {
+    static const char *request_sql =
+        "SELECT ?::VARCHAR AS sql, ?::UBIGINT AS batch_rows, "
+        "?::UBIGINT AS batch_bytes, ? AS params";
+    duckdb_prepared_statement stmt = NULL;
+    duckdb_result result;
+    duckdb_value values[3];
+    duckdb_logical_type params_type = NULL;
+    idx_t i;
+    int rc = -1;
+    memset(&result, 0, sizeof(result));
+    memset(values, 0, sizeof(values));
+    if (!con || !sql || !sql[0] || !params || !out_bytes || !out_len) {
+        if (errmsg) *errmsg = ducknng_strdup(
+            "ducknng: invalid parameterized query_open request arguments");
+        return -1;
+    }
+    params_type = duckdb_get_value_type(params);
+    if (!params_type || duckdb_get_type_id(params_type) != DUCKDB_TYPE_STRUCT) {
+        if (errmsg) *errmsg = ducknng_strdup(
+            "ducknng: query parameters must be supplied as a STRUCT tuple");
+        goto cleanup;
+    }
+    if (duckdb_prepare(con, request_sql, &stmt) == DuckDBError) {
+        if (errmsg) *errmsg = ducknng_strdup(stmt && duckdb_prepare_error(stmt)
+            ? duckdb_prepare_error(stmt)
+            : "ducknng: failed to prepare parameterized query_open encoder");
+        goto cleanup;
+    }
+    values[0] = duckdb_create_varchar(sql);
+    values[1] = batch_rows > 0 ? duckdb_create_uint64(batch_rows) : duckdb_create_null_value();
+    values[2] = batch_bytes > 0 ? duckdb_create_uint64(batch_bytes) : duckdb_create_null_value();
+    for (i = 0; i < 3; i++) {
+        if (!values[i] || duckdb_bind_value(stmt, i + 1, values[i]) == DuckDBError) {
+            if (errmsg) *errmsg = ducknng_strdup(
+                "ducknng: failed to bind parameterized query_open control field");
+            goto cleanup;
+        }
+    }
+    if (duckdb_bind_value(stmt, 4, params) == DuckDBError) {
+        if (errmsg) *errmsg = ducknng_strdup(
+            "ducknng: failed to bind query parameter tuple for Arrow encoding");
+        goto cleanup;
+    }
+    if (duckdb_execute_prepared(stmt, &result) == DuckDBError) {
+        const char *detail = duckdb_result_error(&result);
+        if (errmsg) *errmsg = ducknng_strdup(detail && detail[0] ? detail :
+            "ducknng: failed to encode parameterized query_open request");
+        goto cleanup;
+    }
+    rc = ducknng_result_to_ipc_stream(stmt, result, out_bytes, out_len, errmsg);
+cleanup:
+    if (result.internal_data) duckdb_destroy_result(&result);
+    for (i = 0; i < 3; i++) {
+        if (values[i]) duckdb_destroy_value(&values[i]);
+    }
+    if (stmt) duckdb_destroy_prepare(&stmt);
+    /* duckdb_get_value_type() returns a borrowed type owned by params. */
+    return rc;
+}
 /* -------------------------------------------------------------------------
  * Public API: session request JSON
  * ---------------------------------------------------------------------- */

@@ -14,6 +14,10 @@ Stop a named server, close all its pipes, and release resources.
 
 List all running servers with listen URL, TLS mode/peering mode, pipe count.
 
+#### `ducknng_nng_version()`
+
+Return the vendored NNG library version string.
+
 ### NNG Sockets
 
 #### `ducknng_open_socket(kind)`
@@ -60,11 +64,27 @@ Request the RPC method manifest from a remote server.
 
 #### `ducknng_query_rpc(url, sql, tls_config_id)`
 
-Execute SQL on a remote server and return result rows. For SELECT: opens session + auto-fetch. For DML: returns rows_changed.
+Run read-only or idempotent remote SQL through a query session and return its rows.
+
+#### `ducknng_query_rpc_params(url, sql, params, tls_config_id)`
+
+Run one parameterized read-only or idempotent remote statement and return its rows.
+
+#### `ducknng_prepare_query(url, sql, tls_config_id)`
+
+Prepare one remote statement without executing it and expose its result schema.
+
+#### `ducknng_prepare_query_params(url, sql, params, tls_config_id)`
+
+Bind a typed parameter tuple and expose the prepared remote result schema without execution.
 
 #### `ducknng_run_rpc(url, sql, tls_config_id)`
 
 Execute SQL via the exec method. Returns rows_changed + metadata.
+
+#### `ducknng_run_rpc_params(url, sql, params, tls_config_id)`
+
+Execute one parameterized statement through exec and return rows_changed plus metadata.
 
 #### `ducknng_open_query(url, sql, batch_rows, batch_bytes, tls_config_id)`
 
@@ -322,6 +342,10 @@ Register a SQL authorizer callback for a service. The handler receives query tex
 
 Return the current request's auth context: peer_identity, peer_addr, authenticated columns.
 
+#### `ducknng_request_subject()`
+
+Return the verified caller of the running SQL method: peer_identity, principal, subject, claims_json, authenticated.
+
 ### Monitoring
 
 #### `ducknng_read_monitor(name, after_seq, max_events)`
@@ -353,6 +377,10 @@ List all registered RPC methods with auth requirements.
 #### `ducknng_register_exec_method(enable_default)`
 
 Register (or re-register) the default exec method. Pass TRUE to enable by default.
+
+#### `ducknng_register_sql_method(name, handler_sql, request_schema_json, require_auth)`
+
+Register or replace a manifest-visible RPC method whose handler is server-owned SQL; callers send a JSON object payload.
 
 #### `ducknng_set_method_auth(method_name, require_auth)`
 

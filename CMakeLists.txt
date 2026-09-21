@@ -103,6 +103,7 @@ set(EXTENSION_SOURCES
     src/ducknng_sql_socket.c
     src/ducknng_sql_aio.c
     src/ducknng_sql_registry.c
+    src/ducknng_sql_method.c
     src/ducknng_sql_session.c
     src/ducknng_sql_body.c
     src/ducknng_sql_arrow.c
