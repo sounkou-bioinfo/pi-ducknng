@@ -50,6 +50,7 @@ int ducknng_http_route_copy(ducknng_http_route *dst, const ducknng_http_route *s
     dst->match_kind = src->match_kind;
     dst->response_mode = src->response_mode;
     dst->request_max_bytes = src->request_max_bytes;
+    dst->event_heartbeat_ms = src->event_heartbeat_ms;
     dst->auth_require_identity = src->auth_require_identity;
     dst->method = src->method ? ducknng_strdup(src->method) : NULL;
     dst->path = src->path ? ducknng_strdup(src->path) : NULL;
@@ -1315,6 +1316,156 @@ int ducknng_service_execute_stream_route(ducknng_service *svc,
         if (rc != 0) break;
     }
     duckdb_destroy_result(&result);
+    return rc;
+}
+
+void ducknng_http_event_subscription_reset(ducknng_http_event_subscription *sub) {
+    if (!sub) return;
+    if (sub->url) duckdb_free(sub->url);
+    if (sub->topic) duckdb_free(sub->topic);
+    if (sub->event) duckdb_free(sub->event);
+    if (sub->has_tls) ducknng_tls_opts_reset(&sub->tls_opts);
+    memset(sub, 0, sizeof(*sub));
+}
+
+/* Copies a registered TLS configuration under the runtime lock, so a config
+ * dropped concurrently cannot be read after it is freed. */
+static int ducknng_service_copy_tls_opts(ducknng_runtime *rt, uint64_t tls_config_id,
+    ducknng_tls_opts *out, char **errmsg) {
+    size_t i;
+    int rc = -1;
+    if (!rt || !out) return -1;
+    ducknng_mutex_lock(&rt->mu);
+    for (i = 0; i < rt->tls_config_count; i++) {
+        if (rt->tls_configs[i] && rt->tls_configs[i]->tls_config_id == tls_config_id) {
+            rc = ducknng_tls_opts_copy(out, &rt->tls_configs[i]->opts) == 0 ? 0 : -2;
+            break;
+        }
+    }
+    ducknng_mutex_unlock(&rt->mu);
+    if (rc == -1 && errmsg) *errmsg = ducknng_strdup("ducknng: event route tls_config_id not found");
+    if (rc == -2 && errmsg) *errmsg = ducknng_strdup("ducknng: out of memory copying event route TLS options");
+    return rc == 0 ? 0 : -1;
+}
+
+/* SSE framing breaks on a CR or LF inside a field value. */
+static int ducknng_sse_field_is_valid(const char *value) {
+    const unsigned char *p = (const unsigned char *)value;
+    if (!p) return 1;
+    for (; *p; p++) {
+        if (*p == '\r' || *p == '\n') return 0;
+    }
+    return 1;
+}
+
+int ducknng_service_resolve_event_route(ducknng_service *svc,
+    const ducknng_http_request_context *request_ctx,
+    ducknng_http_event_subscription *out, char **errmsg) {
+    duckdb_result result;
+    ducknng_service_sql_scope scope;
+    duckdb_data_chunk chunk = NULL;
+    duckdb_data_chunk extra = NULL;
+    idx_t rows;
+    int url_col;
+    int topic_col;
+    int event_col;
+    int tls_col;
+    uint64_t tls_config_id = 0;
+    int rc = -1;
+    if (errmsg) *errmsg = NULL;
+    if (!out) return -1;
+    memset(out, 0, sizeof(*out));
+    if (!svc || !svc->rt || !request_ctx || !request_ctx->route.handler_sql ||
+        !request_ctx->route.handler_sql[0]) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: missing event route execution state");
+        return -1;
+    }
+    memset(&result, 0, sizeof(result));
+    if (ducknng_service_enter_http_route_sql(svc, request_ctx, &scope, errmsg) != 0) {
+        if (errmsg && !*errmsg) *errmsg = ducknng_strdup("ducknng: missing event route execution state");
+        return -1;
+    }
+    if (duckdb_query(scope.con, request_ctx->route.handler_sql, &result) == DuckDBError) {
+        const char *detail = duckdb_result_error(&result);
+        size_t need = detail && detail[0] ? strlen(detail) + 40 : 0;
+        if (detail && detail[0] && errmsg) {
+            *errmsg = (char *)duckdb_malloc(need);
+            if (*errmsg) snprintf(*errmsg, need, "ducknng: event route handler error: %s", detail);
+        }
+        ducknng_service_leave_http_route_sql(&scope);
+        duckdb_destroy_result(&result);
+        if (errmsg && !*errmsg) *errmsg = ducknng_strdup("ducknng: event route handler error");
+        return -1;
+    }
+    ducknng_service_leave_http_route_sql(&scope);
+    chunk = duckdb_fetch_chunk(result);
+    rows = chunk ? duckdb_data_chunk_get_size(chunk) : 0;
+    if (rows == 0) {
+        rc = 0;
+        goto done;
+    }
+    extra = duckdb_fetch_chunk(result);
+    if (rows > 1 || (extra && duckdb_data_chunk_get_size(extra) > 0)) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: event route handler must return at most one row");
+        goto done;
+    }
+    url_col = ducknng_result_column_index(&result, "url");
+    if (url_col < 0 || duckdb_column_type(&result, (idx_t)url_col) != DUCKDB_TYPE_VARCHAR) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: event route handler must return a VARCHAR url column");
+        goto done;
+    }
+    out->url = ducknng_chunk_varchar_dup(chunk, url_col, 0);
+    if (!out->url || !out->url[0]) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: event route url must not be NULL or empty");
+        goto done;
+    }
+    topic_col = ducknng_result_column_index(&result, "topic");
+    if (topic_col >= 0) {
+        duckdb_type topic_type = duckdb_column_type(&result, (idx_t)topic_col);
+        if (topic_type != DUCKDB_TYPE_BLOB && topic_type != DUCKDB_TYPE_VARCHAR) {
+            if (errmsg) *errmsg = ducknng_strdup("ducknng: event route topic column must be BLOB or VARCHAR");
+            goto done;
+        }
+        out->topic = ducknng_chunk_blob_dup(chunk, topic_col, 0, &out->topic_len);
+        if (!out->topic && out->topic_len > 0) {
+            if (errmsg) *errmsg = ducknng_strdup("ducknng: out of memory copying event route topic");
+            goto done;
+        }
+    }
+    event_col = ducknng_result_column_index(&result, "event");
+    if (event_col >= 0) {
+        if (duckdb_column_type(&result, (idx_t)event_col) != DUCKDB_TYPE_VARCHAR) {
+            if (errmsg) *errmsg = ducknng_strdup("ducknng: event route event column must be VARCHAR");
+            goto done;
+        }
+        out->event = ducknng_chunk_varchar_dup(chunk, event_col, 0);
+        if (out->event && (!out->event[0] || !ducknng_sse_field_is_valid(out->event))) {
+            if (errmsg) *errmsg = ducknng_strdup("ducknng: event route event name must be nonempty without CR or LF");
+            goto done;
+        }
+    }
+    tls_col = ducknng_result_column_index(&result, "tls_config_id");
+    if (tls_col >= 0) {
+        if (duckdb_column_type(&result, (idx_t)tls_col) != DUCKDB_TYPE_UBIGINT) {
+            if (errmsg) *errmsg = ducknng_strdup("ducknng: event route tls_config_id column must be UBIGINT");
+            goto done;
+        }
+        if (ducknng_chunk_uint64_value(chunk, tls_col, 0, &tls_config_id) != 0) tls_config_id = 0;
+    }
+    if (tls_config_id != 0) {
+        if (ducknng_service_copy_tls_opts(svc->rt, tls_config_id, &out->tls_opts, errmsg) != 0) goto done;
+        out->has_tls = 1;
+    }
+    if (ducknng_socket_validate_client_url(out->url, out->has_tls ? &out->tls_opts : NULL, errmsg) != 0) {
+        if (errmsg && !*errmsg) *errmsg = ducknng_strdup("ducknng: invalid event route url");
+        goto done;
+    }
+    rc = 1;
+done:
+    if (extra) duckdb_destroy_data_chunk(&extra);
+    if (chunk) duckdb_destroy_data_chunk(&chunk);
+    duckdb_destroy_result(&result);
+    if (rc < 0) ducknng_http_event_subscription_reset(out);
     return rc;
 }
 
@@ -2762,6 +2913,39 @@ int ducknng_service_register_http_route(ducknng_service *svc, const char *method
     const char *handler_sql, uint64_t request_max_bytes, char **errmsg) {
     return ducknng_service_register_http_route_inner(svc, method,
         DUCKNNG_HTTP_ROUTE_MATCH_EXACT, path, handler_sql, request_max_bytes, errmsg);
+}
+
+int ducknng_service_register_http_event_route(ducknng_service *svc, const char *path,
+    const char *handler_sql, uint32_t heartbeat_ms, char **errmsg) {
+    size_t i;
+    int found = 0;
+    int rc;
+    if (errmsg) *errmsg = NULL;
+    if (heartbeat_ms < DUCKNNG_HTTP_EVENT_HEARTBEAT_MIN_MS ||
+        heartbeat_ms > DUCKNNG_HTTP_EVENT_HEARTBEAT_MAX_MS) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: event route heartbeat_ms must be between 100 and 300000");
+        return -1;
+    }
+    rc = ducknng_service_register_http_route_inner(svc, "GET",
+        DUCKNNG_HTTP_ROUTE_MATCH_EXACT, path, handler_sql, 0, errmsg);
+    if (rc != 0) return rc;
+    ducknng_mutex_lock(&svc->mu);
+    for (i = 0; i < svc->http_route_count; i++) {
+        if (strcmp(svc->http_routes[i].method, "GET") == 0 &&
+            strcmp(svc->http_routes[i].path, path) == 0 &&
+            svc->http_routes[i].match_kind == DUCKNNG_HTTP_ROUTE_MATCH_EXACT) {
+            svc->http_routes[i].response_mode = DUCKNNG_HTTP_ROUTE_RESPONSE_EVENTS;
+            svc->http_routes[i].event_heartbeat_ms = heartbeat_ms;
+            found = 1;
+            break;
+        }
+    }
+    ducknng_mutex_unlock(&svc->mu);
+    if (!found) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: event route vanished during registration");
+        return -1;
+    }
+    return 0;
 }
 
 int ducknng_service_register_http_stream_route(ducknng_service *svc, const char *method,

@@ -358,6 +358,14 @@ FUNCTIONS = [
         "Register a chunked-streaming route. Handler SQL must return 'chunk' column. Each row written as HTTP chunk. Default content-type: text/event-stream.",
     ),
     af(
+        "ducknng_add_event_route",
+        "scalar",
+        HTR,
+        "add_event_route(service_name, path, handler_sql, heartbeat_ms)",
+        "BOOLEAN",
+        "Register a GET route that relays one NNG PUB/SUB subscription as Server-Sent Events. Handler SQL returns url and optionally topic, event, and tls_config_id.",
+    ),
+    af(
         "ducknng_register_http_static",
         "scalar",
         HTR,
@@ -813,6 +821,14 @@ FUNCTIONS = [
         "decode_frame(data)",
         "table",
         "Decode a ducknng protocol frame into type, name, payload_text, error_text, and raw payload.",
+    ),
+    af(
+        "ducknng_encode_rpc_call",
+        "scalar",
+        FRM,
+        "encode_rpc_call(method, payload)",
+        "BLOB",
+        "Build the call frame for one manifest-declared JSON method; send it with ducknng_request_raw().",
     ),
     af(
         "ducknng_frame_payload",

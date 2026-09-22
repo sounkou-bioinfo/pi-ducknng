@@ -140,7 +140,7 @@ Route handler SQL runs under the service execution model exposed by `ducknng_lis
 - `service_serialized_connection`: the service opens one DuckDB connection from the same database handle and serializes that service's SQL on a service-local mutex.
 - `request_connection`: each service-side SQL execution borrows one pre-opened DuckDB execution-pool connection and returns it after the handler finishes.
 
-Execution-pool connections are opened from the same DuckDB database handle at extension initialization. They share the same database, catalog, and persistent tables, but they do not inherit temp tables, temp macros, or other connection-local state from the init connection. Route handlers that use `service_serialized_connection` or `request_connection` should therefore depend on catalog-visible objects. The current route API still buffers one final response row; HTTP-carrier streaming remains future work.
+Execution-pool connections are opened from the same DuckDB database handle at extension initialization. They share the same database, catalog, and persistent tables, but they do not inherit temp tables, temp macros, or other connection-local state from the init connection. Route handlers that use `service_serialized_connection` or `request_connection` should therefore depend on catalog-visible objects. The one-shot route API buffers one final response row; stream routes write the rows of one query as chunks, and event routes relay a subscription as described below.
 
 `shared_serialized_connection` can self-block if a handler synchronously calls a sibling `ducknng` service in the same runtime and that backend also needs the shared lane. Use `service_serialized_connection`, `request_connection`, a separate backend DuckDB process, or a separate runtime boundary for those gateway patterns.
 
@@ -170,12 +170,56 @@ SELECT ducknng_register_http_route(
 );
 ```
 
+## Event routes
+
+`ducknng_add_event_route(service_name, path, handler_sql[, heartbeat_ms])`
+registers an exact-match `GET` route that bridges NNG publish/subscribe to
+Server-Sent Events. It is a carrier bridge, not a query stream: the handler SQL
+runs once per request, in the same route context as other handlers, and only
+names the subscription. It returns at most one row with a `url` column (the PUB
+listener to dial) and optional `topic` (BLOB or VARCHAR prefix), `event`
+(VARCHAR SSE event name without CR or LF), and `tls_config_id` (UBIGINT)
+columns. No row answers `404`, a handler error answers `500`, and the service
+request slot is released as soon as the handler has run.
+
+The route handler then hijacks the connection and hands it, with the resolved
+subscription, to a relay thread owned by the HTTP server state. The relay dials
+and subscribes on that thread rather than on the NNG callback thread, because a
+blocking dial there would hold a taskq thread, and an `inproc://` dial also
+needs a taskq thread to accept it. A subscription that cannot be dialed is
+answered `503` by the relay. Otherwise the relay writes `200` with
+`text/event-stream`, a `: ready` comment once the subscription is connected,
+one event per message, and a `: keepalive` comment after each `heartbeat_ms` of
+silence (15000 by default, 100 to 300000). Each message's text becomes one
+`data:` line per line, split at CR, LF, or CRLF; a message that is not UTF-8
+text is replaced by a comment saying it was skipped. A failed write, which the
+keep-alive guarantees within one heartbeat, ends the relay.
+
+The relay holds no DuckDB connection and no execution lane, so an open stream
+never blocks SQL. Its thread alone opens, uses, and closes its socket, and it
+receives in 200 ms slices, writing a keep-alive only after `heartbeat_ms` of
+silence. The server stop path marks the server stopping, cancels any write that
+is blocked on a slow client, waits for relays that are still starting, and joins
+the threads; each relay notices the stop within one slice and ends its body, so
+open streams end instead of delaying a stop. The stop path never closes a
+relay's socket itself: in NNG, closing a socket while another thread is inside a
+synchronous dial on it can leave `nng_close()` waiting indefinitely. No blocking
+NNG call is made while the server mutex is held either, because `nng_close()`
+waits for NNG's reap thread, which may be waiting for an HTTP handler callback
+that is itself waiting for the mutex. Finished relays are reaped when the next
+relay starts. `test/sql/ducknng_event_routes.test` covers the response shapes,
+topic filtering, keep-alives, and stop with open streams; `make
+event_route_smoke` follows a route with Python's `http.client`, and `make
+event_route_race` stops servers while 16 HTTP clients per round are still being
+given relays.
+
 ## Explicit non-goals
 
 The landed layer is intentionally low-level. These are still deferred:
 
 - static asset serving
-- HTTP-carrier WebSocket, SSE, or NDJSON streaming
+- HTTP-carrier WebSocket and NDJSON streaming, and SSE from anything other than
+  an NNG subscription
 - HTTP-specific copies of manifest-derived RPC methods
 - automatic SQL-to-JSON marshalling for arbitrary rowsets
 - route-local authentication or worker-lifecycle policy

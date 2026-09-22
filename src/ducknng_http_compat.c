@@ -1,5 +1,6 @@
 #include "ducknng_http_compat.h"
 #include "ducknng_service.h"
+#include "ducknng_sql_shared.h"
 #include "ducknng_transport.h"
 #include "ducknng_util.h"
 #include <ctype.h>
@@ -776,6 +777,8 @@ fail:
     return -1;
 }
 
+struct ducknng_http_event_relay;
+
 typedef struct ducknng_http_server_state {
     struct ducknng_service *svc;
     nng_http_server *server;
@@ -790,6 +793,8 @@ typedef struct ducknng_http_server_state {
     int route_handler_finalized;
     int route_handler_data_installed;
     size_t active_streams;
+    /* Event-route relays, each on its own thread. Guarded by mu. */
+    struct ducknng_http_event_relay *event_relays;
     int mu_initialized;
     int cv_initialized;
 } ducknng_http_server_state;
@@ -1116,6 +1121,336 @@ done:
     nng_http_conn_close(conn);
 }
 
+/*
+ * Event routes relay one NNG SUB socket to one hijacked HTTP connection as
+ * Server-Sent Events. Each relay owns a thread that dials, subscribes, and then
+ * receives in short slices, so a long-lived stream holds neither an NNG taskq
+ * thread nor a DuckDB connection: the route's handler SQL has already run by
+ * the time the relay starts. Dialing on the taskq thread would also deadlock,
+ * since an inproc dial needs a taskq thread to accept it.
+ *
+ * The relay thread alone opens, uses, and closes its socket. Closing it from
+ * the stop path instead races a synchronous dial in NNG and can leave
+ * nng_close() waiting forever, so the relay checks stopping between receive
+ * slices and a stop takes at most one slice. The stop path may cancel the
+ * write aio, which does not block, only under state->mu while the relay is not
+ * yet detached; the relay sets detached under state->mu before it frees the
+ * aio, and finished just before its thread returns. While starting is set,
+ * the handler still uses the relay and neither the reaper nor the stop path
+ * may free it. No blocking NNG call is made while state->mu is held.
+ */
+#define DUCKNNG_HTTP_EVENT_RECV_SLICE_MS 200u
+
+typedef struct ducknng_http_event_relay {
+    ducknng_http_server_state *state;
+    nng_http_conn *conn;
+    nng_socket sub;
+    nng_aio *write_aio;
+    ducknng_http_event_subscription spec;
+    uint32_t heartbeat_ms;
+    ducknng_thread thread;
+    int thread_started;
+    int starting;
+    int sub_open;
+    int detached;
+    int finished;
+    struct ducknng_http_event_relay *next;
+} ducknng_http_event_relay;
+
+static void ducknng_http_event_relay_free(ducknng_http_event_relay *relay) {
+    if (!relay) return;
+    if (relay->thread_started) ducknng_thread_join(relay->thread);
+    ducknng_http_event_subscription_reset(&relay->spec);
+    duckdb_free(relay);
+}
+
+/* Unlink finished relays under the lock and join them outside it. */
+static void ducknng_http_event_relays_reap(ducknng_http_server_state *state) {
+    ducknng_http_event_relay *dead = NULL;
+    ducknng_http_event_relay **pp;
+    ducknng_http_event_relay *cur;
+    if (!state || !state->mu_initialized) return;
+    ducknng_mutex_lock(&state->mu);
+    pp = &state->event_relays;
+    while ((cur = *pp) != NULL) {
+        if (cur->finished && !cur->starting) {
+            *pp = cur->next;
+            cur->next = dead;
+            dead = cur;
+        } else {
+            pp = &cur->next;
+        }
+    }
+    ducknng_mutex_unlock(&state->mu);
+    while (dead) {
+        ducknng_http_event_relay *next = dead->next;
+        ducknng_http_event_relay_free(dead);
+        dead = next;
+    }
+}
+
+/*
+ * End every relay and join it. Called once the server is marked stopping, so
+ * no relay can register, and each running relay leaves its receive loop within
+ * one slice. Cancelling a write that is blocked on a slow client does not block
+ * and needs the aio alive, hence the mutex.
+ */
+static void ducknng_http_event_relays_stop(ducknng_http_server_state *state) {
+    ducknng_http_event_relay *all;
+    ducknng_http_event_relay *cur;
+    if (!state || !state->mu_initialized) return;
+    ducknng_mutex_lock(&state->mu);
+    for (;;) {
+        int starting = 0;
+        for (cur = state->event_relays; cur; cur = cur->next) {
+            if (cur->starting) starting = 1;
+            if (!cur->detached && cur->write_aio) nng_aio_cancel(cur->write_aio);
+        }
+        if (!starting || !state->cv_initialized) break;
+        ducknng_cond_wait(&state->cv, &state->mu);
+    }
+    all = state->event_relays;
+    state->event_relays = NULL;
+    ducknng_mutex_unlock(&state->mu);
+    while (all) {
+        ducknng_http_event_relay *next = all->next;
+        ducknng_http_event_relay_free(all);
+        all = next;
+    }
+}
+
+static int ducknng_http_event_relay_stopping(ducknng_http_event_relay *relay) {
+    int stopping;
+    ducknng_mutex_lock(&relay->state->mu);
+    stopping = relay->state->stopping;
+    ducknng_mutex_unlock(&relay->state->mu);
+    return stopping;
+}
+
+static int ducknng_http_event_relay_write(ducknng_http_event_relay *relay,
+    const char *text, size_t len) {
+    return ducknng_http_stream_write_chunk(relay->conn, relay->write_aio, text, len);
+}
+
+/*
+ * One message becomes one event: an optional "event:" line, then one "data:"
+ * line per line of the message, split at CR, LF, or CRLF as SSE parsers do.
+ * A message that is not UTF-8 text cannot be carried in data lines; the relay
+ * says so in a comment instead of dropping it silently.
+ */
+static int ducknng_http_event_relay_send(ducknng_http_event_relay *relay,
+    const uint8_t *data, size_t len) {
+    static const char skipped[] = ": skipped a message that is not UTF-8 text\n\n";
+    size_t event_len = relay->spec.event ? strlen(relay->spec.event) : 0;
+    size_t lines = 1;
+    size_t need;
+    size_t i;
+    size_t at = 0;
+    char *buf;
+    int rv;
+    if (!ducknng_sql_bytes_look_text(data, len)) {
+        return ducknng_http_event_relay_write(relay, skipped, sizeof(skipped) - 1);
+    }
+    for (i = 0; i < len; i++) {
+        if (data[i] == '\n' || (data[i] == '\r' && (i + 1 >= len || data[i + 1] != '\n'))) lines++;
+    }
+    if (len > SIZE_MAX / 8 || event_len > SIZE_MAX / 8) return NNG_EINVAL;
+    need = (event_len ? event_len + 8 : 0) + len + lines * 7 + 2;
+    buf = (char *)duckdb_malloc(need);
+    if (!buf) return NNG_ENOMEM;
+    if (event_len) {
+        memcpy(buf + at, "event: ", 7);
+        at += 7;
+        memcpy(buf + at, relay->spec.event, event_len);
+        at += event_len;
+        buf[at++] = '\n';
+    }
+    memcpy(buf + at, "data: ", 6);
+    at += 6;
+    for (i = 0; i < len; i++) {
+        if (data[i] == '\r' || data[i] == '\n') {
+            if (data[i] == '\r' && i + 1 < len && data[i + 1] == '\n') i++;
+            buf[at++] = '\n';
+            memcpy(buf + at, "data: ", 6);
+            at += 6;
+            continue;
+        }
+        buf[at++] = (char)data[i];
+    }
+    buf[at++] = '\n';
+    buf[at++] = '\n';
+    rv = ducknng_http_event_relay_write(relay, buf, at);
+    duckdb_free(buf);
+    return rv;
+}
+
+/* Opens, dials, and subscribes the relay's SUB socket. A stop that begins
+ * during the dial is seen at the first receive slice. */
+static int ducknng_http_event_relay_subscribe(ducknng_http_event_relay *relay) {
+    nng_socket sub;
+    int rv;
+    if (ducknng_socket_open_protocol("sub", &sub, NULL) != 0) return NNG_ENOMEM;
+    relay->sub = sub;
+    relay->sub_open = 1;
+    if (ducknng_http_event_relay_stopping(relay)) return NNG_ECLOSED;
+    rv = ducknng_socket_set_timeout_ms(relay->sub, 0,
+        (int)(relay->heartbeat_ms < DUCKNNG_HTTP_EVENT_RECV_SLICE_MS ?
+            relay->heartbeat_ms : DUCKNNG_HTTP_EVENT_RECV_SLICE_MS));
+    if (rv == 0) rv = ducknng_socket_apply_tls(relay->sub, relay->spec.url,
+        relay->spec.has_tls ? &relay->spec.tls_opts : NULL);
+    if (rv == 0) rv = ducknng_socket_dial(relay->sub, relay->spec.url);
+    if (rv == 0) rv = ducknng_socket_subscribe(relay->sub, relay->spec.topic, relay->spec.topic_len);
+    return rv;
+}
+
+/* A subscription that cannot be dialed still gets an ordinary HTTP error. */
+static void ducknng_http_event_relay_refuse(ducknng_http_event_relay *relay, int rv) {
+    const char *reason = ducknng_nng_strerror(rv);
+    size_t need = strlen(relay->spec.url) + strlen(reason) + 48;
+    char *text = (char *)duckdb_malloc(need);
+    int written;
+    if (!text) return;
+    written = snprintf(text, need, "ducknng: event route could not subscribe to %s: %s",
+        relay->spec.url, reason);
+    if (written > 0 && ducknng_http_stream_write_headers(relay->conn, relay->write_aio, 503,
+            "text/plain; charset=utf-8") == 0 &&
+        ducknng_http_event_relay_write(relay, text, (size_t)written) == 0) {
+        (void)ducknng_http_stream_write_terminator(relay->conn, relay->write_aio);
+    }
+    duckdb_free(text);
+}
+
+static void *ducknng_http_event_relay_thread(void *arg) {
+    static const char ready[] = ": ready\n\n";
+    static const char keepalive[] = ": keepalive\n\n";
+    ducknng_http_event_relay *relay = (ducknng_http_event_relay *)arg;
+    ducknng_http_server_state *state = relay->state;
+    uint64_t last_write;
+    int rv = ducknng_http_event_relay_subscribe(relay);
+    if (rv != 0) {
+        if (rv != NNG_ECLOSED) ducknng_http_event_relay_refuse(relay, rv);
+        rv = NNG_ECANCELED;
+    } else {
+        rv = ducknng_http_stream_write_headers(relay->conn, relay->write_aio, 200,
+            "text/event-stream; charset=utf-8");
+        if (rv == 0) rv = ducknng_http_event_relay_write(relay, ready, sizeof(ready) - 1);
+    }
+    last_write = ducknng_now_ms();
+    while (rv == 0 && !ducknng_http_event_relay_stopping(relay)) {
+        nng_msg *msg = NULL;
+        rv = ducknng_socket_recv(relay->sub, &msg);
+        if (rv == NNG_ETIMEDOUT) {
+            rv = 0;
+            if (ducknng_now_ms() - last_write >= relay->heartbeat_ms) {
+                rv = ducknng_http_event_relay_write(relay, keepalive, sizeof(keepalive) - 1);
+                last_write = ducknng_now_ms();
+            }
+            continue;
+        }
+        if (rv != 0) break;
+        rv = ducknng_http_event_relay_send(relay,
+            (const uint8_t *)nng_msg_body(msg), nng_msg_len(msg));
+        nng_msg_free(msg);
+        last_write = ducknng_now_ms();
+    }
+    /* A stop ends the loop between slices; end the body cleanly. */
+    if (rv == 0) {
+        (void)ducknng_http_stream_write_terminator(relay->conn, relay->write_aio);
+    }
+    ducknng_mutex_lock(&state->mu);
+    relay->detached = 1;
+    ducknng_mutex_unlock(&state->mu);
+    if (relay->sub_open) (void)ducknng_socket_close(relay->sub);
+    nng_aio_free(relay->write_aio);
+    relay->write_aio = NULL;
+    nng_http_conn_close(relay->conn);
+    relay->conn = NULL;
+    ducknng_mutex_lock(&state->mu);
+    relay->finished = 1;
+    if (state->cv_initialized) ducknng_cond_broadcast(&state->cv);
+    ducknng_mutex_unlock(&state->mu);
+    return NULL;
+}
+
+/*
+ * Hands one request's connection to a new relay thread. Nothing here blocks:
+ * the dial happens on the relay thread. On success the relay owns *spec, the
+ * connection, and the request, and the handler aio is finished; on failure
+ * nothing was taken and the caller answers the request.
+ */
+static int ducknng_http_start_event_relay(ducknng_http_server_state *state,
+    nng_http_conn *conn, nng_aio *handler_aio, nng_http_req *req,
+    ducknng_http_event_subscription *spec, uint32_t heartbeat_ms, char **errmsg) {
+    ducknng_http_event_relay *relay;
+    int rv;
+    if (errmsg) *errmsg = NULL;
+    ducknng_http_event_relays_reap(state);
+    relay = (ducknng_http_event_relay *)duckdb_malloc(sizeof(*relay));
+    if (!relay) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: out of memory starting event relay");
+        return -1;
+    }
+    memset(relay, 0, sizeof(*relay));
+    relay->state = state;
+    relay->heartbeat_ms = heartbeat_ms;
+    if (ducknng_aio_alloc(&relay->write_aio, NULL, NULL, 30000) != 0) {
+        duckdb_free(relay);
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: out of memory starting event relay");
+        return -1;
+    }
+    ducknng_mutex_lock(&state->mu);
+    if (state->stopping) {
+        ducknng_mutex_unlock(&state->mu);
+        nng_aio_free(relay->write_aio);
+        duckdb_free(relay);
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: HTTP server is stopping");
+        return -1;
+    }
+    relay->starting = 1;
+    relay->next = state->event_relays;
+    state->event_relays = relay;
+    ducknng_mutex_unlock(&state->mu);
+    rv = nng_http_hijack(conn);
+    if (rv != 0) {
+        ducknng_mutex_lock(&state->mu);
+        relay->detached = 1;
+        ducknng_mutex_unlock(&state->mu);
+        nng_aio_free(relay->write_aio);
+        relay->write_aio = NULL;
+        ducknng_mutex_lock(&state->mu);
+        relay->finished = 1;
+        relay->starting = 0;
+        if (state->cv_initialized) ducknng_cond_broadcast(&state->cv);
+        ducknng_mutex_unlock(&state->mu);
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: failed to hijack event route connection");
+        return -1;
+    }
+    relay->spec = *spec;
+    memset(spec, 0, sizeof(*spec));
+    nng_aio_finish(handler_aio, 0);
+    if (req) nng_http_req_free(req);
+    relay->conn = conn;
+    /* Creating under the lock means a reaper never sees a finished relay
+     * whose thread_started is not yet set. */
+    ducknng_mutex_lock(&state->mu);
+    rv = ducknng_thread_create(&relay->thread, ducknng_http_event_relay_thread, relay);
+    if (rv == 0) relay->thread_started = 1;
+    else relay->detached = 1;
+    ducknng_mutex_unlock(&state->mu);
+    if (rv != 0) {
+        nng_aio_free(relay->write_aio);
+        relay->write_aio = NULL;
+        nng_http_conn_close(conn);
+        relay->conn = NULL;
+    }
+    ducknng_mutex_lock(&state->mu);
+    if (rv != 0) relay->finished = 1;
+    relay->starting = 0;
+    if (state->cv_initialized) ducknng_cond_broadcast(&state->cv);
+    ducknng_mutex_unlock(&state->mu);
+    return 0;
+}
+
 static void ducknng_http_split_uri(const char *uri, char **out_path, const char **out_query) {
     const char *path_end;
     const char *query = NULL;
@@ -1320,6 +1655,42 @@ static void ducknng_http_route_handler(nng_aio *aio) {
                 rv = ducknng_http_alloc_text_response(&res, 403, "ducknng: caller identity not allowed for this route");
                 goto done;
             }
+        }
+        /* event route: resolve the subscription, then hand the connection to a
+         * relay thread. The request boundary ends once the SQL has run. */
+        if (route.response_mode == DUCKNNG_HTTP_ROUTE_RESPONSE_EVENTS) {
+            ducknng_http_event_subscription subscription;
+            int found = ducknng_service_resolve_event_route(state->svc, &request_ctx,
+                &subscription, &handler_err);
+            ducknng_authorizer_decision_reset(&decision);
+            ducknng_service_end_request(state->svc, caller_identity, 0);
+            if (found < 0) {
+                rv = ducknng_http_alloc_text_response(&res, 500,
+                    handler_err ? handler_err : "ducknng: event route handler failed");
+                if (handler_err) duckdb_free(handler_err);
+                goto done;
+            }
+            if (found == 0) {
+                rv = ducknng_http_alloc_text_response(&res, 404,
+                    "ducknng: event route has no subscription for this request");
+                goto done;
+            }
+            if (ducknng_http_start_event_relay(state, conn, aio, req, &subscription,
+                    route.event_heartbeat_ms, &handler_err) != 0) {
+                ducknng_http_event_subscription_reset(&subscription);
+                rv = ducknng_http_alloc_text_response(&res, 503,
+                    handler_err ? handler_err : "ducknng: event relay did not start");
+                if (handler_err) duckdb_free(handler_err);
+                goto done;
+            }
+            if (request_path) duckdb_free(request_path);
+            if (headers_json) duckdb_free(headers_json);
+            if (path_params_json) duckdb_free(path_params_json);
+            if (caller_identity) duckdb_free(caller_identity);
+            ducknng_http_route_reset(&request_ctx.route);
+            ducknng_http_route_reset(&route);
+            ducknng_http_route_reply_reset(&route_reply);
+            return;
         }
         /* streaming route: hijack connection and stream chunked response */
         if (route.response_mode == DUCKNNG_HTTP_ROUTE_RESPONSE_STREAM) {
@@ -1746,6 +2117,7 @@ void ducknng_http_server_stop(ducknng_http_server_state *state) {
         state->stopping = 1;
         ducknng_mutex_unlock(&state->mu);
     }
+    ducknng_http_event_relays_stop(state);
     if (state->server && state->rpc_handler) (void)nng_http_server_del_handler(state->server, state->rpc_handler);
     if (state->server && state->route_handler) (void)nng_http_server_del_handler(state->server, state->route_handler);
     if (state->server) nng_http_server_stop(state->server);

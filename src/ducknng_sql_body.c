@@ -2431,10 +2431,66 @@ static void ducknng_unregister_codec_scalar(duckdb_function_info info, duckdb_da
     }
 }
 
+/*
+ * ducknng_encode_rpc_call(method, payload) builds the version-1 call frame a
+ * manifest-declared JSON method accepts. It is the encoding counterpart of
+ * ducknng_decode_frame(): SQL clients send the frame with ducknng_request_raw()
+ * or a socket aio instead of assembling header bytes themselves. The payload is
+ * sent as JSON text; the server validates it against the method's schema. On
+ * this branch the frame comes from ducknng_build_reply(), which builds every
+ * frame type.
+ */
+static void ducknng_encode_rpc_call_scalar(duckdb_function_info info, duckdb_data_chunk input,
+    duckdb_vector output) {
+    idx_t count = duckdb_data_chunk_get_size(input);
+    idx_t row;
+    duckdb_vector method_vec = duckdb_data_chunk_get_vector(input, 0);
+    duckdb_vector payload_vec = duckdb_data_chunk_get_vector(input, 1);
+    for (row = 0; row < count; row++) {
+        nng_msg *msg;
+        char *method;
+        char *payload;
+        size_t method_len;
+        if (arg_is_null(method_vec, row) || arg_is_null(payload_vec, row)) {
+            set_null(output, row);
+            continue;
+        }
+        method = arg_varchar_dup(method_vec, row);
+        payload = arg_varchar_dup(payload_vec, row);
+        if (!method || !payload) {
+            if (method) duckdb_free(method);
+            if (payload) duckdb_free(payload);
+            duckdb_scalar_function_set_error(info, "ducknng: out of memory encoding RPC call");
+            return;
+        }
+        method_len = strlen(method);
+        if (method_len == 0 || method_len > DUCKNNG_MAX_METHOD_NAME_LEN) {
+            duckdb_free(method);
+            duckdb_free(payload);
+            duckdb_scalar_function_set_error(info,
+                "ducknng: RPC method name must be 1 to 128 bytes");
+            return;
+        }
+        msg = ducknng_build_reply(DUCKNNG_RPC_CALL, method, DUCKNNG_RPC_FLAG_PAYLOAD_JSON,
+            NULL, payload, (uint64_t)strlen(payload));
+        if (!msg) {
+            duckdb_free(method);
+            duckdb_free(payload);
+            duckdb_scalar_function_set_error(info, "ducknng: failed to encode RPC call frame");
+            return;
+        }
+        assign_blob(output, row, (const uint8_t *)nng_msg_body(msg), (idx_t)nng_msg_len(msg));
+        nng_msg_free(msg);
+        duckdb_free(method);
+        duckdb_free(payload);
+    }
+}
+
 int ducknng_register_sql_body(duckdb_connection con, ducknng_sql_context *ctx) {
     duckdb_type frame_types[1] = {DUCKDB_TYPE_BLOB};
     duckdb_type register_codec_types[2] = {DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_VARCHAR};
     duckdb_type unregister_codec_types[1] = {DUCKDB_TYPE_VARCHAR};
+    duckdb_type encode_call_types[2] = {DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_VARCHAR};
     if (!register_body_parse_table_named(con, ctx, "ducknng_parse_body")) return 0;
     if (!register_ncurl_table_named(con, ctx, "ducknng_ncurl_table")) return 0;
     if (!register_codecs_table_named(con, ctx, "ducknng_list_codecs")) return 0;
@@ -2457,6 +2513,8 @@ int ducknng_register_sql_body(duckdb_connection con, ducknng_sql_context *ctx) {
             ducknng_frame_name_scalar, ctx, frame_types, DUCKDB_TYPE_VARCHAR)) return 0;
     if (!DUCKNNG_REGISTER_SCALAR(con, "ducknng_frame_end_of_stream", 1,
             ducknng_frame_end_of_stream_scalar, ctx, frame_types, DUCKDB_TYPE_BOOLEAN)) return 0;
+    if (!DUCKNNG_REGISTER_SCALAR(con, "ducknng_encode_rpc_call", 2,
+            ducknng_encode_rpc_call_scalar, ctx, encode_call_types, DUCKDB_TYPE_BLOB)) return 0;
     if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_register_codec", 2,
             ducknng_register_codec_scalar, ctx, register_codec_types, DUCKDB_TYPE_BOOLEAN)) return 0;
     if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_unregister_codec", 1,

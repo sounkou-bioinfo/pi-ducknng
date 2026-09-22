@@ -1,0 +1,96 @@
+# name: test/sql/ducknng_event_routes.test
+# group: [ducknng]
+
+require ducknng
+
+# An event route relays one NNG PUB/SUB subscription to an HTTP client as
+# Server-Sent Events. The handler SQL names the subscription per request.
+
+query I
+SELECT ducknng_start_server('events_api', 'http://127.0.0.1:0/_ducknng', 1, 134217728, 300000, 0::UBIGINT)
+----
+true
+
+statement ok
+SET VARIABLE events_base = replace(
+  (SELECT listen FROM ducknng_list_servers() WHERE name = 'events_api')::VARCHAR, '/_ducknng', '')
+
+statement ok
+SET VARIABLE events_pub = (SELECT (ducknng_open_socket('pub')).socket_id)
+
+query I
+SELECT (ducknng_listen_socket(getvariable('events_pub'), 'inproc://ducknng_event_routes', 1048576, 0::UBIGINT)).ok
+----
+true
+
+# The topic comes from the query string; without one the handler returns no
+# row, which is a 404.
+query I
+SELECT ducknng_add_event_route('events_api', '/events',
+  'SELECT ''inproc://ducknng_event_routes'' AS url,
+          ducknng_http_query_param(''topic'') AS topic,
+          ''hint'' AS event
+   WHERE ducknng_http_query_param(''topic'') IS NOT NULL',
+  60000)
+----
+true
+
+query I
+SELECT ducknng_add_event_route('events_api', '/quiet',
+  'SELECT ''inproc://ducknng_event_routes'' AS url, ''nothing-matches''::BLOB AS topic', 100)
+----
+true
+
+query I
+SELECT ducknng_add_event_route('events_api', '/no-url', 'SELECT 1 AS topic')
+----
+true
+
+query I
+SELECT ducknng_add_event_route('events_api', '/refused',
+  'SELECT ''ipc:///nonexistent/ducknng_event_routes.ipc'' AS url')
+----
+true
+
+query IIIII
+SELECT method, is_event_route, event_heartbeat_ms, is_stream, stream_content_type IS NULL
+FROM ducknng_list_http_routes()
+WHERE service_name = 'events_api' AND path = '/events'
+----
+GET	true	60000	false	true
+
+statement error
+SELECT ducknng_add_event_route('events_api', '/too-fast', 'SELECT 1', 50)
+----
+heartbeat_ms must be between 100 and 300000
+
+query II
+SELECT status, body_text LIKE '%no subscription%'
+FROM ducknng_ncurl(getvariable('events_base') || '/events', 'GET', NULL, NULL, 5000, 0::UBIGINT)
+----
+404	true
+
+query II
+SELECT status, body_text LIKE '%url column%'
+FROM ducknng_ncurl(getvariable('events_base') || '/no-url', 'GET', NULL, NULL, 5000, 0::UBIGINT)
+----
+500	true
+
+query II
+SELECT status, body_text LIKE '%could not subscribe%'
+FROM ducknng_ncurl(getvariable('events_base') || '/refused', 'GET', NULL, NULL, 5000, 0::UBIGINT)
+----
+503	true
+
+# This release line has no incremental HTTP client, so the streamed body is
+# exercised by test/event_route_smoke.py through Python's http.client, and
+# stops racing relay starts by test/event_route_race.py.
+query I
+SELECT ducknng_stop_server('events_api')
+----
+true
+
+query I
+SELECT (ducknng_close_socket(getvariable('events_pub'))).ok
+----
+true
