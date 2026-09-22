@@ -171,6 +171,18 @@ test("reservations conflict, fence, expire, renew, and hide foreign lease IDs", 
     assert.equal(own.lease_id, encoded.lease_id);
     await rejectsWith(reserve(alice, "resource:../escape", "escape"), "invalid_argument");
     await rejectsWith(reserve(alice, "file:///tmp/%zz", "bad-escape"), "invalid_argument");
+
+    // Unregistering ends the instance's leases, and only once.
+    const gone = await s.call("unregister", { registration_id: alice.registration_id });
+    assert.equal(gone.released_reservations, 1);
+    assert.equal((await s.call("unregister", {
+      registration_id: alice.registration_id,
+    })).released_reservations, 0);
+    const freed = await reserve(bob, "file:///tmp/a%20b/c%23d", "after-unregister");
+    assert.equal(freed.active, true);
+    assert.equal((await s.call("list_reservations", {
+      registration_id: bob.registration_id,
+    })).reservations.filter(({ owner_agent_id }) => owner_agent_id === "alice").length, 0);
   } finally {
     await s.endpoint.close();
     await rm(work, { recursive: true, force: true });

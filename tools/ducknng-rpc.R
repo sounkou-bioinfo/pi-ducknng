@@ -127,7 +127,8 @@ rpc_json <- function(value) {
   ))
 }
 
-# A dispatch function returns list(flags, payload, keep_running).
+# A dispatch function returns list(flags, payload, keep_running), or
+# rpc_defer(poll) when the reply depends on work still in progress.
 rpc_error_reply <- function(error) {
   list(
     frame = rpc_encode_frame(
@@ -149,6 +150,16 @@ rpc_result_reply <- function(name, reply) {
     ),
     keep_running = !identical(reply$keep_running, FALSE)
   )
+}
+
+# poll() returns NULL until the reply is ready, then the reply itself. The
+# serving loop calls it on every tick and never blocks on it.
+rpc_defer <- function(poll) {
+  structure(list(poll = poll), class = "rpc_deferred")
+}
+
+rpc_json_reply <- function(value) {
+  list(flags = DUCKNNG_RPC_FLAG_PAYLOAD_JSON, payload = rpc_json(value))
 }
 
 rpc_handle_request <- function(request, manifest, manifest_raw, dispatch) {
@@ -180,36 +191,90 @@ rpc_handle_request <- function(request, manifest, manifest_raw, dispatch) {
   if (bitwAnd(as.integer(frame$flags), DUCKNNG_RPC_FLAG_PAYLOAD_JSON) == 0L) {
     stop("RPC call payload is not JSON")
   }
-  arguments <- jsonlite::fromJSON(rawToChar(frame$payload), simplifyVector = FALSE)
-  if (!is.list(arguments) || is.null(names(arguments))) {
+  arguments <- if (length(frame$payload) == 0L) {
+    structure(list(), names = character())
+  } else {
+    jsonlite::fromJSON(rawToChar(frame$payload), simplifyVector = FALSE)
+  }
+  if (!is.list(arguments) || (length(arguments) > 0L && is.null(names(arguments)))) {
     stop("RPC call payload must be a JSON object")
   }
-  rpc_result_reply(frame$name, dispatch(frame$name, arguments))
+  reply <- dispatch(frame$name, arguments)
+  if (inherits(reply, "rpc_deferred")) {
+    poll <- reply$poll
+    return(rpc_defer(function() {
+      ready <- poll()
+      if (is.null(ready)) NULL else rpc_result_reply(frame$name, ready)
+    }))
+  }
+  rpc_result_reply(frame$name, reply)
 }
 
-# Serves ducknng RPC on one NNG REP socket, one request at a time.
-# keep_alive() is polled every poll_ms and stops the loop when FALSE.
+# Serves ducknng RPC on one NNG REP socket through `contexts` REP contexts,
+# so a deferred reply never blocks other requests. keep_alive() is checked
+# every poll_ms and stops the loop when FALSE.
 rpc_serve <- function(listen, locator, manifest, dispatch,
-                      keep_alive = function() TRUE, poll_ms = 1000L) {
+                      keep_alive = function() TRUE, poll_ms = 1000L,
+                      contexts = 8L, tick_ms = 20L) {
   socket <- nanonext::socket("rep", listen = listen)
   on.exit(close(socket), add = TRUE)
   listener <- attr(socket, "listener")[[1L]]
   writeLines(attr(listener, "url"), locator)
   manifest_raw <- rpc_json(manifest)
-
-  repeat {
-    request <- nanonext::recv(socket, mode = "raw", block = poll_ms)
-    if (nanonext::is_error_value(request)) {
-      if (!keep_alive()) break
-      next
-    }
-    outcome <- tryCatch(
-      rpc_handle_request(request, manifest, manifest_raw, dispatch),
-      error = rpc_error_reply
+  ready <- nanonext::cv()
+  slots <- lapply(seq_len(contexts), function(index) {
+    context <- nanonext::context(socket)
+    list(
+      context = context,
+      request = nanonext::recv_aio(context, mode = "raw", cv = ready),
+      pending = NULL
     )
-    # A failed send means the requester is gone; NNG has already dropped it.
-    nanonext::send(socket, outcome$frame, mode = "raw", block = TRUE)
-    if (!outcome$keep_running || !keep_alive()) break
+  })
+  # A failed send means the requester is gone; NNG has already dropped it.
+  reply <- function(slot, outcome) {
+    nanonext::send(slot$context, outcome$frame, mode = "raw", block = TRUE)
+    slot$pending <- NULL
+    slot$request <- nanonext::recv_aio(slot$context, mode = "raw", cv = ready)
+    slot
+  }
+  settle <- function(step) {
+    tryCatch(step(), error = rpc_error_reply)
+  }
+  checked_at <- Sys.time()
+  running <- TRUE
+  while (running) {
+    waiting <- any(vapply(slots, function(slot) !is.null(slot$pending), TRUE))
+    nanonext::until(ready, if (waiting) tick_ms else poll_ms)
+    for (index in seq_along(slots)) {
+      slot <- slots[[index]]
+      if (!is.null(slot$pending)) {
+        outcome <- settle(slot$pending)
+        if (is.null(outcome)) next
+      } else if (nanonext::unresolved(slot$request)) {
+        next
+      } else {
+        request <- slot$request$data
+        if (nanonext::is_error_value(request)) {
+          slot$request <- nanonext::recv_aio(slot$context, mode = "raw", cv = ready)
+          slots[[index]] <- slot
+          next
+        }
+        outcome <- settle(function() {
+          rpc_handle_request(request, manifest, manifest_raw, dispatch)
+        })
+        if (inherits(outcome, "rpc_deferred")) {
+          slot$pending <- outcome$poll
+          slots[[index]] <- slot
+          next
+        }
+      }
+      slots[[index]] <- reply(slot, outcome)
+      if (!outcome$keep_running) running <- FALSE
+    }
+    if (difftime(Sys.time(), checked_at, units = "secs") * 1000 >= poll_ms) {
+      checked_at <- Sys.time()
+      if (!keep_alive()) running <- FALSE
+    }
   }
 }
 

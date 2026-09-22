@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import test from "node:test";
+import { promisify } from "node:util";
 
 import piDucknngExtension from "../extensions/pi-ducknng/index.ts";
 
@@ -95,7 +96,7 @@ test("model tools discover and call the ducknng manifest", async () => {
     assert.equal(manifestReceipt.manifest.server.protocol_version, 1);
     assert.deepEqual(
       manifestReceipt.manifest.methods.map(({ name }) => name),
-      ["eval", "close"],
+      ["eval", "submit", "job", "result", "interrupt", "jobs", "close"],
     );
     const evalMethod = manifestReceipt.manifest.methods.find(
       ({ name }) => name === "eval",
@@ -221,6 +222,84 @@ test("model tools discover and call the ducknng manifest", async () => {
     assert.deepEqual(closed.details.result, { closed: true });
   } finally {
     await shutdown();
+  }
+});
+
+test("long evaluations run as jobs that stream, fail with conditions, and stop on abort", async () => {
+  const work = await mkdtemp(resolve(tmpdir(), "pi-ducknng-jobs-test-"));
+  const previous = process.env.PI_DUCKNNG_R_LOCATOR;
+  process.env.PI_DUCKNNG_R_LOCATOR = resolve(work, "r.url");
+  const { tools, shutdown } = loadTools();
+  const signal = new AbortController().signal;
+  const call = (method, args, options = {}) => tools.get("ducknng_call").execute(
+    method, { url, method, arguments: args, ...options }, options.signal ?? signal);
+  let url;
+  try {
+    ({ url } = (await tools.get("persistent_r_start").execute("start", {}, signal)).details);
+    assert.match(url, /^ipc:\/\//);
+    assert.equal((await readFile(resolve(work, "r.url"), "utf8")).trim(), url);
+    await tools.get("ducknng_describe").execute("describe", { url }, signal);
+
+    const timedOut = await call("eval", { code: "Sys.sleep(1.5); 7L", wait_ms: 200 })
+      .catch((error) => error);
+    const [, id] = /r_timeout: evaluation continues as job (\d+)/.exec(timedOut.message);
+    const finished = await call("job", { job_id: Number(id), wait_ms: 10000 });
+    assert.equal(finished.details.result.state, "succeeded");
+    assert.equal((await call("result", { job_id: Number(id) })).details.result, 7);
+
+    const ticking = (await call("submit", {
+      code: "for (i in 1:3) { cat('tick', i, '\\n'); Sys.sleep(0.3) }; warning('late'); i",
+    })).details.result;
+    let output = "";
+    let offset = 0;
+    let conditions = [];
+    let report;
+    do {
+      report = (await call("job", {
+        job_id: ticking.job_id, wait_ms: 5000, output_offset: offset,
+        conditions_offset: conditions.length,
+      })).details.result;
+      output += report.output;
+      offset = report.output_offset;
+      conditions = conditions.concat(report.conditions);
+    } while (report.state === "queued" || report.state === "running");
+    assert.equal(output, "tick 1 \ntick 2 \ntick 3 \n[1] 3\n");
+    assert.deepEqual(conditions.map(({ type, message }) => [type, message]), [["warning", "late"]]);
+    assert.deepEqual(report.value.class, ["integer"]);
+
+    await assert.rejects(call("eval", { code: "f <- function() stop('boom'); f()" }),
+      /r_error: job \d+: boom in f\(\) \(class simpleError, error, condition\)/);
+
+    // A second client on the same URL sees the agent's job and interrupts it.
+    const running = (await call("submit", {
+      code: "for (k in 1:300) { counter <- k; Sys.sleep(0.1) }",
+    })).details.result;
+    await promisify(execFile)(process.env.RSCRIPT ?? "Rscript", ["--vanilla", "-e", [
+      "source('tools/ducknng-rpc.R')",
+      `url <- '${url}'`,
+      "Sys.sleep(0.5)",
+      "jobs <- rpc_call(url, 'jobs')$jobs",
+      `stopifnot(any(vapply(jobs, function(job) job$job_id == ${running.job_id} && job$state == 'running', TRUE)))`,
+      `invisible(rpc_call(url, 'interrupt', list(job_id = ${running.job_id})))`,
+    ].join("; ")], { cwd: resolve(import.meta.dirname, "..") });
+    const stopped = (await call("job", { job_id: running.job_id })).details.result;
+    assert.equal(stopped.state, "interrupted");
+
+    const aborter = new AbortController();
+    const started = Date.now();
+    const aborted = call("eval", { code: "Sys.sleep(30)", wait_ms: 40000 },
+      { signal: aborter.signal, timeout_ms: 45000 });
+    setTimeout(() => aborter.abort(), 500);
+    await assert.rejects(aborted, /r_interrupted|abort/i);
+    assert.ok(Date.now() - started < 5000, "abort did not interrupt the evaluation");
+    const kept = await call("eval", { code: "counter > 0" });
+    assert.equal(kept.details.result, true);
+  } finally {
+    await shutdown();
+    if (previous === undefined) delete process.env.PI_DUCKNNG_R_LOCATOR;
+    else process.env.PI_DUCKNNG_R_LOCATOR = previous;
+    await assert.rejects(readFile(resolve(work, "r.url"), "utf8"), /ENOENT/);
+    await rm(work, { recursive: true, force: true });
   }
 });
 

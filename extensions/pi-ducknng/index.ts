@@ -1,5 +1,5 @@
 import { execFile, spawn, type ChildProcess } from "node:child_process";
-import { access, mkdtemp, readFile, rm } from "node:fs/promises";
+import { access, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -21,6 +21,7 @@ const DUCKNNG_WIRE_VERSION = 1;
 const DUCKNNG_RPC_CALL = 1;
 const DUCKNNG_RPC_FLAG_PAYLOAD_JSON = 4;
 const DUCKNNG_RPC_FLAG_PAYLOAD_ARROW_STREAM = 8;
+const DEFAULT_CALL_TIMEOUT_MS = 30_000;
 const extensionBuilds = new Map<string, Promise<void>>();
 const MANIFEST_SQL = `
   SELECT type_name, name, flags, error AS error_text, payload_text
@@ -284,7 +285,28 @@ type REndpoint = {
   child: ChildProcess;
   observer: ProcessObserver;
   processOutput: () => string;
+  sharedLocator?: string;
 };
+
+/**
+ * PI_DUCKNNG_R_LOCATOR names a file that receives the endpoint URL, so another
+ * local client can attach to the same R session. The URL is an ipc:// socket
+ * in a directory only this user can enter.
+ */
+async function shareLocator(url: string): Promise<string | undefined> {
+  const path = environment("PI_DUCKNNG_R_LOCATOR");
+  if (!path) return undefined;
+  const staged = `${path}.${process.pid}.tmp`;
+  await writeFile(staged, `${url}\n`, { mode: 0o600 });
+  await rename(staged, path);
+  return path;
+}
+
+async function unshareLocator(endpoint: REndpoint): Promise<void> {
+  if (!endpoint.sharedLocator) return;
+  const current = await readFile(endpoint.sharedLocator, "utf8").catch(() => "");
+  if (current.trim() === endpoint.url) await rm(endpoint.sharedLocator, { force: true });
+}
 
 type EndpointMethod = {
   [key: string]: unknown;
@@ -321,7 +343,8 @@ async function startREndpoint(root: string): Promise<REndpoint> {
   const observer = observeChild(child);
   try {
     const url = await waitForLocator(locator, observer, processOutput);
-    return { extensionPath, work, url, child, observer, processOutput };
+    const sharedLocator = await shareLocator(url);
+    return { extensionPath, work, url, child, observer, processOutput, sharedLocator };
   } catch (error) {
     try {
       await terminateChild(child, observer);
@@ -351,6 +374,7 @@ async function disposeREndpoint(endpoint: REndpoint): Promise<void> {
     }
   }
   await terminateChild(endpoint.child, endpoint.observer);
+  await unshareLocator(endpoint);
   await rm(endpoint.work, { recursive: true, force: true });
 }
 
@@ -518,6 +542,12 @@ const CallParameters = Type.Object(
         description: "JSON arguments declared by the endpoint manifest",
       }),
     ),
+    timeout_ms: Type.Optional(Type.Integer({
+      minimum: 1000,
+      maximum: 660_000,
+      description:
+        "How long to wait for the reply, 30000 by default. A method that waits, such as an eval with wait_ms, needs a longer timeout than its wait.",
+    })),
   },
   { additionalProperties: false },
 );
@@ -567,6 +597,7 @@ async function startLocalREndpoint(): Promise<REndpoint> {
     const stale = localEndpoint;
     localEndpoint = undefined;
     manifests.delete(stale.url);
+    await unshareLocator(stale);
     await rm(stale.work, { recursive: true, force: true });
   }
   localEndpointStart ??= startREndpoint(PACKAGE_ROOT);
@@ -631,6 +662,7 @@ async function callEndpointNow(
   url: string,
   method: string,
   args: Record<string, unknown> | undefined,
+  timeoutMs: number,
 ): Promise<Record<string, unknown>> {
   declaredJsonMethod(url, method);
   const extensionPath = await ensureDucknngExtension(PACKAGE_ROOT);
@@ -639,6 +671,7 @@ async function callEndpointNow(
     url,
     method,
     args ?? {},
+    timeoutMs,
   );
 
   const endpoint = localEndpoint?.url === url ? localEndpoint : undefined;
@@ -661,6 +694,7 @@ async function callEndpointNow(
             `R endpoint exited with status ${outcome.code ?? outcome.signal}: ${endpoint.processOutput()}`,
           );
         }
+        await unshareLocator(endpoint);
         await rm(endpoint.work, { recursive: true, force: true });
       } catch (error) {
         try {
@@ -680,14 +714,33 @@ async function callEndpointNow(
   return result;
 }
 
+/**
+ * Aborting a call to the R endpoint this extension placed interrupts that
+ * endpoint's unfinished jobs, so the waiting call returns promptly and the R
+ * session keeps its state. The interrupt bypasses the per-URL turn.
+ */
+function interruptOnAbort(url: string, signal: AbortSignal | undefined): () => void {
+  const endpoint = localEndpoint?.url === url ? localEndpoint : undefined;
+  if (!signal || !endpoint) return () => {};
+  const interrupt = () => {
+    if (!manifests.get(url)?.methods.some(({ name }) => name === "interrupt")) return;
+    void rpcCallThroughDucknng(endpoint.extensionPath, url, "interrupt", {}).catch(() => undefined);
+  };
+  signal.addEventListener("abort", interrupt, { once: true });
+  return () => signal.removeEventListener("abort", interrupt);
+}
+
 async function callEndpoint(
   url: string,
   method: string,
   args: Record<string, unknown> | undefined,
+  options: { timeoutMs?: number; signal?: AbortSignal } = {},
 ): Promise<Record<string, unknown>> {
   return await withEndpointTurn(url, async () => {
+    options.signal?.throwIfAborted();
+    const release = interruptOnAbort(url, options.signal);
     try {
-      return await callEndpointNow(url, method, args);
+      return await callEndpointNow(url, method, args, options.timeoutMs ?? DEFAULT_CALL_TIMEOUT_MS);
     } catch (error) {
       const endpoint = localEndpoint?.url === url ? localEndpoint : undefined;
       const exited = endpoint && (
@@ -699,9 +752,12 @@ async function callEndpoint(
       if (endpoint && exited) {
         manifests.delete(url);
         localEndpoint = undefined;
+        await unshareLocator(endpoint);
         await rm(endpoint.work, { recursive: true, force: true });
       }
       throw error;
+    } finally {
+      release();
     }
   });
 }
@@ -818,7 +874,7 @@ export default function piDucknngExtension(pi: ExtensionAPI): void {
     name: "persistent_r_start",
     label: "Start persistent R endpoint",
     description:
-      "Start the local persistent R adapter and return its NNG URL. Describe that URL to obtain endpoint-owned methods, schemas, and examples before calling it.",
+      "Start the local persistent R adapter and return its NNG URL. Describe that URL to obtain endpoint-owned methods, schemas, and examples before calling it. Long evaluations run as jobs whose output can be followed and interrupted.",
     parameters: StartParameters,
     execute: async (_toolCallId, _params, signal) => {
       signal?.throwIfAborted();
@@ -885,6 +941,7 @@ export default function piDucknngExtension(pi: ExtensionAPI): void {
         params.url,
         params.method,
         params.arguments,
+        { timeoutMs: params.timeout_ms, signal },
       );
       signal?.throwIfAborted();
       const details = toolResultDetails(result);

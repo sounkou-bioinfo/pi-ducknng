@@ -16,8 +16,10 @@ The Pi package exposes three generic model tools:
 
 - `persistent_r_start()` starts the local R endpoint and returns its NNG URL;
 - `ducknng_describe(url)` returns an endpoint's ducknng version-1 manifest;
-- `ducknng_call(url, method, arguments)` rejects undeclared methods and invokes
-  a declared JSON-request method through a fresh DuckDB client.
+- `ducknng_call(url, method, arguments, timeout_ms)` rejects undeclared
+  methods and invokes a declared JSON-request method through a fresh DuckDB
+  client. The reply timeout defaults to 30 seconds; a method that waits, such
+  as an `eval` with `wait_ms`, needs a longer one.
 
 ```text
 Pi extension -> @duckdb/node-api -> DuckDB -> vendored ducknng
@@ -38,13 +40,48 @@ parameters and never enters SQL text, tool schemas, or results.
 
 ## R endpoint
 
-`tools/pi-r-endpoint.R` declares `eval` and `close`. `eval` accepts R source
-plus `envir` and `enclos` expressions and evaluates in a mirai-owned
-persistent environment. Supported atomic vectors and data frames return as
-nanoarrow IPC. Other R values fail explicitly. `close` stops the endpoint and
-returns a JSON acknowledgement. The Pi extension passes its process ID in
-`PI_DUCKNNG_PARENT_PID`. The endpoint checks that process once a second and
-exits after it disappears, so idle time never discards the R environment.
+`tools/pi-r-endpoint.R` evaluates R in one mirai daemon that holds a
+persistent environment. Every evaluation is a job. The endpoint serves
+ducknng RPC through several NNG REP contexts, so a request that waits on a job
+never blocks another request, and evaluations run one at a time in submission
+order on the daemon. Its manifest declares:
+
+- `eval(code, envir, enclos, wait_ms)` waits up to `wait_ms`, 20 seconds by
+  default, and returns the value as nanoarrow IPC. Data frames and atomic
+  vectors are representable; other values fail with `r_unrepresentable`. An R
+  error fails with `r_error` and the condition's message, call, and classes.
+  An evaluation still running at `wait_ms` fails with `r_timeout` naming its
+  job, which keeps running;
+- `submit(code, envir, enclos)` starts a job and returns its `job_id` at once.
+  Visible values print to the job's output as they would at the console;
+- `job(job_id, wait_ms, output_offset, conditions_offset)` reports the job's
+  state, the output and conditions produced since the given offsets, and its
+  error or value summary. It returns as soon as there is progress or the wait
+  ends, so a client follows a job by passing back the offsets it received;
+- `result(job_id, offset, limit)` returns a finished job's value, or a slice
+  of its rows, as nanoarrow IPC;
+- `interrupt(job_id)` interrupts one queued or running job, or every
+  unfinished job when `job_id` is omitted. The daemon and its environment
+  survive;
+- `jobs()` lists recent jobs, and `close()` stops the endpoint.
+
+On the daemon, standard output and messages go to a per-job file as they are
+written, and each warning, message, and error is appended to a per-job
+conditions file as one JSON line. The endpoint reads both at byte and line
+offsets, never splitting a UTF-8 character, which is how output streams to a
+client over request/reply. The endpoint keeps the 32 most recent jobs.
+
+The endpoint listens on `ipc://` inside the directory that holds its locator.
+The Pi extension creates that directory with mode 0700, so only its user can
+attach. Any client that speaks the ducknng envelope can attach to the same
+session with the URL: the extension writes it to `PI_DUCKNNG_R_LOCATOR` when
+that variable names a file, and removes the file when the endpoint stops.
+When a model call to the endpoint the extension placed is aborted, the
+extension calls `interrupt` directly, outside the per-URL turn, so the
+waiting call returns and the session keeps its state. The Pi extension passes
+its process ID in `PI_DUCKNNG_PARENT_PID`. The endpoint checks that process
+once a second and exits after it disappears, so idle time never discards the
+R environment.
 
 ## Coordination endpoint
 
@@ -113,9 +150,9 @@ only latency, because polling still repairs it.
   value from a project-wide counter. Retrying with the same `operation_key`
   replays the original result. Reacquiring after release or expiry requires a
   new key. Renewal presents the `lease_id`, and `release` affects only the
-  caller's own lease. A lease ends only by release or at its TTL, not when
-  its holder unregisters. `list_reservations` returns lease IDs only to their
-  owner.
+  caller's own lease. `unregister` releases every lease its instance holds;
+  a holder that stops without unregistering keeps them until their TTL.
+  `list_reservations` returns lease IDs only to their owner.
 
 ## Pi coordination adapter
 
@@ -291,6 +328,11 @@ checkout path:
 `test/pi-extension.test.js` covers the following:
 
 - manifest discovery and declared-call validation;
+- an eval that outlives its wait continuing as a job, streamed output and
+  conditions followed by offset, structured R errors, and an interrupt sent
+  by a second R client attached to the same URL;
+- an aborted call interrupting its evaluation within five seconds while the
+  session keeps its state, and the shared locator file;
 - process persistence, selected environments, and active bindings;
 - Arrow IPC and request serialization;
 - stale-process handling and cleanup;
@@ -357,7 +399,5 @@ the R package smoke tests against a temporary installation.
 Each of these requires its own producer, consumer, ownership rules, and
 executable proof before it is added:
 
-- structured R conditions, interruption, streaming, and attachment to the R
-  endpoint by a second non-Pi client;
 - an SSE hint stream for plain HTTP clients, which needs a ducknng route that
   can yield rows as events arrive.
