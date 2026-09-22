@@ -1,5 +1,5 @@
 DUCKNNG_CI_TOOLS_COMMIT := ef15a2a7453db5b4f85b7c668a545ae2f1193ff6
-DUCKNNG_EXTENSION_VERSION := v0.1.2-duckdb1.5.4
+DUCKNNG_EXTENSION_VERSION := v0.1.3-duckdb1.5.4
 DUCKNNG_EXTENSION := vendor/ducknng/build/release/ducknng.duckdb_extension
 # Executable documentation runs the Pi version pinned in DEPENDENCIES, found
 # on PATH so rendered commands read `pi` rather than a machine-local path.
