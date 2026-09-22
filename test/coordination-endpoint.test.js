@@ -187,3 +187,41 @@ test("two Pi sessions coordinate through the manifested endpoint", async () => {
     await rm(work, { recursive: true, force: true });
   }
 });
+
+test("the endpoint command takes its listeners and TLS files as options", async () => {
+  const work = await mkdtemp(resolve(tmpdir(), "pi-ducknng-endpoint-options-"));
+  const run = (...args) => new Promise((resolveRun) => {
+    const child = spawn(process.execPath, ["tools/pi-coordination-endpoint.ts", ...args],
+      { cwd: ROOT, stdio: ["ignore", "pipe", "pipe"] });
+    let output = "";
+    child.stdout.on("data", (chunk) => { output += chunk; });
+    child.stderr.on("data", (chunk) => { output += chunk; });
+    child.once("exit", (code) => resolveRun({ code, output }));
+    setTimeout(() => child.kill(), 10000).unref();
+  });
+  const database = resolve(work, "c.duckdb");
+  try {
+    const half = await run(resolve(work, "a.url"), database, "--tls-cert-key", "server.pem");
+    assert.equal(half.code, 1);
+    assert.match(half.output, /mutual TLS needs both --tls-cert-key and --tls-ca/);
+    const ungranted = await run(resolve(work, "b.url"), database,
+      "--tls-cert-key", "server.pem", "--tls-ca", "ca.pem");
+    assert.match(ungranted.output, /a mutual-TLS endpoint needs --grants/);
+
+    const locator = resolve(work, "sse.url");
+    const child = spawn(process.execPath,
+      ["tools/pi-coordination-endpoint.ts", locator, database, "--sse", "http://127.0.0.1:0"],
+      { cwd: ROOT, stdio: ["ignore", "pipe", "ignore"] });
+    try {
+      const announced = await new Promise((resolveLine, reject) => {
+        child.stdout.once("data", (chunk) => resolveLine(String(chunk)));
+        child.once("exit", (code) => reject(new Error(`endpoint exited with ${code}`)));
+      });
+      assert.match(announced, /^server-sent events: http:\/\/127\.0\.0\.1:\d+\/events\?topic=<topic>/);
+    } finally {
+      await stopEndpoint(child);
+    }
+  } finally {
+    await rm(work, { recursive: true, force: true });
+  }
+});

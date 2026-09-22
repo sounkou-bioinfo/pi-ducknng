@@ -14,11 +14,11 @@ source("tools/guides/setup.R")
 Pi sessions and harness lanes wake on mail through an NNG subscription. A
 client without an NNG binding, such as a browser `EventSource`, a dashboard,
 or `curl`, can follow the same wake-ups as Server-Sent Events. The endpoint
-serves them when `PI_DUCKNNG_COORDINATION_SSE_URL` names an HTTP listener.
+serves them when `--sse` names an HTTP listener.
 
 ```{bash}
-PI_DUCKNNG_COORDINATION_SSE_URL=http://127.0.0.1:0 node tools/pi-coordination-endpoint.ts \
-  "$STATE/coordination.url" "$STATE/coordination.duckdb" > "$STATE/endpoint.log" 2>&1 &
+node tools/pi-coordination-endpoint.ts "$STATE/coordination.url" "$STATE/coordination.duckdb" \
+  --sse http://127.0.0.1:0 > "$STATE/endpoint.log" 2>&1 &
 echo $! > "$STATE/endpoint.pid"
 until [ -s "$STATE/coordination.url" ]; do sleep 0.1; done
 ```

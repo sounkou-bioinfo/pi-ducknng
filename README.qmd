@@ -35,9 +35,11 @@ favour of a clearer model.
 pi install git:github.com/sounkou-bioinfo/pi-ducknng
 ```
 
-The first call builds the pinned ducknng source, which needs Git, Make, CMake,
-Python and a C/C++ toolchain. The persistent R endpoint needs the packages
-under `Imports` in [`DESCRIPTION`](DESCRIPTION).
+The first call downloads the pinned ducknng release for Linux or macOS and
+checks its SHA-256 against [`DEPENDENCIES`](DEPENDENCIES). In a source checkout,
+`make ducknng-extension` builds it instead, and `DUCKNNG_EXTENSION_PATH` names
+any other build. The persistent R endpoint needs `Rscript` on `PATH` and the
+packages under `Imports` in [`DESCRIPTION`](DESCRIPTION).
 
 ## Persistent R
 
@@ -48,8 +50,17 @@ same R process across calls:
 Using the package tools, start the R adapter and follow its ducknng manifest. In one eval call, create and return `mpg_by_cyl <- aggregate(mpg ~ cyl, data = datasets::mtcars, FUN = mean)`. In a separate eval call, use the persisted `mpg_by_cyl` to return `transform(mpg_by_cyl, delta_from_4cyl = mpg - mpg[cyl == 4])`. Close the endpoint. Report the manifested methods and decoded rows, beginning with `AGENT_DUCKNNG_MANIFEST_CALL_OK` only when both calls used the same endpoint process and succeeded.
 ```
 
-The R environment lives until `close` or until the Pi process that started it
-exits. Results come back as Arrow IPC.
+Code runs in named scopes, `main` unless another is given. Each scope keeps its
+objects until `reset` or until `close` or the exit of the Pi process that
+started the endpoint, and `scopes` lists them. Results come back as Arrow IPC.
+
+Every evaluation is a job. An `eval` that outlives its `wait_ms` keeps running
+as a job, and `submit`, `job`, `result` and `interrupt` follow its output as it
+prints, fetch its value, and stop it without losing the session. Aborting a Pi
+tool call interrupts the job it was waiting on. The endpoint listens on an
+`ipc://` socket in a directory only its user can enter. When
+`PI_DUCKNNG_R_LOCATOR` names a file, Pi writes the URL there, and another
+client, such as a DuckDB SQL session, can attach to the same session.
 
 ## Parallel research
 
@@ -160,6 +171,8 @@ flowchart LR
 - Pi owns the conversation. The adapter keeps the registration out of model
   context and frames every delivered message with its sender, so another
   agent's text never reads as the user's.
+- Clients without an NNG binding follow the same wake-ups as Server-Sent
+  Events when the host is started with `--sse`.
 
 ## Guarantees
 
@@ -177,9 +190,8 @@ flowchart LR
 
 Over `ipc://`, filesystem permissions decide who may connect. To serve agents
 on other hosts, run the endpoint on mutual TLS with a grants file that says
-which certificate may act as which agent. ducknng holds the TLS material in
-memory, so it can come straight from the environment. A throwaway CA signs the
-certificates here:
+which certificate may act as which agent. Each party's certificate and key sit
+in one PEM file. A throwaway CA signs the certificates here:
 
 ```{bash}
 #| include: false
@@ -193,6 +205,7 @@ issue() {
   printf '%b\n' "$3" > "$1.ext"
   openssl x509 -req -in "$1.csr" -CA ca.pem -CAkey ca.key -CAcreateserial \
     -out "$1.crt" -days 1 -extfile "$1.ext" > /dev/null 2>&1
+  cat "$1.crt" "$1.key" > "$1.pem"
 }
 issue server 127.0.0.1 'subjectAltName=IP:127.0.0.1\nextendedKeyUsage=serverAuth'
 issue reviewer reviewer 'extendedKeyUsage=clientAuth'
@@ -203,27 +216,23 @@ issue intruder intruder 'extendedKeyUsage=clientAuth'
 cat > "$STATE/grants.json" <<'JSON'
 [{"peer_identity": "tls:cn:reviewer", "project_id": "readme", "agent_id": "reviewer"}]
 JSON
-PI_DUCKNNG_COORDINATION_TLS_CERT_PEM="$(cat "$STATE/tls/server.crt")" \
-PI_DUCKNNG_COORDINATION_TLS_KEY_PEM="$(cat "$STATE/tls/server.key")" \
-PI_DUCKNNG_COORDINATION_TLS_CA_PEM="$(cat "$STATE/tls/ca.pem")" \
-PI_DUCKNNG_COORDINATION_GRANTS_FILE="$STATE/grants.json" \
-PI_DUCKNNG_COORDINATION_EVENTS_URL="wss://127.0.0.1:0/events" \
-  node tools/pi-coordination-endpoint.ts "$STATE/mtls.url" "$STATE/mtls.duckdb" \
-  tls+tcp://127.0.0.1:0 > "$STATE/mtls.log" 2>&1 &
+node tools/pi-coordination-endpoint.ts "$STATE/mtls.url" "$STATE/mtls.duckdb" \
+  tls+tcp://127.0.0.1:0 \
+  --tls-cert-key "$STATE/tls/server.pem" --tls-ca "$STATE/tls/ca.pem" \
+  --grants "$STATE/grants.json" --events wss://127.0.0.1:0/events \
+  > "$STATE/mtls.log" 2>&1 &
 echo $! > "$STATE/mtls.pid"
 until [ -s "$STATE/mtls.url" ]; do sleep 0.1; done
 ```
 
-Pi sessions pass their certificate the same way, through
-`PI_DUCKNNG_TLS_CA_PEM`, `PI_DUCKNNG_TLS_CERT_PEM` and
-`PI_DUCKNNG_TLS_KEY_PEM`, or through the matching `*_FILE` variables.
+Pi sessions name their CA and their own certificate file in
+`PI_DUCKNNG_TLS_CA_FILE` and `PI_DUCKNNG_TLS_CERT_KEY_FILE`.
 `tools/coordination-call.ts` reads the same variables:
 
 ```{bash}
 register_as() {
-  PI_DUCKNNG_TLS_CA_PEM="$(cat "$STATE/tls/ca.pem")" \
-  PI_DUCKNNG_TLS_CERT_PEM="$(cat "$STATE/tls/$1.crt")" \
-  PI_DUCKNNG_TLS_KEY_PEM="$(cat "$STATE/tls/$1.key")" \
+  PI_DUCKNNG_TLS_CA_FILE="$STATE/tls/ca.pem" \
+  PI_DUCKNNG_TLS_CERT_KEY_FILE="$STATE/tls/$1.pem" \
     node tools/coordination-call.ts "$(cat "$STATE/mtls.url")" register \
     '{"project_id": "readme", "agent_id": "reviewer", "instance_id": "'"$1"'",
       "operation_key": "demo"}' agent_id,events.url 2>&1
@@ -260,8 +269,11 @@ are recorded when the guide is built.
 
 - [An agent calls persistent R](https://sounkou-bioinfo.github.io/pi-ducknng/articles/agent-product-path.html):
   state that survives across calls.
-- [An active binding in a selected environment](https://sounkou-bioinfo.github.io/pi-ducknng/articles/agent-active-binding.html):
-  the `envir` and `enclos` controls.
+- [An active binding in a named scope](https://sounkou-bioinfo.github.io/pi-ducknng/articles/agent-active-binding.html):
+  scopes that keep separate objects, and listing them without forcing a binding.
+- [Follow, interrupt, and share a long R computation](https://sounkou-bioinfo.github.io/pi-ducknng/articles/r-jobs.html):
+  an agent attaches to a running session, follows a job's output, and
+  interrupts it, and a DuckDB SQL session reads the result.
 
 **Coordination**
 
@@ -276,11 +288,13 @@ are recorded when the guide is built.
   fencing values.
 - [Recover from crashes and restarts](https://sounkou-bioinfo.github.io/pi-ducknng/articles/coordination-durability.html):
   an endpoint killed mid-lease, redelivery after restart, and dead letters.
+- [Follow a mailbox from any HTTP client](https://sounkou-bioinfo.github.io/pi-ducknng/articles/coordination-sse.html):
+  `curl -N` reads one mailbox's wake-ups as Server-Sent Events.
 
 **Deployment**
 
 - [Serve agents across hosts with mutual TLS](https://sounkou-bioinfo.github.io/pi-ducknng/articles/coordination-mtls.html):
-  in-memory PEM, grants, refused impersonation, and hints over `wss://`.
+  PEM files, grants, refused impersonation, and hints over `wss://`.
 - [Embed coordination in an AgentHarness host](https://sounkou-bioinfo.github.io/pi-ducknng/articles/coordination-harness.html):
   a mailbox delivered into a harness lane, with one lane entry per message
   even when an acknowledgement is lost.

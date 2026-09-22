@@ -3,7 +3,7 @@ import { StatementType } from "@duckdb/node-api";
 import {
   PACKAGE_ROOT,
   closeDucknngConnection,
-  ensureDucknngExtension,
+  resolveDucknngExtension,
   openDucknngConnection,
 } from "../extensions/pi-ducknng/index.ts";
 
@@ -33,7 +33,7 @@ async function main(): Promise<void> {
   const [file, ...assignments] = process.argv.slice(2);
   if (!file) throw new Error(USAGE);
   const { instance, connection } = await openDucknngConnection(
-    await ensureDucknngExtension(PACKAGE_ROOT),
+    await resolveDucknngExtension(PACKAGE_ROOT),
   );
   try {
     for (const assignment of assignments) {

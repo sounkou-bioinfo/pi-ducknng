@@ -22,9 +22,9 @@ Depends:
     R (>= 4.3)
 Imports:
     jsonlite,
-    mirai,
+    mirai (>= 2.6.0),
     nanoarrow,
-    nanonext
+    nanonext (>= 1.9.0)
 Suggests:
     knitr,
     piknit,

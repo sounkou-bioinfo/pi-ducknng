@@ -176,19 +176,31 @@ Fencing values increase across the whole project. A store that remembers the
 largest value it has accepted can refuse a write from a holder whose lease
 already passed to someone else, even one that paused through its whole TTL.
 
-## Expiry
+## When a holder leaves
 
-A lease ends at its TTL even if its holder never releases it. Unregistering
-does not end it early, so a holder that leaves without releasing blocks the
-resource until then. The shortest TTL is five seconds:
+Unregistering ends every lease the instance holds. The Pi adapter
+unregisters when its session shuts down:
 
 ```{r}
-deployer <- register("deployer")
+leaving <- register("leaving")
+invisible(rpc_call(url, "reserve", list(
+  registration_id = leaving$registration_id, resource = "resource:release-notes",
+  operation_key = "notes", ttl_ms = 300000
+)))
+left <- rpc_call(url, "unregister", list(registration_id = leaving$registration_id))
+c(released_reservations = left$released_reservations,
+  next_holder = try_reserve(writer, "resource:release-notes"))
+```
+
+A holder that stops without unregistering, such as a crashed process, keeps
+its leases until their TTL runs out. The shortest TTL is five seconds:
+
+```{r}
+crashed <- register("crashed")
 brief <- rpc_call(url, "reserve", list(
-  registration_id = deployer$registration_id, resource = "resource:deploy",
+  registration_id = crashed$registration_id, resource = "resource:deploy",
   operation_key = "deploy", ttl_ms = 5000
 ))
-invisible(rpc_call(url, "unregister", list(registration_id = deployer$registration_id)))
 before <- try_reserve(writer, "resource:deploy", "deploy-now")
 Sys.sleep(5.5)
 after <- try_reserve(writer, "resource:deploy", "deploy-later")
@@ -217,7 +229,8 @@ stopifnot(
   !file.exists(".guide-scratch/notes.md"),
   isTRUE(replayed$replayed), isTRUE(renewed$renewed),
   next_holder$fencing_value > held$fencing_value,
-  startsWith(before, "resource_conflict"), identical(after, "reserved")
+  startsWith(before, "resource_conflict"), identical(after, "reserved"),
+  left$released_reservations == 1
 )
 unlink(".guide-scratch", recursive = TRUE)
 ```

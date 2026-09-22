@@ -1,0 +1,152 @@
+---
+title: "Follow, interrupt, and share a long R computation"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Follow, interrupt, and share a long R computation}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include = FALSE}
+source("tools/guides/setup.R")
+```
+
+Every evaluation on the persistent R endpoint is a job on one R process.
+`eval` waits for a job and returns its value. `submit` returns a job ID at
+once, and `job` reports what the job has printed and signalled so far. Any
+client that can reach the endpoint's URL can follow a job, interrupt it, or
+read the session's objects, and interrupting a job keeps the session.
+
+## A session with long work in it
+
+This time the guide starts the endpoint and submits the work itself. Pi's
+`persistent_r_start` starts the same endpoint, and it writes the URL to the
+file named in `PI_DUCKNNG_R_LOCATOR` so that another client can attach.
+
+```{bash}
+Rscript --vanilla tools/pi-r-endpoint.R "$STATE/r.url" > "$STATE/r.log" 2>&1 &
+until [ -s "$STATE/r.url" ]; do sleep 0.1; done
+```
+
+The job is a slow bootstrap of mean `mpg` that reports progress every 20
+resamples and would take two minutes to finish:
+
+```{r}
+url <- readLines(file.path(guide_state, "r.url"))
+started <- rpc_call(url, "submit", list(code = paste(
+  "set.seed(42); resamples <- numeric(0)",
+  "for (i in 1:480) {",
+  "  resamples[i] <- mean(sample(datasets::mtcars$mpg, replace = TRUE))",
+  "  if (i %% 20 == 0) cat(sprintf('%d resamples, mean %.2f\\n', i, mean(resamples)))",
+  "  Sys.sleep(0.25)",
+  "}",
+  sep = "\n"
+)))
+show(started)
+```
+
+```{r, include = FALSE}
+Sys.setenv(R_SESSION_URL = url)
+```
+
+## An agent attaches, follows, and interrupts
+
+A live Pi session is given only the URL, in the `R_SESSION_URL` environment
+variable. It uses the generic `ducknng_describe` and `ducknng_call` tools:
+
+```{pi, provider="openai-codex", model="gpt-6-astra", thinking="medium", timeout=900, no_extensions=TRUE, extension="./extensions/pi-ducknng/index.ts"}
+An R session someone else started serves ducknng RPC at the URL in the R_SESSION_URL environment variable; read it with `printenv R_SESSION_URL` and do not start another R endpoint. Describe that URL with ducknng_describe. Use its jobs method to find the running job, then follow that job with its job method, passing wait_ms 8000 and timeout_ms 20000 and the output_offset and conditions_offset from each reply, until its output reports at least 100 resamples. Then interrupt that job, confirm with the job method that its state is interrupted, and evaluate `length(resamples)` with eval. Do not close the session. Report each progress line you saw, the final state, and the length, beginning with `AGENT_R_JOB_INTERRUPTED` only when the interrupt succeeded and eval returned the length.
+```
+
+## A DuckDB session reads the result
+
+The objects the job created are still in the session. A plain DuckDB SQL
+session reads them over the same URL, with `ducknng_encode_rpc_call` building
+the call and `ducknng_parse_body` decoding the Arrow reply:
+
+```{bash}
+cat tools/guides/r-attach.sql
+node tools/ducknng-sql.ts tools/guides/r-attach.sql r_url="$(cat "$STATE/r.url")"
+```
+
+## What the job recorded
+
+The endpoint keeps each job's output, so any client can replay it from
+offset zero:
+
+```{r}
+jobs <- rpc_call(url, "jobs")$jobs
+knitr::kable(data.frame(
+  job_id = vapply(jobs, `[[`, 0, "job_id"),
+  method = vapply(jobs, `[[`, "", "method"),
+  state = vapply(jobs, `[[`, "", "state")
+))
+followed <- rpc_call(url, "job", list(job_id = started$job_id))
+cat(followed$output)
+```
+
+## Conditions and errors
+
+Warnings and messages are recorded as they are signalled. A client follows a
+job by passing back the offsets from each reply, so it never sees the same
+output or condition twice:
+
+```{r}
+follow <- function(url, job_id) {
+  output <- ""
+  conditions <- list()
+  offsets <- list(output_offset = 0, conditions_offset = 0)
+  repeat {
+    report <- rpc_call(url, "job", c(list(job_id = job_id, wait_ms = 5000), offsets),
+                       timeout_ms = 10000)
+    output <- paste0(output, report$output)
+    conditions <- c(conditions, report$conditions)
+    offsets <- report[c("output_offset", "conditions_offset")]
+    if (!report$state %in% c("queued", "running")) break
+  }
+  report$output <- output
+  report$conditions <- conditions
+  report
+}
+
+checked <- rpc_call(url, "submit", list(code = paste(
+  "message('checking the fit')",
+  "fit <- lm(mpg ~ wt, data = datasets::mtcars)",
+  "if (coef(fit)[['wt']] < 0) warning('heavier cars use more fuel')",
+  "round(coef(fit), 3)",
+  sep = "\n"
+)))
+report <- follow(url, checked$job_id)
+report$state
+knitr::kable(data.frame(
+  type = vapply(report$conditions, `[[`, "", "type"),
+  message = trimws(vapply(report$conditions, `[[`, "", "message"))
+))
+cat(report$output)
+```
+
+An error ends its job, and `eval` reports the message, the call, and the
+condition's classes:
+
+```{r}
+sub("^.*?(r_error)", "\\1", failure(rpc_call(url, "eval", list(
+  code = "fit_model <- function(data) stop('the model did not converge'); fit_model(mtcars)"
+))))
+```
+
+```{r, include = FALSE}
+final <- rpc_call(url, "job", list(job_id = started$job_id))
+draws <- rpc_call(url, "jobs")$jobs
+invisible(rpc_call(url, "close"))
+stopifnot(
+  identical(final$state, "interrupted"),
+  grepl("100 resamples", final$output),
+  !grepl("480 resamples", final$output),
+  identical(report$state, "succeeded"),
+  length(report$conditions) == 2L
+)
+```
+
+```{r, echo = FALSE, results = "asis"}
+cat("> GUIDE_R_JOBS_VERIFIED: an attached agent followed and interrupted a job, and the session kept its state\n")
+```

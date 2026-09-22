@@ -31,28 +31,27 @@ Endpoint state belongs to the endpoint process and survives those clients.
 The generic tools refuse a URL that the coordination adapter has claimed.
 
 For `tls+tcp://` and `wss://` URLs, each fresh client builds a ducknng TLS
-configuration, which ducknng holds in memory. The server is always verified,
-against PEM text in `PI_DUCKNNG_TLS_CA_PEM` or a file in
-`PI_DUCKNNG_TLS_CA_FILE`. A client certificate for mutual TLS comes from
-`PI_DUCKNNG_TLS_CERT_PEM` with `PI_DUCKNNG_TLS_KEY_PEM`, or from a combined PEM
-file in `PI_DUCKNNG_TLS_CERT_KEY_FILE`. The material is bound as SQL
-parameters and never enters SQL text, tool schemas, or results.
+configuration from PEM files. The server is always verified against
+`PI_DUCKNNG_TLS_CA_FILE`, and a combined certificate and key in
+`PI_DUCKNNG_TLS_CERT_KEY_FILE` is presented for mutual TLS. The paths are
+bound as SQL parameters and never enter SQL text, tool schemas, or results.
 
 ## R endpoint
 
-`tools/pi-r-endpoint.R` evaluates R in one mirai daemon that holds a
-persistent environment. Every evaluation is a job. The endpoint serves
-ducknng RPC through several NNG REP contexts, so a request that waits on a job
-never blocks another request, and evaluations run one at a time in submission
-order on the daemon. Its manifest declares:
+`tools/pi-r-endpoint.R` evaluates R in one mirai daemon. The daemon keeps one
+persistent environment per named scope, created on first use with the global
+environment as its parent; the default scope is `main`. Every evaluation is a
+job. The endpoint serves ducknng RPC through several NNG REP contexts, so a
+request that waits on a job never blocks another request, and evaluations run
+one at a time in submission order on the daemon. Its manifest declares:
 
-- `eval(code, envir, enclos, wait_ms)` waits up to `wait_ms`, 20 seconds by
-  default, and returns the value as nanoarrow IPC. Data frames and atomic
-  vectors are representable; other values fail with `r_unrepresentable`. An R
-  error fails with `r_error` and the condition's message, call, and classes.
-  An evaluation still running at `wait_ms` fails with `r_timeout` naming its
-  job, which keeps running;
-- `submit(code, envir, enclos)` starts a job and returns its `job_id` at once.
+- `eval(code, scope, wait_ms, limit)` waits up to `wait_ms`, 20 seconds by
+  default, and returns the value, or its first `limit` rows, as nanoarrow IPC.
+  Data frames and atomic vectors are representable; other values fail with
+  `r_unrepresentable`. An R error fails with `r_error` and the condition's
+  message, call, and classes. An evaluation still running at `wait_ms` fails
+  with `r_timeout` naming its job, which keeps running;
+- `submit(code, scope)` starts a job and returns its `job_id` at once.
   Visible values print to the job's output as they would at the console;
 - `job(job_id, wait_ms, output_offset, conditions_offset)` reports the job's
   state, the output and conditions produced since the given offsets, and its
@@ -60,10 +59,18 @@ order on the daemon. Its manifest declares:
   ends, so a client follows a job by passing back the offsets it received;
 - `result(job_id, offset, limit)` returns a finished job's value, or a slice
   of its rows, as nanoarrow IPC;
+- `scopes(wait_ms)` lists every scope with the names and classes of its
+  objects. Active bindings are reported as `active_binding` without being
+  evaluated;
+- `reset(scope, wait_ms)` discards one scope's environment, and the next use
+  starts it empty;
 - `interrupt(job_id)` interrupts one queued or running job, or every
-  unfinished job when `job_id` is omitted. The daemon and its environment
-  survive;
-- `jobs()` lists recent jobs, and `close()` stops the endpoint.
+  unfinished job when `job_id` is omitted. The daemon and its scopes survive;
+- `jobs()` lists recent jobs with their scopes, and `close()` stops the endpoint.
+
+`scopes` and `reset` run on the daemon behind queued jobs, so they observe and
+change the state those jobs leave. One still queued when its `wait_ms` ends
+is withdrawn and fails with `r_busy`, rather than running later.
 
 On the daemon, standard output and messages go to a per-job file as they are
 written, and each warning, message, and error is appended to a per-job
@@ -78,10 +85,10 @@ session with the URL: the extension writes it to `PI_DUCKNNG_R_LOCATOR` when
 that variable names a file, and removes the file when the endpoint stops.
 When a model call to the endpoint the extension placed is aborted, the
 extension calls `interrupt` directly, outside the per-URL turn, so the
-waiting call returns and the session keeps its state. The Pi extension passes
-its process ID in `PI_DUCKNNG_PARENT_PID`. The endpoint checks that process
+waiting call returns and the session keeps its state. The Pi extension starts
+the endpoint with `--parent=` its process ID. The endpoint checks that process
 once a second and exits after it disappears, so idle time never discards the
-R environment.
+R scopes.
 
 ## Coordination endpoint
 
@@ -108,8 +115,8 @@ the queue, turns overdue mail into dead letters, and applies retention.
 `receive` replies at once.
 
 The host also opens an NNG PUB socket for wake-up hints: on `ipc://` beside
-the database by default, or on any URL passed in
-`PI_DUCKNNG_COORDINATION_EVENTS_URL`, such as `wss://host:port`, with the
+the database by default, or on any URL passed with the host's `--events`
+option, such as `wss://host:port`, with the
 listener's TLS configuration. `register` returns the hint URL and the
 mailbox's topic, an opaque salted hash that cannot be derived without a
 registration. After `send` stores mail, it publishes that topic once per
@@ -117,7 +124,7 @@ recipient. A hint carries no mail. A subscriber that misses a hint loses
 only latency, because polling still repairs it.
 
 Plain HTTP clients follow the same hints as Server-Sent Events when the host
-is given `PI_DUCKNNG_COORDINATION_SSE_URL`. The host starts a second ducknng
+is given an `--sse` listener URL. The host starts a second ducknng
 service on that HTTP listener, `https://` with the endpoint's mutual TLS, and
 registers one ducknng event route, `/events`. Its handler,
 `coordination/events.sql`, accepts only a topic that names a registered
@@ -244,13 +251,11 @@ umask inside the database's directory, so filesystem permissions decide who
 can connect. Callers carry no verified identity, and `register` accepts any
 project and agent ID.
 
-The mutual-TLS profile serves `tls+tcp://` or `wss://` with in-memory
-listener material. That material comes from
-`PI_DUCKNNG_COORDINATION_TLS_CERT_PEM`, `_KEY_PEM`, and `_CA_PEM`, or from
-`PI_DUCKNNG_COORDINATION_TLS_CERT_KEY_FILE` and `_CA_FILE`. Hints are
-published only when `PI_DUCKNNG_COORDINATION_EVENTS_URL` names a listener,
-and that listener requires client certificates too. Every method then requires a verified
-peer identity. `PI_DUCKNNG_COORDINATION_GRANTS_FILE` lists which peer
+The mutual-TLS profile serves `tls+tcp://` or `wss://` with the listener's
+combined certificate and key from `--tls-cert-key` and the client CA from
+`--tls-ca`. Hints are published only when `--events` names a listener, and
+that listener requires client certificates too. Every method then requires a
+verified peer identity. The `--grants` file lists which peer
 identities may register as which `(project_id, agent_id)`, and agent `*`
 grants a whole project. A caller without a matching grant is refused. A
 registration ID is useless to any other identity, and an instance stays bound
@@ -313,7 +318,7 @@ lead agent fans one question out to three workers. The three workers run as
 concurrent `pi -p` processes, each computing in its own persistent R session
 and replying with `in_reply_to`. The endpoint's own methods confirm the three
 replies before the lead gathers them. Finally the README starts a mutual-TLS
-endpoint with in-memory PEM and a grants file, registers the granted
+endpoint with PEM files and a grants file, registers the granted
 certificate, and shows the ungranted one refused. `make readme` rejects output
 that lacks any receipt or that contains a machine-local path.
 
@@ -322,7 +327,7 @@ and `make vignettes` rejects any that lacks its receipts or contains the
 checkout path:
 
 - `agent-product-path` and `agent-active-binding`: live agents persist R
-  state and evaluate an active binding in a selected environment;
+  state and evaluate an active binding in a named scope;
 - `coordination-mailbox`: the manifest, offline mail, idempotent send, lease
   redelivery, acknowledgement, the envelope, and error codes;
 - `coordination-fanout`: recipient lists with unseen recipients, a live
@@ -336,7 +341,7 @@ checkout path:
   letter;
 - `coordination-sse`: `curl -N` follows one mailbox's Server-Sent Events and
   the listener refuses unknown topics and framed RPC;
-- `coordination-mtls`: an endpoint on in-memory PEM with grants, refused
+- `coordination-mtls`: an endpoint on PEM files with grants, refused
   impersonation and takeover, and a wake-up hint over `wss://`;
 - `coordination-harness`: `tools/examples/harness-lane.ts` delivers into an
   `AgentHarness` lane, drops an acknowledgement, and reopens the session.
@@ -349,7 +354,8 @@ checkout path:
   by a second R client attached to the same URL;
 - an aborted call interrupting its evaluation within five seconds while the
   session keeps its state, and the shared locator file;
-- process persistence, selected environments, and active bindings;
+- process persistence, scope isolation, listing without forcing active
+  bindings, reset, and row limits;
 - Arrow IPC and request serialization;
 - stale-process handling and cleanup;
 - an R endpoint that outlives idle polls and exits after its parent.

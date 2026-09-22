@@ -6,12 +6,11 @@ import test from "node:test";
 
 import { DuckDBInstance } from "@duckdb/node-api";
 
-import piDucknngExtension from "../extensions/pi-ducknng/index.ts";
+import piDucknngExtension, { resolveDucknngExtension } from "../extensions/pi-ducknng/index.ts";
 import { pki, withEnv } from "./support/pki.js";
 
 const ROOT = resolve(import.meta.dirname, "..");
-const EXTENSION = process.env.DUCKNNG_EXTENSION_PATH ??
-  resolve(ROOT, "vendor/ducknng/build/release/ducknng.duckdb_extension");
+const EXTENSION = await resolveDucknngExtension(ROOT);
 
 async function mtlsServer(material) {
   const instance = await DuckDBInstance.create(":memory:", {

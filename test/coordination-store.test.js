@@ -256,23 +256,9 @@ test("mutual TLS binds registrations to granted peer identities", async () => {
     await rm(work, { recursive: true, force: true });
     throw error;
   });
-  // Clients present in-memory PEM; ducknng never needs a certificate file.
-  const pem = async (path) => await readFile(path, "utf8");
-  const caPem = await pem(material.ca);
-  const clientPem = {};
-  for (const name of ["alice", "mallory"]) {
-    const combined = await pem(material[name]);
-    clientPem[name] = {
-      cert: combined.slice(0, combined.indexOf("-----END CERTIFICATE-----") + 25),
-      key: combined.slice(combined.indexOf("-----BEGIN PRIVATE KEY-----")),
-    };
-  }
   const as = (name, operation) => withEnv({
-    PI_DUCKNNG_TLS_CA_FILE: undefined,
-    PI_DUCKNNG_TLS_CERT_KEY_FILE: undefined,
-    PI_DUCKNNG_TLS_CA_PEM: caPem,
-    PI_DUCKNNG_TLS_CERT_PEM: clientPem[name].cert,
-    PI_DUCKNNG_TLS_KEY_PEM: clientPem[name].key,
+    PI_DUCKNNG_TLS_CA_FILE: material.ca,
+    PI_DUCKNNG_TLS_CERT_KEY_FILE: material[name],
   }, operation);
   // The endpoint names the verified caller when it refuses an ungranted one.
   const identity = (name) => as(name, async () => {
@@ -326,6 +312,8 @@ test("mutual TLS binds registrations to granted peer identities", async () => {
     // certificate too; the endpoint here serves no NNG hints at all.
     assert.equal(alice.events.url, null);
     assert.match(alice.events.sse_url, /^https:\/\/127\.0\.0\.1:\d+\/events\?topic=[0-9a-f]{32}$/);
+    const caPem = await readFile(material.ca, "utf8");
+    const alicePem = await readFile(material.alice, "utf8");
     const stream = (clientCert) => new Promise((done, fail) => {
       const request = https.get(alice.events.sse_url, { ca: caPem, ...clientCert }, (response) => {
         response.once("data", (chunk) => {
@@ -335,7 +323,7 @@ test("mutual TLS binds registrations to granted peer identities", async () => {
       });
       request.once("error", fail);
     });
-    assert.deepEqual(await stream(clientPem.alice), { status: 200, first: ": ready\n\n" });
+    assert.deepEqual(await stream({ cert: alicePem, key: alicePem }), { status: 200, first: ": ready\n\n" });
     await assert.rejects(stream({}));
   } finally {
     await s.endpoint.close();

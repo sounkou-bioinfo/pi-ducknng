@@ -1,19 +1,16 @@
 import { readFile } from "node:fs/promises";
+import { parseArgs } from "node:util";
 import {
   type CoordinationGrant,
-  type CoordinationTls,
   startCoordinationEndpoint,
 } from "../extensions/pi-ducknng/coordination-endpoint.ts";
 
-const USAGE = "usage: node tools/pi-coordination-endpoint.ts LOCATOR_FILE DATABASE_FILE [LISTEN_URL]";
+const USAGE = [
+  "usage: node tools/pi-coordination-endpoint.ts LOCATOR_FILE DATABASE_FILE [LISTEN_URL]",
+  "  [--tls-cert-key FILE --tls-ca FILE --grants FILE] [--events URL|off] [--sse URL]",
+].join("\n");
 
-function environment(name: string): string | undefined {
-  const value = process.env[name]?.trim();
-  return value || undefined;
-}
-
-async function grants(path: string | undefined): Promise<CoordinationGrant[]> {
-  if (!path) return [];
+async function grants(path: string): Promise<CoordinationGrant[]> {
   const value: unknown = JSON.parse(await readFile(path, "utf8"));
   const valid = Array.isArray(value) && value.every((grant) =>
     typeof grant === "object" && grant !== null &&
@@ -25,40 +22,26 @@ async function grants(path: string | undefined): Promise<CoordinationGrant[]> {
   return value as CoordinationGrant[];
 }
 
-// Listener TLS comes from PEM text in the environment or from PEM files.
-function tlsMaterial(): CoordinationTls | undefined {
-  const certPem = environment("PI_DUCKNNG_COORDINATION_TLS_CERT_PEM");
-  const keyPem = environment("PI_DUCKNNG_COORDINATION_TLS_KEY_PEM");
-  const caPem = environment("PI_DUCKNNG_COORDINATION_TLS_CA_PEM");
-  const certKeyFile = environment("PI_DUCKNNG_COORDINATION_TLS_CERT_KEY_FILE");
-  const caFile = environment("PI_DUCKNNG_COORDINATION_TLS_CA_FILE");
-  if (certPem || keyPem || caPem) {
-    if (!certPem || !keyPem || !caPem) {
-      throw new Error(
-        "in-memory TLS needs PI_DUCKNNG_COORDINATION_TLS_CERT_PEM, _KEY_PEM, and _CA_PEM",
-      );
-    }
-    return { certPem, keyPem, caPem };
-  }
-  if ((certKeyFile === undefined) !== (caFile === undefined)) {
-    throw new Error(
-      "file TLS needs both PI_DUCKNNG_COORDINATION_TLS_CERT_KEY_FILE and PI_DUCKNNG_COORDINATION_TLS_CA_FILE",
-    );
-  }
-  return certKeyFile && caFile ? { certKeyFile, caFile } : undefined;
-}
-
 async function main(): Promise<void> {
-  const args = process.argv.slice(2);
-  if (args.length < 2 || args.length > 3) throw new Error(USAGE);
-  const [locator, database, listen] = args;
-  const tls = tlsMaterial();
-  const granted = await grants(environment("PI_DUCKNNG_COORDINATION_GRANTS_FILE"));
-  if (tls && granted.length === 0) {
-    throw new Error("a mutual-TLS endpoint needs PI_DUCKNNG_COORDINATION_GRANTS_FILE");
+  const { values, positionals } = parseArgs({
+    allowPositionals: true,
+    options: {
+      "tls-cert-key": { type: "string" },
+      "tls-ca": { type: "string" },
+      grants: { type: "string" },
+      events: { type: "string" },
+      sse: { type: "string" },
+    },
+  });
+  if (positionals.length < 2 || positionals.length > 3) throw new Error(USAGE);
+  const [locator, database, listen] = positionals;
+  const certKeyFile = values["tls-cert-key"];
+  const caFile = values["tls-ca"];
+  if ((certKeyFile === undefined) !== (caFile === undefined)) {
+    throw new Error("mutual TLS needs both --tls-cert-key and --tls-ca");
   }
-  const eventsUrl = environment("PI_DUCKNNG_COORDINATION_EVENTS_URL");
-  const sseUrl = environment("PI_DUCKNNG_COORDINATION_SSE_URL");
+  const tls = certKeyFile && caFile ? { certKeyFile, caFile } : undefined;
+  if (tls && !values.grants) throw new Error("a mutual-TLS endpoint needs --grants");
   // The ipc socket and locator are created readable only by this user.
   process.umask(0o077);
   const endpoint = await startCoordinationEndpoint({
@@ -66,9 +49,9 @@ async function main(): Promise<void> {
     locator,
     listen,
     tls,
-    grants: granted,
-    events: eventsUrl === "off" ? false : eventsUrl ? { listen: eventsUrl } : undefined,
-    sse: sseUrl ? { listen: sseUrl } : undefined,
+    grants: values.grants ? await grants(values.grants) : [],
+    events: values.events === "off" ? false : values.events ? { listen: values.events } : undefined,
+    sse: values.sse ? { listen: values.sse } : undefined,
   });
   if (endpoint.sseUrl) console.log(`server-sent events: ${endpoint.sseUrl}?topic=<topic>`);
   const keepAlive = setInterval(() => {}, 2 ** 30);

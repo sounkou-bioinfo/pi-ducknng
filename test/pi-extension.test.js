@@ -43,8 +43,9 @@ test("package manifest declares the Pi extension", async () => {
 });
 
 test("R adapter spawn failure returns promptly", async () => {
-  const previous = process.env.RSCRIPT;
-  process.env.RSCRIPT = "pi-ducknng-missing-rscript";
+  const empty = await mkdtemp(resolve(tmpdir(), "pi-ducknng-no-r-"));
+  const previous = process.env.PATH;
+  process.env.PATH = empty;
   const { tools, shutdown } = loadTools();
   const started = Date.now();
   try {
@@ -54,13 +55,13 @@ test("R adapter spawn failure returns promptly", async () => {
         {},
         new AbortController().signal,
       ),
-      /ENOENT|spawn/,
+      /persistent_r_start needs R, but Rscript is not on PATH/,
     );
     assert.ok(Date.now() - started < 5000);
   } finally {
+    process.env.PATH = previous;
     await shutdown();
-    if (previous === undefined) delete process.env.RSCRIPT;
-    else process.env.RSCRIPT = previous;
+    await rm(empty, { recursive: true, force: true });
   }
 });
 
@@ -96,7 +97,7 @@ test("model tools discover and call the ducknng manifest", async () => {
     assert.equal(manifestReceipt.manifest.server.protocol_version, 1);
     assert.deepEqual(
       manifestReceipt.manifest.methods.map(({ name }) => name),
-      ["eval", "submit", "job", "result", "interrupt", "jobs", "close"],
+      ["eval", "submit", "job", "result", "scopes", "reset", "interrupt", "jobs", "close"],
     );
     const evalMethod = manifestReceipt.manifest.methods.find(
       ({ name }) => name === "eval",
@@ -106,39 +107,43 @@ test("model tools discover and call the ducknng manifest", async () => {
       /datasets::mtcars/,
     );
 
-    const set = await tools.get("ducknng_call").execute(
-      "set",
-      { url, method: "eval", arguments: { code: "x <- 41L" } },
-      signal,
-    );
-    const bound = await tools.get("ducknng_call").execute(
-      "bind",
-      {
-        url,
-        method: "eval",
-        arguments: {
-          code: [
-            "e <- new.env(parent = baseenv())",
-            "makeActiveBinding('answer', function(value) {",
-            "  if (!missing(value)) stop('answer is read-only')",
-            "  x + 1L",
-            "}, e)",
-            "identical(parent.env(e), baseenv())",
-          ].join("; "),
-        },
-      },
-      signal,
-    );
-    const evaluated = await tools.get("ducknng_call").execute(
-      "eval",
-      { url, method: "eval", arguments: { code: "answer", envir: "e" } },
-      signal,
-    );
+    const call = (method, args) => tools.get("ducknng_call").execute(
+      method, { url, method, arguments: args }, signal);
+    const set = await call("eval", { code: "x <- 41L" });
+    const bound = await call("eval", {
+      scope: "analysis",
+      code: [
+        "makeActiveBinding('answer', function(value) {",
+        "  if (!missing(value)) stop('answer is read-only')",
+        "  42L",
+        "}, environment())",
+        "exists('x')",
+      ].join("\n"),
+    });
+    const evaluated = await call("eval", { scope: "analysis", code: "answer" });
     assert.equal(set.details.result, 41);
-    assert.equal(bound.details.result, true);
+    assert.equal(bound.details.result, false, "scopes do not see each other's objects");
     assert.equal(evaluated.details.result, 42);
     assert.equal(set.details.endpoint_process, evaluated.details.endpoint_process);
-    assert.match(evaluated.details.duckdb_client, /fresh in-memory instance closed/);
+    await assert.rejects(call("eval", { code: "1", envir: "analysis" }),
+      /unknown argument envir/);
+    await assert.rejects(call("eval", { code: "1", scope: "not a name" }),
+      /invalid_argument: scope must match/);
+
+    const listed = await call("scopes", {});
+    assert.deepEqual(listed.details.result.scopes, [
+      { scope: "analysis", objects: [{ name: "answer", class: ["active_binding"] }] },
+      { scope: "main", objects: [{ name: "x", class: ["integer"] }] },
+    ]);
+    assert.deepEqual((await call("reset", { scope: "analysis" })).details.result,
+      { scope: "analysis", existed: true });
+    assert.equal((await call("eval", { scope: "analysis", code: "exists('answer')" }))
+      .details.result, false);
+    assert.equal((await call("eval", { code: "x" })).details.result, 41,
+      "resetting one scope keeps the others");
+
+    const limited = await call("eval", { code: "datasets::mtcars[, 1:2]", limit: 2 });
+    assert.equal(limited.details.result.length, 2);
 
     const table = await tools.get("ducknng_call").execute(
       "table",
@@ -274,7 +279,7 @@ test("long evaluations run as jobs that stream, fail with conditions, and stop o
     const running = (await call("submit", {
       code: "for (k in 1:300) { counter <- k; Sys.sleep(0.1) }",
     })).details.result;
-    await promisify(execFile)(process.env.RSCRIPT ?? "Rscript", ["--vanilla", "-e", [
+    await promisify(execFile)("Rscript", ["--vanilla", "-e", [
       "source('tools/ducknng-rpc.R')",
       `url <- '${url}'`,
       "Sys.sleep(0.5)",
@@ -314,13 +319,9 @@ test("R endpoint outlives idle polls and exits with its parent", async () => {
   const work = await mkdtemp(resolve(tmpdir(), "pi-ducknng-parent-test-"));
   const parent = spawn("sleep", ["60"], { stdio: "ignore" });
   const endpoint = spawn(
-    process.env.RSCRIPT ?? "Rscript",
-    ["--vanilla", "tools/pi-r-endpoint.R", resolve(work, "endpoint.url")],
-    {
-      cwd: resolve(import.meta.dirname, ".."),
-      env: { ...process.env, PI_DUCKNNG_PARENT_PID: String(parent.pid) },
-      stdio: "ignore",
-    },
+    "Rscript",
+    ["--vanilla", "tools/pi-r-endpoint.R", resolve(work, "endpoint.url"), `--parent=${parent.pid}`],
+    { cwd: resolve(import.meta.dirname, ".."), stdio: "ignore" },
   );
   try {
     const deadline = Date.now() + 15000;

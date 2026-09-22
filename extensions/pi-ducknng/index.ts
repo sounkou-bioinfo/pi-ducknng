@@ -1,9 +1,8 @@
-import { execFile, spawn, type ChildProcess } from "node:child_process";
-import { access, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { spawn, type ChildProcess } from "node:child_process";
+import { mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { promisify } from "node:util";
 import {
   DuckDBInstance,
   type DuckDBConnection,
@@ -14,13 +13,12 @@ import {
   type CoordinationClient,
   registerCoordinationAdapter,
 } from "./coordination.ts";
+import { resolveDucknngExtension } from "./ducknng-binary.ts";
 
-const execFileAsync = promisify(execFile);
 export const PACKAGE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const DUCKNNG_RPC_FLAG_PAYLOAD_JSON = 4;
 const DUCKNNG_RPC_FLAG_PAYLOAD_ARROW_STREAM = 8;
 const DEFAULT_CALL_TIMEOUT_MS = 30_000;
-const extensionBuilds = new Map<string, Promise<void>>();
 const MANIFEST_SQL = `
   SELECT type_name, name, flags, error AS error_text, payload_text
   FROM ducknng_decode_frame(
@@ -38,42 +36,7 @@ const RPC_CALL_SQL = `
     )
   )`;
 
-export async function ensureDucknngExtension(root: string): Promise<string> {
-  const configured = process.env.DUCKNNG_EXTENSION_PATH;
-  const extensionPath = configured
-    ? resolve(configured)
-    : resolve(root, "vendor/ducknng/build/release/ducknng.duckdb_extension");
-  try {
-    await access(extensionPath);
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code !== "ENOENT") throw error;
-    if (configured) {
-      throw new Error(`DUCKNNG_EXTENSION_PATH does not exist: ${extensionPath}`);
-    }
-    let build = extensionBuilds.get(extensionPath);
-    if (!build) {
-      build = (async () => {
-        await execFileAsync("make", ["ducknng-extension"], {
-          cwd: root,
-          encoding: "utf8",
-          maxBuffer: 8 * 1024 * 1024,
-          timeout: 10 * 60 * 1000,
-        });
-        await access(extensionPath);
-      })();
-      extensionBuilds.set(extensionPath, build);
-    }
-    try {
-      await build;
-    } finally {
-      if (extensionBuilds.get(extensionPath) === build) {
-        extensionBuilds.delete(extensionPath);
-      }
-    }
-  }
-  return extensionPath;
-}
+export { resolveDucknngExtension };
 
 export function closeDucknngConnection(
   instance: DuckDBInstance,
@@ -104,52 +67,29 @@ export async function openDucknngConnection(
   }
 }
 
-/**
- * Client TLS material is injected at the process boundary: PEM text or PEM
- * file paths come from the environment, are bound as SQL parameters, and
- * never appear in tool schemas or results. ducknng holds PEM text in memory.
- * A TLS URL always verifies the server against PI_DUCKNNG_TLS_CA_PEM or
- * PI_DUCKNNG_TLS_CA_FILE; a client certificate for mutual TLS comes from
- * PI_DUCKNNG_TLS_CERT_PEM with PI_DUCKNNG_TLS_KEY_PEM, or from
- * PI_DUCKNNG_TLS_CERT_KEY_FILE.
- */
-function usesTls(url: string): boolean {
-  return /^(tls\+tcp|wss):\/\//i.test(url);
-}
-
 function environment(name: string): string | null {
   return process.env[name]?.trim() || null;
 }
 
+/**
+ * Client TLS material is injected at the process boundary as PEM file paths:
+ * PI_DUCKNNG_TLS_CA_FILE verifies the server, and PI_DUCKNNG_TLS_CERT_KEY_FILE,
+ * a combined certificate and key, is presented for mutual TLS. The paths are
+ * bound as SQL parameters and never appear in tool schemas or results.
+ */
 export async function clientTlsConfigId(
   connection: DuckDBConnection,
   url: string,
 ): Promise<number> {
-  if (!usesTls(url)) return 0;
-  const caPem = environment("PI_DUCKNNG_TLS_CA_PEM");
+  if (!/^(tls\+tcp|wss):\/\//i.test(url)) return 0;
   const caFile = environment("PI_DUCKNNG_TLS_CA_FILE");
-  if (!caPem && !caFile) {
-    throw new Error(
-      "TLS endpoints require PI_DUCKNNG_TLS_CA_PEM or PI_DUCKNNG_TLS_CA_FILE to verify the server",
-    );
+  if (!caFile) {
+    throw new Error("TLS endpoints require PI_DUCKNNG_TLS_CA_FILE to verify the server");
   }
-  let reader;
-  if (caPem) {
-    const certPem = environment("PI_DUCKNNG_TLS_CERT_PEM");
-    const keyPem = environment("PI_DUCKNNG_TLS_KEY_PEM");
-    if ((certPem === null) !== (keyPem === null)) {
-      throw new Error("in-memory client TLS needs both PI_DUCKNNG_TLS_CERT_PEM and PI_DUCKNNG_TLS_KEY_PEM");
-    }
-    reader = await connection.runAndReadAll(
-      `SELECT ducknng_tls_config_from_pem($cert, $key, $ca, NULL, 2)::UBIGINT AS id`,
-      { cert: certPem, key: keyPem, ca: caPem },
-    );
-  } else {
-    reader = await connection.runAndReadAll(
-      `SELECT ducknng_tls_config_from_files($cert_key_file, $ca_file, NULL, 2)::UBIGINT AS id`,
-      { cert_key_file: environment("PI_DUCKNNG_TLS_CERT_KEY_FILE"), ca_file: caFile },
-    );
-  }
+  const reader = await connection.runAndReadAll(
+    "SELECT ducknng_tls_config_from_files($cert_key_file, $ca_file, NULL, 2)::UBIGINT AS id",
+    { cert_key_file: environment("PI_DUCKNNG_TLS_CERT_KEY_FILE"), ca_file: caFile },
+  );
   const [row] = reader.getRowObjects();
   const id = Number(row?.id);
   if (!Number.isSafeInteger(id) || id <= 0) {
@@ -214,6 +154,16 @@ function observeChild(child: ChildProcess): ProcessObserver {
   };
 }
 
+// A missing Rscript is the most common setup problem; say what to install.
+function spawnFailure(error: Error): Error {
+  if ((error as NodeJS.ErrnoException).code !== "ENOENT") return error;
+  return new Error(
+    "persistent_r_start needs R, but Rscript is not on PATH: install R, then " +
+    "install.packages(c(\"jsonlite\", \"mirai\", \"nanoarrow\", \"nanonext\"))",
+    { cause: error },
+  );
+}
+
 async function waitForLocator(
   locator: string,
   observer: ProcessObserver,
@@ -228,7 +178,8 @@ async function waitForLocator(
       const code = (error as NodeJS.ErrnoException).code;
       if (code !== "ENOENT") throw error;
     }
-    if (observer.error()) throw observer.error();
+    const failed = observer.error();
+    if (failed) throw spawnFailure(failed);
     const outcome = observer.outcome();
     if (outcome) {
       throw new Error(
@@ -287,6 +238,15 @@ type REndpoint = {
   sharedLocator?: string;
 };
 
+function hasExited(endpoint: REndpoint): boolean {
+  return Boolean(
+    endpoint.observer.outcome() ||
+    endpoint.observer.error() ||
+    endpoint.child.exitCode !== null ||
+    endpoint.child.signalCode !== null,
+  );
+}
+
 /**
  * PI_DUCKNNG_R_LOCATOR names a file that receives the endpoint URL, so another
  * local client can attach to the same R session. The URL is an ipc:// socket
@@ -324,19 +284,15 @@ type EndpointManifest = {
   methods: EndpointMethod[];
 };
 
+// The endpoint exits after this process does, so it never outlives Pi.
 async function startREndpoint(root: string): Promise<REndpoint> {
-  const extensionPath = await ensureDucknngExtension(root);
+  const extensionPath = await resolveDucknngExtension(root);
   const work = await mkdtemp(resolve(tmpdir(), "pi-ducknng-endpoint-"));
   const locator = resolve(work, "endpoint.url");
-  const endpointScript = resolve(root, "tools/pi-r-endpoint.R");
   const child = spawn(
-    process.env.RSCRIPT ?? "Rscript",
-    ["--vanilla", endpointScript, locator],
-    {
-      cwd: root,
-      env: { ...process.env, PI_DUCKNNG_PARENT_PID: String(process.pid) },
-      stdio: ["ignore", "pipe", "pipe"],
-    },
+    "Rscript",
+    ["--vanilla", resolve(root, "tools/pi-r-endpoint.R"), locator, `--parent=${process.pid}`],
+    { cwd: root, stdio: ["ignore", "pipe", "pipe"] },
   );
   const processOutput = collectProcessOutput(child);
   const observer = observeChild(child);
@@ -359,7 +315,7 @@ async function startREndpoint(root: string): Promise<REndpoint> {
 }
 
 async function disposeREndpoint(endpoint: REndpoint): Promise<void> {
-  if (!endpoint.observer.outcome() && !endpoint.observer.error()) {
+  if (!hasExited(endpoint)) {
     try {
       await rpcCallThroughDucknng(
         endpoint.extensionPath,
@@ -569,19 +525,18 @@ async function withEndpointTurn<T>(
   }
 }
 
+// Drops an endpoint that is gone: its cached manifest, shared locator, and files.
+async function forgetEndpoint(endpoint: REndpoint): Promise<void> {
+  manifests.delete(endpoint.url);
+  if (localEndpoint === endpoint) localEndpoint = undefined;
+  await unshareLocator(endpoint);
+  await rm(endpoint.work, { recursive: true, force: true });
+}
+
 async function startLocalREndpoint(): Promise<REndpoint> {
   if (localEndpoint) {
-    const exited =
-      localEndpoint.observer.outcome() ||
-      localEndpoint.observer.error() ||
-      localEndpoint.child.exitCode !== null ||
-      localEndpoint.child.signalCode !== null;
-    if (!exited) return localEndpoint;
-    const stale = localEndpoint;
-    localEndpoint = undefined;
-    manifests.delete(stale.url);
-    await unshareLocator(stale);
-    await rm(stale.work, { recursive: true, force: true });
+    if (!hasExited(localEndpoint)) return localEndpoint;
+    await forgetEndpoint(localEndpoint);
   }
   localEndpointStart ??= startREndpoint(PACKAGE_ROOT);
   try {
@@ -594,7 +549,7 @@ async function startLocalREndpoint(): Promise<REndpoint> {
 
 async function describeEndpoint(url: string): Promise<EndpointManifest> {
   return await withEndpointTurn(url, async () => {
-    const extensionPath = await ensureDucknngExtension(PACKAGE_ROOT);
+    const extensionPath = await resolveDucknngExtension(PACKAGE_ROOT);
     const manifest = parseManifest(
       await manifestThroughDucknng(extensionPath, url),
     );
@@ -631,7 +586,7 @@ async function callCoordinationEndpoint(
   options: { timeoutMs?: number } = {},
 ): Promise<unknown> {
   declaredJsonMethod(url, method);
-  const extensionPath = await ensureDucknngExtension(PACKAGE_ROOT);
+  const extensionPath = await resolveDucknngExtension(PACKAGE_ROOT);
   return await rpcCallThroughDucknng(
     extensionPath,
     url,
@@ -648,7 +603,7 @@ async function callEndpointNow(
   timeoutMs: number,
 ): Promise<Record<string, unknown>> {
   declaredJsonMethod(url, method);
-  const extensionPath = await ensureDucknngExtension(PACKAGE_ROOT);
+  const extensionPath = await resolveDucknngExtension(PACKAGE_ROOT);
   const response = await rpcCallThroughDucknng(
     extensionPath,
     url,
@@ -658,42 +613,33 @@ async function callEndpointNow(
   );
 
   const endpoint = localEndpoint?.url === url ? localEndpoint : undefined;
-  const result: Record<string, unknown> = {
-    method,
-    result: response,
-    duckdb_client: "fresh in-memory instance closed after reply",
-  };
-  if (endpoint?.child.pid !== undefined) {
-    result.endpoint_process = endpoint.child.pid;
-  }
+  const result: Record<string, unknown> = { method, result: response };
+  if (endpoint?.child.pid !== undefined) result.endpoint_process = endpoint.child.pid;
+  if (method !== "close") return result;
 
-  if (method === "close") {
-    manifests.delete(url);
-    if (endpoint) {
-      try {
-        const outcome = await waitForExit(endpoint.observer, 5000);
-        if (outcome.code !== 0 || outcome.signal !== null) {
-          throw new Error(
-            `R endpoint exited with status ${outcome.code ?? outcome.signal}: ${endpoint.processOutput()}`,
-          );
-        }
-        await unshareLocator(endpoint);
-        await rm(endpoint.work, { recursive: true, force: true });
-      } catch (error) {
-        try {
-          await disposeREndpoint(endpoint);
-        } catch (cleanupError) {
-          throw new AggregateError(
-            [error, cleanupError],
-            "R endpoint close failed and its process could not be stopped",
-          );
-        }
-        throw error;
-      } finally {
-        if (localEndpoint === endpoint) localEndpoint = undefined;
-      }
+  manifests.delete(url);
+  if (!endpoint) return result;
+  try {
+    const outcome = await waitForExit(endpoint.observer, 5000);
+    if (outcome.code !== 0 || outcome.signal !== null) {
+      throw new Error(
+        `R endpoint exited with status ${outcome.code ?? outcome.signal}: ${endpoint.processOutput()}`,
+      );
     }
+  } catch (error) {
+    try {
+      await disposeREndpoint(endpoint);
+    } catch (cleanupError) {
+      throw new AggregateError(
+        [error, cleanupError],
+        "R endpoint close failed and its process could not be stopped",
+      );
+    }
+    throw error;
+  } finally {
+    if (localEndpoint === endpoint) localEndpoint = undefined;
   }
+  await forgetEndpoint(endpoint);
   return result;
 }
 
@@ -726,18 +672,7 @@ async function callEndpoint(
       return await callEndpointNow(url, method, args, options.timeoutMs ?? DEFAULT_CALL_TIMEOUT_MS);
     } catch (error) {
       const endpoint = localEndpoint?.url === url ? localEndpoint : undefined;
-      const exited = endpoint && (
-        endpoint.observer.outcome() ||
-        endpoint.observer.error() ||
-        endpoint.child.exitCode !== null ||
-        endpoint.child.signalCode !== null
-      );
-      if (endpoint && exited) {
-        manifests.delete(url);
-        localEndpoint = undefined;
-        await unshareLocator(endpoint);
-        await rm(endpoint.work, { recursive: true, force: true });
-      }
+      if (endpoint && hasExited(endpoint)) await forgetEndpoint(endpoint);
       throw error;
     } finally {
       release();
@@ -761,31 +696,23 @@ async function disposeLocalEndpoint(): Promise<void> {
   }
 }
 
-function normalizeToolResult(value: unknown): unknown {
-  return JSON.parse(
-    JSON.stringify(
-      value,
-      (_key, item) => typeof item === "bigint" ? item.toString() : item,
-    ),
+// The complete reply is parsed first; only the model-facing serialization is
+// capped. BIGINT values from DuckDB become decimal strings.
+function toolResult(value: unknown) {
+  const serialized = JSON.stringify(
+    value,
+    (_key, item) => typeof item === "bigint" ? item.toString() : item,
   );
-}
-
-function toolResultDetails(value: unknown): unknown {
-  const normalized = normalizeToolResult(value);
-  const serialized = JSON.stringify(normalized);
-  if (Buffer.byteLength(serialized, "utf8") <= 64 * 1024) return normalized;
-  const preview = new TextDecoder().decode(
-    Buffer.from(serialized, "utf8").subarray(0, 60 * 1024),
-  );
-  return {
+  const bytes = Buffer.byteLength(serialized, "utf8");
+  const details = bytes <= 64 * 1024 ? JSON.parse(serialized) : {
     truncated: true,
-    serialized_bytes: Buffer.byteLength(serialized, "utf8"),
-    preview,
+    serialized_bytes: bytes,
+    preview: new TextDecoder().decode(Buffer.from(serialized, "utf8").subarray(0, 60 * 1024)),
   };
-}
-
-function stringifyToolResult(value: unknown): string {
-  return JSON.stringify(value, null, 2);
+  return {
+    content: [{ type: "text" as const, text: JSON.stringify(details, null, 2) }],
+    details,
+  };
 }
 
 /**
@@ -798,7 +725,7 @@ export async function subscribeCoordinationEvents(
   topic: string,
   onHint: () => void,
 ): Promise<{ close(): Promise<void> }> {
-  const extensionPath = await ensureDucknngExtension(PACKAGE_ROOT);
+  const extensionPath = await resolveDucknngExtension(PACKAGE_ROOT);
   const { instance, connection } = await openDucknngConnection(extensionPath);
   const socketCall = async (call: string, values: Record<string, unknown>) => {
     const reader = await connection.runAndReadAll(
@@ -857,7 +784,7 @@ export default function piDucknngExtension(pi: ExtensionAPI): void {
     name: "persistent_r_start",
     label: "Start persistent R endpoint",
     description:
-      "Start the local persistent R adapter and return its NNG URL. Describe that URL to obtain endpoint-owned methods, schemas, and examples before calling it. Long evaluations run as jobs whose output can be followed and interrupted.",
+      "Start the local persistent R adapter and return its NNG URL. Describe that URL to obtain endpoint-owned methods, schemas, and examples before calling it. Code runs in named scopes that persist between calls and can be listed or reset; long evaluations run as jobs whose output can be followed and interrupted.",
     parameters: StartParameters,
     execute: async (_toolCallId, _params, signal) => {
       signal?.throwIfAborted();
@@ -869,15 +796,7 @@ export default function piDucknngExtension(pi: ExtensionAPI): void {
         if (signal?.aborted) await disposeLocalEndpoint();
         throw error;
       }
-      const result = {
-        url: endpoint.url,
-        endpoint_process: endpoint.child.pid,
-      };
-      const details = toolResultDetails(result);
-      return {
-        content: [{ type: "text", text: stringifyToolResult(details) }],
-        details,
-      };
+      return toolResult({ url: endpoint.url, endpoint_process: endpoint.child.pid });
     },
   });
 
@@ -893,19 +812,9 @@ export default function piDucknngExtension(pi: ExtensionAPI): void {
       refuseAdapterOwnedUrl(params.url);
       const manifest = await describeEndpoint(params.url);
       signal?.throwIfAborted();
-      const result: Record<string, unknown> = {
-        manifest,
-        request_path: "@duckdb/node-api -> DuckDB -> ducknng -> NNG",
-        duckdb_client: "fresh in-memory instance closed after manifest reply",
-      };
-      if (localEndpoint?.url === params.url) {
-        result.endpoint_process = localEndpoint.child.pid;
-      }
-      const details = toolResultDetails(result);
-      return {
-        content: [{ type: "text", text: stringifyToolResult(details) }],
-        details,
-      };
+      const result: Record<string, unknown> = { manifest };
+      if (localEndpoint?.url === params.url) result.endpoint_process = localEndpoint.child.pid;
+      return toolResult(result);
     },
   });
 
@@ -927,11 +836,7 @@ export default function piDucknngExtension(pi: ExtensionAPI): void {
         { timeoutMs: params.timeout_ms, signal },
       );
       signal?.throwIfAborted();
-      const details = toolResultDetails(result);
-      return {
-        content: [{ type: "text", text: stringifyToolResult(details) }],
-        details,
-      };
+      return toolResult(result);
     },
   });
 

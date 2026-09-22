@@ -282,36 +282,31 @@ rpc_process_alive <- function(pid) {
   isTRUE(suppressWarnings(tools::pskill(pid, 0L)))
 }
 
-# Client helper for R callers and executable documentation.
-rpc_call <- function(url, method, arguments = structure(list(), names = character()),
-                     timeout_ms = 5000L) {
+# Client helpers for R callers and executable documentation. Each request uses
+# its own REQ socket and returns the decoded JSON reply.
+rpc_request <- function(url, frame, what, timeout_ms) {
   socket <- nanonext::socket("req", dial = url)
   on.exit(close(socket), add = TRUE)
+  status <- nanonext::send(socket, frame, mode = "raw", block = timeout_ms)
+  if (!identical(status, 0L)) stop("failed to send the ", what, " request")
+  reply <- nanonext::recv(socket, mode = "raw", block = timeout_ms)
+  if (nanonext::is_error_value(reply)) stop("timed out waiting for ", what)
+  decoded <- rpc_decode_frame(reply)
+  if (decoded$type == DUCKNNG_RPC_ERROR) stop(decoded$error, call. = FALSE)
+  jsonlite::fromJSON(rawToChar(decoded$payload), simplifyVector = FALSE)
+}
+
+rpc_call <- function(url, method, arguments = structure(list(), names = character()),
+                     timeout_ms = 5000L) {
   frame <- rpc_encode_frame(
     DUCKNNG_RPC_CALL,
     method,
     DUCKNNG_RPC_FLAG_PAYLOAD_JSON,
     payload = rpc_json(arguments)
   )
-  status <- nanonext::send(socket, frame, mode = "raw", block = timeout_ms)
-  if (!identical(status, 0L)) stop("failed to send the ducknng request")
-  reply <- nanonext::recv(socket, mode = "raw", block = timeout_ms)
-  if (nanonext::is_error_value(reply)) stop("timed out waiting for ", method)
-  decoded <- rpc_decode_frame(reply)
-  if (decoded$type == DUCKNNG_RPC_ERROR) stop(decoded$error, call. = FALSE)
-  jsonlite::fromJSON(rawToChar(decoded$payload), simplifyVector = FALSE)
+  rpc_request(url, frame, method, timeout_ms)
 }
 
-# Fetches an endpoint's ducknng manifest.
 rpc_describe <- function(url, timeout_ms = 5000L) {
-  socket <- nanonext::socket("req", dial = url)
-  on.exit(close(socket), add = TRUE)
-  status <- nanonext::send(socket, rpc_encode_frame(DUCKNNG_RPC_MANIFEST),
-                           mode = "raw", block = timeout_ms)
-  if (!identical(status, 0L)) stop("failed to send the manifest request")
-  reply <- nanonext::recv(socket, mode = "raw", block = timeout_ms)
-  if (nanonext::is_error_value(reply)) stop("timed out waiting for the manifest")
-  decoded <- rpc_decode_frame(reply)
-  if (decoded$type == DUCKNNG_RPC_ERROR) stop(decoded$error, call. = FALSE)
-  jsonlite::fromJSON(rawToChar(decoded$payload), simplifyVector = FALSE)
+  rpc_request(url, rpc_encode_frame(DUCKNNG_RPC_MANIFEST), "the manifest", timeout_ms)
 }

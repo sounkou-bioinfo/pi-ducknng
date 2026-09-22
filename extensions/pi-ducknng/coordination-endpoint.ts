@@ -2,7 +2,8 @@ import { randomUUID } from "node:crypto";
 import { readFile, rename, writeFile } from "node:fs/promises";
 import { basename, dirname, extname, resolve } from "node:path";
 import { DuckDBInstance, type DuckDBConnection } from "@duckdb/node-api";
-import { PACKAGE_ROOT, ensureDucknngExtension } from "./index.ts";
+import { resolveDucknngExtension } from "./ducknng-binary.ts";
+import { PACKAGE_ROOT } from "./index.ts";
 
 const SERVICE = "pi_coordination";
 const SSE_SERVICE = "pi_coordination_sse";
@@ -21,9 +22,8 @@ export type CoordinationGrant = {
   agent_id: string;
 };
 
-export type CoordinationTls =
-  | { certKeyFile: string; caFile: string }
-  | { certPem: string; keyPem: string; caPem: string };
+/** PEM files: the listener's combined certificate and key, and the client CA. */
+export type CoordinationTls = { certKeyFile: string; caFile: string };
 
 export type CoordinationEndpointOptions = {
   /** DuckDB database file owned by this endpoint. */
@@ -32,10 +32,7 @@ export type CoordinationEndpointOptions = {
   listen?: string;
   /** File that receives the resolved listen URL. */
   locator?: string;
-  /**
-   * Mutual TLS listener material, as files or as in-memory PEM text; every
-   * method then requires a verified peer.
-   */
+  /** Mutual TLS listener material; every method then requires a verified peer. */
   tls?: CoordinationTls;
   /**
    * Wake-up hint listener. Defaults to ipc:// beside the database when the
@@ -85,14 +82,9 @@ export function defaultCoordinationListen(database: string): string {
 }
 
 async function tlsConfigId(connection: DuckDBConnection, tls: CoordinationTls): Promise<number> {
-  const id = "certPem" in tls
-    ? await scalar(connection,
-      "SELECT ducknng_tls_config_from_pem($cert, $key, $ca, NULL, 2)::UBIGINT",
-      { cert: tls.certPem, key: tls.keyPem, ca: tls.caPem })
-    : await scalar(connection,
-      "SELECT ducknng_tls_config_from_files($cert_key, $ca, NULL, 2)::UBIGINT",
-      { cert_key: tls.certKeyFile, ca: tls.caFile });
-  return Number(id);
+  return Number(await scalar(connection,
+    "SELECT ducknng_tls_config_from_files($cert_key, $ca, NULL, 2)::UBIGINT",
+    { cert_key: tls.certKeyFile, ca: tls.caFile }));
 }
 
 // Socket helpers return a STRUCT with ok and error; failures are in-band.
@@ -140,7 +132,7 @@ async function scalar(
 export async function startCoordinationEndpoint(
   options: CoordinationEndpointOptions,
 ): Promise<CoordinationEndpoint> {
-  const extensionPath = await ensureDucknngExtension(PACKAGE_ROOT);
+  const extensionPath = await resolveDucknngExtension(PACKAGE_ROOT);
   const listen = options.listen ?? defaultCoordinationListen(options.database);
   const eventsListen = options.events === false
     ? undefined

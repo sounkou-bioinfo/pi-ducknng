@@ -4,7 +4,7 @@ import {
 import { ducknngCoordinationClient as client } from "../extensions/pi-ducknng/index.ts";
 
 // Calls one coordination method from the shell and prints its JSON reply.
-// TLS material comes from the same PI_DUCKNNG_TLS_* variables as Pi.
+// TLS files come from PI_DUCKNNG_TLS_CA_FILE and PI_DUCKNNG_TLS_CERT_KEY_FILE, as in Pi.
 const USAGE = "usage: node tools/coordination-call.ts URL METHOD [JSON_ARGUMENTS [FIELDS]]";
 
 // FIELDS is a comma-separated list of dotted paths to keep from the reply.

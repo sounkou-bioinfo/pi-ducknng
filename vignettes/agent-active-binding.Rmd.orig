@@ -1,16 +1,18 @@
 ---
-title: "An agent evaluates an R active binding in a selected environment"
+title: "An agent keeps an R active binding in a named scope"
 output: rmarkdown::html_vignette
 vignette: >
-  %\VignetteIndexEntry{An agent evaluates an R active binding in a selected environment}
+  %\VignetteIndexEntry{An agent keeps an R active binding in a named scope}
   %\VignetteEngine{knitr::rmarkdown}
   %\VignetteEncoding{UTF-8}
 ---
 
-This precomputed case exercises the `envir` and `enclos` controls declared by
-the endpoint's `eval` method. Returned scalars travel as Arrow IPC and are
-decoded by ducknng inside the fresh DuckDB client.
+This precomputed case exercises the endpoint's named scopes. Each scope is its
+own persistent environment, `scopes` lists their objects without evaluating an
+active binding, and `reset` empties one scope while the others keep theirs.
+Returned scalars travel as Arrow IPC and are decoded by ducknng inside the
+fresh DuckDB client.
 
 ```{pi, provider="openai-codex", model="gpt-5.4", thinking="medium", timeout=900, extension="./extensions/pi-ducknng/index.ts"}
-Using the package tools, start the R adapter and follow its ducknng manifest. Evaluate code that creates `analysis <- new.env(parent = baseenv())`, installs a read-only active binding `mean_mpg` whose getter returns `mean(datasets::mtcars$mpg)`, and returns `identical(parent.env(analysis), baseenv())`. In a fresh call, evaluate `mean_mpg` with `envir = "analysis"`. Close the endpoint. Report the parent check, endpoint process identity, and decoded mean, beginning with `AGENT_VERIFIED_ACTIVE_BINDING` only when all calls succeed.
+Using the package tools, start the R adapter and follow its ducknng manifest. With eval in scope `analysis`, install a read-only active binding `mean_mpg` in `environment()` whose getter returns `mean(datasets::mtcars$mpg)`. With eval in the default scope, set `cars <- nrow(datasets::mtcars)` and return `exists("mean_mpg")`. In a fresh eval in scope `analysis`, return `mean_mpg`. Call scopes and note the class it reports for `mean_mpg`. Reset scope `analysis`, then return `exists("mean_mpg")` from scope `analysis` and `cars` from the default scope. Close the endpoint. Report the default scope's `exists` result, the decoded mean, the reported class, both post-reset results, and the endpoint process identity, beginning with `AGENT_VERIFIED_ACTIVE_BINDING` only when all calls succeed.
 ```

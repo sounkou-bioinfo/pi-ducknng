@@ -1,3 +1,23 @@
+# The endpoint's R dependencies, with the oldest versions whose interrupt and
+# context behaviour it relies on. A missing one stops here with the fix.
+local({
+  required <- c(jsonlite = "0", mirai = "2.6.0", nanoarrow = "0", nanonext = "1.9.0")
+  unusable <- names(required)[vapply(names(required), function(package) {
+    !requireNamespace(package, quietly = TRUE) ||
+      utils::packageVersion(package) < required[[package]]
+  }, logical(1))]
+  if (length(unusable) > 0L) {
+    wanted <- ifelse(required[unusable] == "0", unusable,
+                     paste0(unusable, " (>= ", required[unusable], ")"))
+    stop(
+      "the persistent R endpoint needs the R packages ", paste(wanted, collapse = ", "),
+      "; install them with install.packages(c(",
+      paste0('"', unusable, '"', collapse = ", "), "))",
+      call. = FALSE
+    )
+  }
+})
+
 script_argument <- grep("^--file=", commandArgs(FALSE), value = TRUE)
 if (length(script_argument) != 1L) stop("cannot locate pi-r-endpoint.R")
 script_directory <- dirname(normalizePath(sub("^--file=", "", script_argument)))
@@ -7,6 +27,8 @@ DEFAULT_EVAL_WAIT_MS <- 20000L
 MAX_WAIT_MS <- 600000L
 MAX_JOBS <- 32L
 OUTPUT_CHUNK_BYTES <- 65536L
+DEFAULT_SCOPE <- "main"
+SCOPE_PATTERN <- "^[A-Za-z0-9_.-]{1,128}$"
 
 now_ms <- function() round(as.numeric(Sys.time()) * 1000)
 
@@ -21,11 +43,41 @@ wait_for_daemon <- function(profile, timeout = 10) {
   }
 }
 
+# The daemon keeps one environment per scope name, created on first use with
+# the global environment as parent. Resetting a scope drops its environment.
+daemon_scope <- function(name) {
+  scope <- .piducknng_scopes[[name]]
+  if (is.null(scope)) {
+    scope <- new.env(parent = .GlobalEnv)
+    assign(name, scope, envir = .piducknng_scopes)
+  }
+  scope
+}
+
+# Lists each scope's objects without forcing active bindings or promises.
+daemon_scopes <- function() {
+  describe <- function(object, scope) {
+    class <- if (bindingIsActive(object, scope)) "active_binding" else class(scope[[object]])
+    list(name = object, class = I(class))
+  }
+  lapply(sort(names(.piducknng_scopes)), function(name) {
+    scope <- .piducknng_scopes[[name]]
+    objects <- ls(scope, all.names = TRUE, sorted = TRUE)
+    list(scope = name, objects = lapply(objects, describe, scope = scope))
+  })
+}
+
+daemon_reset <- function(name) {
+  existed <- exists(name, envir = .piducknng_scopes, inherits = FALSE)
+  if (existed) rm(list = name, envir = .piducknng_scopes)
+  list(scope = name, existed = existed)
+}
+
 # Runs on the mirai daemon. Standard output and messages go to the job's
 # output file as they happen; each warning, message, and error is appended to
 # its conditions file as one JSON line. Visible values print as they would at
 # the console when echo is TRUE.
-daemon_runner <- function(code, envir, enclos, directory, echo) {
+daemon_runner <- function(code, scope, directory, echo) {
   writeLines(format(round(as.numeric(Sys.time()) * 1000), scientific = FALSE),
              file.path(directory, "started"))
   output <- file(file.path(directory, "output"), open = "w")
@@ -38,7 +90,7 @@ daemon_runner <- function(code, envir, enclos, directory, echo) {
     close(output)
     close(conditions)
   }, add = TRUE)
-  runner_call <- quote(eval(expression, envir = target, enclos = enclosure))
+  runner_call <- quote(eval(expression, envir = target))
   record <- function(type, condition) {
     call <- conditionCall(condition)
     # A condition signaled at top level carries the runner's own eval call.
@@ -58,11 +110,9 @@ daemon_runner <- function(code, envir, enclos, directory, echo) {
   tryCatch(
     withCallingHandlers(
       {
-        scope <- .piducknng_session
-        target <- eval(parse(text = envir, keep.source = FALSE), envir = scope, enclos = .GlobalEnv)
-        enclosure <- eval(parse(text = enclos, keep.source = FALSE), envir = scope, enclos = .GlobalEnv)
+        target <- .piducknng_scope(scope)
         for (expression in parse(text = code, keep.source = FALSE)) {
-          last <- withVisible(eval(expression, envir = target, enclos = enclosure))
+          last <- withVisible(eval(expression, envir = target))
           if (echo && last$visible) print(last$value)
         }
       },
@@ -79,6 +129,7 @@ daemon_runner <- function(code, envir, enclos, directory, echo) {
     error = function(condition) failure <<- record("error", condition)
   )
   value <- last$value
+  # Arrow IPC carries a data frame or a non-empty vector without dimensions.
   representable <- is.data.frame(value) ||
     (is.atomic(value) && is.null(dim(value)) && length(value) > 0L)
   list(
@@ -93,7 +144,18 @@ daemon_runner <- function(code, envir, enclos, directory, echo) {
     value = if (is.null(failure) && representable) value else NULL
   )
 }
-environment(daemon_runner) <- globalenv()
+
+# Installed in the daemon's global environment, where they resolve each other.
+daemon_functions <- lapply(
+  list(
+    .piducknng_scope = daemon_scope,
+    .piducknng_list_scopes = daemon_scopes,
+    .piducknng_reset = daemon_reset,
+    .piducknng_run = daemon_runner
+  ),
+  `environment<-`,
+  globalenv()
+)
 
 string_argument <- function(arguments, name, default = NULL) {
   value <- arguments[[name]]
@@ -102,6 +164,14 @@ string_argument <- function(arguments, name, default = NULL) {
     stop("invalid_argument: ", name, " must be a string")
   }
   value
+}
+
+scope_argument <- function(arguments) {
+  scope <- string_argument(arguments, "scope", DEFAULT_SCOPE)
+  if (!grepl(SCOPE_PATTERN, scope)) {
+    stop("invalid_argument: scope must match ", SCOPE_PATTERN)
+  }
+  scope
 }
 
 integer_argument <- function(arguments, name, default = NULL, minimum = 0L,
@@ -130,17 +200,11 @@ read_from <- function(path, offset, limit) {
   on.exit(close(connection), add = TRUE)
   seek(connection, offset)
   bytes <- readBin(connection, "raw", n = min(limit, size - offset))
-  keep <- length(bytes)
-  tail <- 0L
-  while (keep > 0L && bitwAnd(as.integer(bytes[[keep]]), 0xC0L) == 0x80L && tail < 3L) {
-    keep <- keep - 1L
-    tail <- tail + 1L
-  }
-  if (keep > 0L) {
-    lead <- as.integer(bytes[[keep]])
-    width <- if (lead >= 0xF0L) 4L else if (lead >= 0xE0L) 3L else if (lead >= 0xC0L) 2L else 1L
-    keep <- if (tail + 1L < width) keep - 1L else keep + tail
-  }
+  # Drop at most the three trailing bytes of an incomplete character; text
+  # that is invalid for another reason is returned with its bytes escaped.
+  lengths <- length(bytes) - seq.int(0L, min(3L, length(bytes) - 1L))
+  complete <- Find(function(keep) validUTF8(rawToChar(bytes[seq_len(keep)])), lengths)
+  keep <- if (is.null(complete)) length(bytes) else complete
   bytes <- bytes[seq_len(keep)]
   text <- iconv(rawToChar(bytes), "UTF-8", "UTF-8", sub = "byte")
   list(text = text, next_offset = offset + keep, more = offset + keep < size)
@@ -171,6 +235,8 @@ job_state <- function(job) {
     return(if (file.exists(file.path(job$directory, "started"))) "running" else "queued")
   }
   outcome <- job$task$data
+  # An interrupted task, or one cancelled by stop_mirai (NNG error 20), is
+  # interrupted rather than failed.
   if (job$interrupted || mirai::is_mirai_interrupt(outcome) ||
       (mirai::is_error_value(outcome) && !mirai::is_mirai_error(outcome) &&
        identical(as.integer(outcome), 20L))) {
@@ -204,8 +270,7 @@ evict_jobs <- function(registry) {
 
 submit_job <- function(registry, method, arguments, echo) {
   code <- string_argument(arguments, "code")
-  envir <- string_argument(arguments, "envir", ".piducknng_session")
-  enclos <- string_argument(arguments, "enclos", "baseenv()")
+  scope <- scope_argument(arguments)
   id <- registry$next_id
   registry$next_id <- id + 1L
   directory <- file.path(registry$directory, paste0("job-", id))
@@ -214,13 +279,14 @@ submit_job <- function(registry, method, arguments, echo) {
   job$id <- id
   job$method <- method
   job$code <- code
+  job$scope <- scope
   job$directory <- directory
   job$submitted_ms <- now_ms()
   job$interrupted <- FALSE
   job$interrupted_ms <- NULL
   job$task <- mirai::mirai(
-    .piducknng_run(code, envir, enclos, directory, echo),
-    code = code, envir = envir, enclos = enclos, directory = directory, echo = echo,
+    .piducknng_run(code, scope, directory, echo),
+    code = code, scope = scope, directory = directory, echo = echo,
     .compute = registry$profile
   )
   registry$jobs[[as.character(id)]] <- job
@@ -245,7 +311,7 @@ finished_ms <- function(job, state) {
   if (!finished(state)) return(NULL)
   if (!is.null(job$interrupted_ms)) return(job$interrupted_ms)
   outcome <- job$task$data
-  if (is.list(outcome) && !is.null(outcome$finished_ms)) outcome$finished_ms else NULL
+  if (is.list(outcome)) outcome$finished_ms
 }
 
 job_summary <- function(job) {
@@ -255,6 +321,7 @@ job_summary <- function(job) {
   list(
     job_id = job$id,
     method = job$method,
+    scope = job$scope,
     state = state,
     code = if (nchar(job$code) > 200L) paste0(substr(job$code, 1L, 200L), "...") else job$code,
     submitted_ms = job$submitted_ms,
@@ -359,36 +426,39 @@ object_schema <- function(properties = structure(list(), names = character()),
 
 endpoint_manifest <- function() {
   code <- string_schema(
-    "R source evaluated in the selected persistent environment",
+    "R source evaluated in the selected scope",
     examples = list(paste0(
       "mpg_by_cyl <- aggregate(mpg ~ cyl, ",
       "data = datasets::mtcars, FUN = mean); mpg_by_cyl"
     ))
   )
-  envir <- string_schema(
-    "R expression resolving to the evaluation environment",
-    default = ".piducknng_session",
-    examples = list(".piducknng_session", "analysis")
+  scope <- string_schema(
+    paste(
+      "Name of the persistent environment to evaluate in, created on first use",
+      "with the global environment as its parent"
+    ),
+    default = DEFAULT_SCOPE,
+    examples = list(DEFAULT_SCOPE, "analysis")
   )
-  enclos <- string_schema(
-    "R expression resolving to eval()'s enclosure",
-    default = "baseenv()",
-    examples = list("baseenv()", "globalenv()")
-  )
+  wait_ms <- function(description, default) {
+    integer_schema(description, default = default, maximum = MAX_WAIT_MS)
+  }
   job_id <- integer_schema("Job ID returned by submit or reported by an eval that timed out", minimum = 1L)
   methods <- list(
     rpc_method_descriptor(
       "eval",
       paste(
-        "Evaluate R code and return its value as Arrow IPC. Waits up to wait_ms;",
-        "a longer evaluation keeps running as a job and the call fails with r_timeout naming it"
+        "Evaluate R code and return its value as Arrow IPC, optionally its first limit rows.",
+        "Waits up to wait_ms; a longer evaluation keeps running as a job and the call",
+        "fails with r_timeout naming it"
       ),
       object_schema(list(
-        code = code, envir = envir, enclos = enclos,
-        wait_ms = integer_schema(
+        code = code, scope = scope,
+        wait_ms = wait_ms(
           "How long to wait for the value; keep it below the caller's RPC timeout",
-          default = DEFAULT_EVAL_WAIT_MS, maximum = MAX_WAIT_MS
-        )
+          DEFAULT_EVAL_WAIT_MS
+        ),
+        limit = integer_schema("Most rows to return; the job keeps the whole value", minimum = 0L)
       ), required = "code"),
       response_format = "arrow",
       emitted_flags = DUCKNNG_RPC_FLAG_PAYLOAD_ARROW_STREAM
@@ -396,7 +466,7 @@ endpoint_manifest <- function() {
     rpc_method_descriptor(
       "submit",
       "Start evaluating R code as a job and return its job_id at once; visible values print to its output",
-      object_schema(list(code = code, envir = envir, enclos = enclos), required = "code")
+      object_schema(list(code = code, scope = scope), required = "code")
     ),
     rpc_method_descriptor(
       "job",
@@ -406,10 +476,7 @@ endpoint_manifest <- function() {
       ),
       object_schema(list(
         job_id = job_id,
-        wait_ms = integer_schema(
-          "How long to wait for progress; keep it below the caller's RPC timeout",
-          default = 0L, maximum = MAX_WAIT_MS
-        ),
+        wait_ms = wait_ms("How long to wait for progress; keep it below the caller's RPC timeout", 0L),
         output_offset = integer_schema("Byte offset in the output already read", default = 0L),
         conditions_offset = integer_schema("Number of conditions already read", default = 0L)
       ), required = "job_id"),
@@ -428,13 +495,33 @@ endpoint_manifest <- function() {
       mutates_state = FALSE, idempotent = TRUE
     ),
     rpc_method_descriptor(
+      "scopes",
+      paste(
+        "List every scope and the names and classes of its objects, after earlier jobs finish.",
+        "Active bindings are reported without being evaluated"
+      ),
+      object_schema(list(
+        wait_ms = wait_ms("How long to wait behind earlier jobs", DEFAULT_EVAL_WAIT_MS)
+      )),
+      mutates_state = FALSE, idempotent = TRUE
+    ),
+    rpc_method_descriptor(
+      "reset",
+      "Discard one scope's environment after earlier jobs finish; the next use starts it empty",
+      object_schema(list(
+        scope = scope,
+        wait_ms = wait_ms("How long to wait behind earlier jobs", DEFAULT_EVAL_WAIT_MS)
+      ), required = "scope"),
+      idempotent = TRUE
+    ),
+    rpc_method_descriptor(
       "interrupt",
-      "Interrupt one queued or running job, or every unfinished job when job_id is omitted; the session keeps its state",
+      "Interrupt one queued or running job, or every unfinished job when job_id is omitted; scopes keep their state",
       object_schema(list(job_id = job_id))
     ),
     rpc_method_descriptor(
       "jobs",
-      "List recent jobs with their states",
+      "List recent jobs with their scopes and states",
       object_schema(),
       mutates_state = FALSE, idempotent = TRUE
     ),
@@ -449,14 +536,32 @@ endpoint_manifest <- function() {
   rpc_manifest("piducknng-r", methods)
 }
 
+# Scope inspection and reset run on the daemon behind any queued jobs, so they
+# observe and change the state those jobs leave. A request still queued at its
+# deadline is withdrawn rather than left to run later.
+daemon_reply <- function(registry, call, wait_ms) {
+  task <- mirai::mirai(.expr = call, .compute = registry$profile)
+  deadline <- now_ms() + wait_ms
+  rpc_defer(function() {
+    if (!mirai::unresolved(task)) {
+      if (mirai::is_error_value(task$data)) stop("endpoint_error: ", as.character(task$data))
+      return(rpc_json_reply(task$data))
+    }
+    if (now_ms() < deadline) return(NULL)
+    mirai::stop_mirai(task)
+    stop("r_busy: earlier jobs are still running; follow them with jobs or interrupt them")
+  })
+}
+
 endpoint_dispatch <- function(method, arguments, registry) {
   if (identical(method, "eval")) {
-    only_arguments(arguments, c("code", "envir", "enclos", "wait_ms"))
+    only_arguments(arguments, c("code", "scope", "wait_ms", "limit"))
     wait_ms <- integer_argument(arguments, "wait_ms", DEFAULT_EVAL_WAIT_MS, maximum = MAX_WAIT_MS)
+    limit <- if (!is.null(arguments$limit)) integer_argument(arguments, "limit")
     job <- submit_job(registry, "eval", arguments, echo = FALSE)
     deadline <- now_ms() + wait_ms
     return(rpc_defer(function() {
-      if (finished(job_state(job))) return(value_reply(job))
+      if (finished(job_state(job))) return(value_reply(job, limit = limit))
       if (now_ms() < deadline) return(NULL)
       stop(
         "r_timeout: evaluation continues as job ", job$id,
@@ -466,7 +571,7 @@ endpoint_dispatch <- function(method, arguments, registry) {
     }))
   }
   if (identical(method, "submit")) {
-    only_arguments(arguments, c("code", "envir", "enclos"))
+    only_arguments(arguments, c("code", "scope"))
     job <- submit_job(registry, "submit", arguments, echo = TRUE)
     return(rpc_json_reply(list(job_id = job$id, state = job_state(job))))
   }
@@ -492,8 +597,20 @@ endpoint_dispatch <- function(method, arguments, registry) {
   if (identical(method, "result")) {
     only_arguments(arguments, c("job_id", "offset", "limit"))
     job <- lookup_job(registry, arguments)
-    limit <- if (is.null(arguments$limit)) NULL else integer_argument(arguments, "limit")
+    limit <- if (!is.null(arguments$limit)) integer_argument(arguments, "limit")
     return(value_reply(job, integer_argument(arguments, "offset", 0L), limit))
+  }
+  if (identical(method, "scopes")) {
+    only_arguments(arguments, "wait_ms")
+    wait_ms <- integer_argument(arguments, "wait_ms", DEFAULT_EVAL_WAIT_MS, maximum = MAX_WAIT_MS)
+    return(daemon_reply(registry, quote(list(scopes = .piducknng_list_scopes())), wait_ms))
+  }
+  if (identical(method, "reset")) {
+    only_arguments(arguments, c("scope", "wait_ms"))
+    if (is.null(arguments$scope)) stop("invalid_argument: scope is required")
+    scope <- scope_argument(arguments)
+    wait_ms <- integer_argument(arguments, "wait_ms", DEFAULT_EVAL_WAIT_MS, maximum = MAX_WAIT_MS)
+    return(daemon_reply(registry, bquote(.piducknng_reset(.(scope))), wait_ms))
   }
   if (identical(method, "interrupt")) {
     only_arguments(arguments, "job_id")
@@ -522,25 +639,23 @@ endpoint_dispatch <- function(method, arguments, registry) {
   stop("unknown RPC method")
 }
 
-# The endpoint lives as long as the process that placed it. Without a parent
-# PID it runs until close.
-parent_keep_alive <- function() {
-  parent <- suppressWarnings(as.integer(Sys.getenv("PI_DUCKNNG_PARENT_PID")))
-  if (is.na(parent) || parent <= 0L) return(function() TRUE)
-  function() rpc_process_alive(parent)
-}
-
 # The default listener is an ipc:// socket beside the locator, so the
 # locator directory's permissions decide who may attach.
 default_listen <- function(locator) {
   socket <- file.path(normalizePath(dirname(locator)), "r.ipc")
   if (nchar(socket, type = "bytes") > 100L) {
-    stop("ipc socket path is too long; pass a listen URL: ", socket)
+    stop("ipc socket path is too long; pass --listen=URL: ", socket)
   }
   paste0("ipc://", socket)
 }
 
-main <- function(locator, listen = default_listen(locator)) {
+# With --parent=PID the endpoint exits after that process does; without it,
+# it runs until close.
+main <- function(locator, parent = NULL, listen = default_listen(locator)) {
+  if (!is.null(parent) && !grepl("^[1-9][0-9]{0,9}$", parent)) {
+    stop("--parent must be a process ID")
+  }
+  keep_alive <- if (is.null(parent)) function() TRUE else function() rpc_process_alive(parent)
   profile <- paste0("piducknng-endpoint-", Sys.getpid())
   jobs_directory <- file.path(dirname(locator), "jobs")
   dir.create(jobs_directory, showWarnings = FALSE, mode = "0700")
@@ -550,10 +665,10 @@ main <- function(locator, listen = default_listen(locator)) {
   wait_for_daemon(profile)
   initialized <- mirai::everywhere(
     {
-      assign(".piducknng_session", new.env(parent = .GlobalEnv), envir = .GlobalEnv)
-      assign(".piducknng_run", runner, envir = .GlobalEnv)
+      list2env(functions, envir = .GlobalEnv)
+      assign(".piducknng_scopes", new.env(parent = emptyenv()), envir = .GlobalEnv)
     },
-    runner = daemon_runner,
+    functions = daemon_functions,
     .compute = profile
   )
   mirai::collect_mirai(initialized)
@@ -563,10 +678,15 @@ main <- function(locator, listen = default_listen(locator)) {
     locator,
     endpoint_manifest(),
     function(method, arguments) endpoint_dispatch(method, arguments, registry),
-    keep_alive = parent_keep_alive()
+    keep_alive = keep_alive
   )
 }
 
+usage <- "usage: pi-r-endpoint.R LOCATOR_FILE [--parent=PID] [--listen=URL]"
 args <- commandArgs(trailingOnly = TRUE)
-if (!length(args) %in% 1:2) stop("usage: pi-r-endpoint.R LOCATOR_FILE [LISTEN_URL]")
-do.call(main, as.list(args))
+options <- grepl("^--(parent|listen)=.", args)
+if (sum(!options) != 1L || anyDuplicated(sub("=.*", "", args[options]))) stop(usage)
+do.call(main, c(
+  list(locator = args[!options]),
+  stats::setNames(as.list(sub("^--[a-z]+=", "", args[options])), sub("^--([a-z]+)=.*", "\\1", args[options]))
+))
