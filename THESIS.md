@@ -116,6 +116,20 @@ registration. After `send` stores mail, it publishes that topic once per
 recipient. A hint carries no mail. A subscriber that misses a hint loses
 only latency, because polling still repairs it.
 
+Plain HTTP clients follow the same hints as Server-Sent Events when the host
+is given `PI_DUCKNNG_COORDINATION_SSE_URL`. The host starts a second ducknng
+service on that HTTP listener, `https://` with the endpoint's mutual TLS, and
+registers one ducknng event route, `/events`. Its handler,
+`coordination/events.sql`, accepts only a topic that names a registered
+mailbox; any other request answers 404. `register` returns the stream URL as
+`events.sse_url`. Each hint arrives as an event named `mail` whose data is the
+topic. The route's relays subscribe to a second, in-process PUB socket that
+`send` also publishes on, because a ducknng socket has one listener and the
+hint socket may be on `wss://`. Every ducknng HTTP service also mounts framed
+RPC, so the SSE service's SQL authorizer refuses everything but routes, and
+the coordination methods stay behind the endpoint's own URL. A relay holds no
+DuckDB connection, so open streams never delay the SQL methods.
+
 - **Identity.** A mailbox belongs to a stable `(project_id, agent_id)`.
   `register` binds an instance, such as a Pi session ID, to that mailbox and
   returns an opaque `registration_id` for later calls. The registration
@@ -303,7 +317,7 @@ endpoint with in-memory PEM and a grants file, registers the granted
 certificate, and shows the ungranted one refused. `make readme` rejects output
 that lacks any receipt or that contains a machine-local path.
 
-Eight precomputed pkgdown guides carry the rest of the executable evidence,
+Nine precomputed pkgdown guides carry the rest of the executable evidence,
 and `make vignettes` rejects any that lacks its receipts or contains the
 checkout path:
 
@@ -320,6 +334,8 @@ checkout path:
 - `coordination-durability`: an endpoint killed with `SIGKILL` while a lease
   is outstanding, redelivery after a restart on the same address, and a dead
   letter;
+- `coordination-sse`: `curl -N` follows one mailbox's Server-Sent Events and
+  the listener refuses unknown topics and framed RPC;
 - `coordination-mtls`: an endpoint on in-memory PEM with grants, refused
   impersonation and takeover, and a wake-up hint over `wss://`;
 - `coordination-harness`: `tools/examples/harness-lane.ts` delivers into an
@@ -373,7 +389,11 @@ lane commit and checks the following:
 
 `test/coordination-store.test.js` drives the SQL methods over ducknng with a
 fixed server clock. It covers fan-out to lists and broadcasts, replies
-gathered by `in_reply_to`, and all-or-nothing mailbox caps. It also shows
+gathered by `in_reply_to`, and all-or-nothing mailbox caps. A `fetch()` stream
+follows one mailbox's Server-Sent Events and sees a hint within a second, no
+event for another mailbox, 404 for an unknown topic, and 403 for framed RPC
+on the SSE listener; over mutual TLS the `https://` stream needs a client
+certificate. It also shows
 that a hint reaches only its recipient's subscriber and arrives well before
 any poll. The rest of it covers:
 
@@ -399,5 +419,8 @@ the R package smoke tests against a temporary installation.
 Each of these requires its own producer, consumer, ownership rules, and
 executable proof before it is added:
 
-- an SSE hint stream for plain HTTP clients, which needs a ducknng route that
-  can yield rows as events arrive.
+- evaluating two jobs of one R session at once. One mirai daemon owns the
+  environment, so jobs run in submission order, and a read of the session's
+  objects waits behind a running job;
+- delivering mail itself, not only a wake-up, over Server-Sent Events, which
+  would need acknowledgement over a carrier that has no request per message.

@@ -52,6 +52,7 @@ articles:
       - coordination-fanout
       - coordination-reservations
       - coordination-durability
+      - coordination-sse
   - title: Deployment
     navbar: Deployment
     contents:

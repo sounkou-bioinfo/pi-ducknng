@@ -38,6 +38,11 @@ specs <- list(
     receipt = "GUIDE_DURABILITY_VERIFIED"
   ),
   list(
+    source = "coordination-sse.Rmd.orig",
+    output = "coordination-sse.Rmd",
+    receipt = "GUIDE_SSE_VERIFIED"
+  ),
+  list(
     source = "coordination-mtls.Rmd.orig",
     output = "coordination-mtls.Rmd",
     receipt = "GUIDE_MTLS_VERIFIED"

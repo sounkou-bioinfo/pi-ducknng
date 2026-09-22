@@ -1,0 +1,118 @@
+---
+title: "Follow a mailbox from any HTTP client"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Follow a mailbox from any HTTP client}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+
+
+Pi sessions and harness lanes wake on mail through an NNG subscription. A
+client without an NNG binding, such as a browser `EventSource`, a dashboard,
+or `curl`, can follow the same wake-ups as Server-Sent Events. The endpoint
+serves them when `PI_DUCKNNG_COORDINATION_SSE_URL` names an HTTP listener.
+
+
+``` bash
+PI_DUCKNNG_COORDINATION_SSE_URL=http://127.0.0.1:0 node tools/pi-coordination-endpoint.ts \
+  "$STATE/coordination.url" "$STATE/coordination.duckdb" > "$STATE/endpoint.log" 2>&1 &
+echo $! > "$STATE/endpoint.pid"
+until [ -s "$STATE/coordination.url" ]; do sleep 0.1; done
+```
+
+## A stream per mailbox
+
+`register` returns the mailbox's stream URL. Its `topic` is the same opaque
+value the NNG hints use, and it is the capability: without a registration it
+cannot be derived.
+
+
+``` r
+url <- guide_url()
+reader <- register("reader")
+writer <- register("writer")
+sse <- reader$events$sse_url
+writeLines(sse, file.path(guide_state, "sse.url"))
+sub("^http://127\\.0\\.0\\.1:[0-9]+", "http://127.0.0.1:<port>", sse)
+#> [1] "http://127.0.0.1:<port>/events?topic=dbd9d89ced30aca6c83880597ebc274b"
+```
+
+`curl -N` follows the stream in the background, and `writer` sends two
+messages to `reader`:
+
+
+``` bash
+curl -sN --max-time 4 "$(cat "$STATE/sse.url")" > "$STATE/sse.txt" 2> /dev/null &
+echo $! > "$STATE/curl.pid"
+until grep -q ': ready' "$STATE/sse.txt" 2> /dev/null; do sleep 0.05; done
+```
+
+
+``` r
+for (key in c("first", "second")) {
+  invisible(rpc_call(url, "send", list(
+    registration_id = writer$registration_id, recipient_agent_id = "reader",
+    idempotency_key = key, content = paste("mail", key)
+  )))
+}
+```
+
+The stream carried one `mail` event per message, each naming the topic and
+nothing else:
+
+
+``` bash
+tail --pid="$(cat "$STATE/curl.pid")" -f /dev/null
+cat "$STATE/sse.txt"
+#> : ready
+#>
+#> event: mail
+#> data: dbd9d89ced30aca6c83880597ebc274b
+#>
+#> event: mail
+#> data: dbd9d89ced30aca6c83880597ebc274b
+```
+
+A wake-up is a prompt to call `receive`, which is where the mail is:
+
+
+``` r
+inbox <- rpc_call(url, "receive", list(registration_id = reader$registration_id, limit = 8))
+vapply(inbox$messages, `[[`, "", "content")
+#> [1] "mail first"  "mail second"
+```
+
+## What the listener refuses
+
+A topic that names no registered mailbox gets no stream. The listener is an
+HTTP service, and every ducknng HTTP service also mounts framed RPC, so its
+authorizer refuses everything but the event route. The coordination methods
+stay behind the endpoint's own `ipc://` URL:
+
+
+``` bash
+base="$(sed 's/?.*//' "$STATE/sse.url")"
+printf 'unknown topic: %s\n' "$(curl -s -o /dev/null -w '%{http_code}' "$base?topic=00000000000000000000000000000000")"
+printf 'no topic: %s\n' "$(curl -s -o /dev/null -w '%{http_code}' "$base")"
+# A manifest request: version 1, type 0, then 20 zero bytes of header.
+{ printf '\001'; head -c 21 /dev/zero; } > "$STATE/manifest.frame"
+printf 'framed RPC: %s\n' "$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+  -H 'Content-Type: application/vnd.ducknng.frame' \
+  --data-binary @"$STATE/manifest.frame" "${base%/events}/_ducknng")"
+#> unknown topic: 404
+#> no topic: 404
+#> framed RPC: 403
+```
+
+With mutual TLS the listener must be `https://` and asks for the same client
+certificates as the endpoint. The relay behind each stream holds no DuckDB
+connection, so open streams never slow the SQL methods, and stopping the
+endpoint ends them.
+
+
+
+
+
+> GUIDE_SSE_VERIFIED: curl followed one mailbox and saw one mail event per message
