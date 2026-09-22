@@ -58,6 +58,7 @@ async function main(): Promise<void> {
     throw new Error("a mutual-TLS endpoint needs PI_DUCKNNG_COORDINATION_GRANTS_FILE");
   }
   const eventsUrl = environment("PI_DUCKNNG_COORDINATION_EVENTS_URL");
+  const sseUrl = environment("PI_DUCKNNG_COORDINATION_SSE_URL");
   // The ipc socket and locator are created readable only by this user.
   process.umask(0o077);
   const endpoint = await startCoordinationEndpoint({
@@ -67,7 +68,9 @@ async function main(): Promise<void> {
     tls,
     grants: granted,
     events: eventsUrl === "off" ? false : eventsUrl ? { listen: eventsUrl } : undefined,
+    sse: sseUrl ? { listen: sseUrl } : undefined,
   });
+  if (endpoint.sseUrl) console.log(`server-sent events: ${endpoint.sseUrl}?topic=<topic>`);
   const keepAlive = setInterval(() => {}, 2 ** 30);
   const stop = async () => {
     clearInterval(keepAlive);

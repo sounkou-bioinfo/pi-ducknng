@@ -151,7 +151,9 @@ export function parseRegistration(value: unknown): Registration {
     registration_id: stringValue(record, "registration_id"),
     heartbeat_interval_ms: numberValue(record, "heartbeat_interval_ms"),
   };
-  if (typeof events === "object" && events !== null) {
+  // An endpoint that serves only Server-Sent Events has no NNG hint URL.
+  if (typeof events === "object" && events !== null &&
+      typeof (events as Record<string, unknown>).url === "string") {
     const hint = events as Record<string, unknown>;
     registration.events = { url: stringValue(hint, "url"), topic: stringValue(hint, "topic") };
   }

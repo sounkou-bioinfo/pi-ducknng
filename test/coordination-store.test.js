@@ -11,6 +11,7 @@ import {
   subscribeCoordinationEvents,
 } from "../extensions/pi-ducknng/index.ts";
 import { readFile } from "node:fs/promises";
+import https from "node:https";
 import { pki, withEnv } from "./support/pki.js";
 
 // Drives the SQL methods over the real ducknng path with a fixed server clock
@@ -250,6 +251,7 @@ test("mutual TLS binds registrations to granted peer identities", async () => {
   const s = await store(work, {
     listen: "tls+tcp://127.0.0.1:0",
     tls: { certKeyFile: material.server, caFile: material.ca },
+    sse: { listen: "https://127.0.0.1:0" },
   }).catch(async (error) => {
     await rm(work, { recursive: true, force: true });
     throw error;
@@ -319,6 +321,22 @@ test("mutual TLS binds registrations to granted peer identities", async () => {
     assert.equal(inbox.messages[0].sender_agent_id, "alice");
     const agents = await as("alice", () => s.call("list_agents", { registration_id: alice.registration_id }));
     assert.ok(agents.agents.every(({ authenticated }) => authenticated === true));
+
+    // Over mutual TLS the SSE listener is https:// and wants a client
+    // certificate too; the endpoint here serves no NNG hints at all.
+    assert.equal(alice.events.url, null);
+    assert.match(alice.events.sse_url, /^https:\/\/127\.0\.0\.1:\d+\/events\?topic=[0-9a-f]{32}$/);
+    const stream = (clientCert) => new Promise((done, fail) => {
+      const request = https.get(alice.events.sse_url, { ca: caPem, ...clientCert }, (response) => {
+        response.once("data", (chunk) => {
+          done({ status: response.statusCode, first: String(chunk) });
+          request.destroy();
+        });
+      });
+      request.once("error", fail);
+    });
+    assert.deepEqual(await stream(clientPem.alice), { status: 200, first: ": ready\n\n" });
+    await assert.rejects(stream({}));
   } finally {
     await s.endpoint.close();
     await rm(work, { recursive: true, force: true });
@@ -448,6 +466,85 @@ test("an endpoint without hints advertises none", async () => {
     const lead = await s.register("lead", "lead-1");
     assert.equal(lead.events, null);
     assert.equal(s.endpoint.eventsUrl, undefined);
+  } finally {
+    await s.endpoint.close();
+    await rm(work, { recursive: true, force: true });
+  }
+});
+
+// Reads one Server-Sent Events block, up to and including its blank line.
+function sseReader(body) {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffered = "";
+  return async function next(timeoutMs = 3000) {
+    const deadline = Date.now() + timeoutMs;
+    while (!buffered.includes("\n\n")) {
+      const left = deadline - Date.now();
+      if (left <= 0) throw new Error(`no event within ${timeoutMs} ms: ${JSON.stringify(buffered)}`);
+      const read = await Promise.race([
+        reader.read(),
+        new Promise((done) => setTimeout(() => done({ timeout: true }), left)),
+      ]);
+      if (read.timeout) continue;
+      if (read.done) return null;
+      buffered += decoder.decode(read.value, { stream: true });
+    }
+    const end = buffered.indexOf("\n\n") + 2;
+    const block = buffered.slice(0, end);
+    buffered = buffered.slice(end);
+    return block;
+  };
+}
+
+test("an HTTP client follows one mailbox's hints as Server-Sent Events", async () => {
+  const work = await mkdtemp(resolve(tmpdir(), "pi-ducknng-store-"));
+  const s = await store(work, { sse: { listen: "http://127.0.0.1:0" } });
+  try {
+    assert.match(s.endpoint.sseUrl, /^http:\/\/127\.0\.0\.1:\d+\/events$/);
+    const writer = await s.register("writer", "writer-1");
+    const reader = await s.register("reader", "reader-1");
+    assert.equal(reader.events.sse_url, `${s.endpoint.sseUrl}?topic=${reader.events.topic}`);
+
+    const controller = new AbortController();
+    const response = await fetch(reader.events.sse_url, { signal: controller.signal });
+    assert.equal(response.status, 200);
+    assert.match(response.headers.get("content-type"), /^text\/event-stream/);
+    const next = sseReader(response.body);
+    assert.equal(await next(), ": ready\n\n");
+
+    const sent = Date.now();
+    await s.call("send", {
+      registration_id: writer.registration_id, recipient_agent_id: "reader",
+      idempotency_key: "sse-1", content: "look",
+    });
+    assert.equal(await next(), `event: mail\ndata: ${reader.events.topic}\n\n`);
+    assert.ok(Date.now() - sent < 1000, "hint arrived after a poll interval");
+    // The hint carries no mail; receive does.
+    const mail = (await s.call("receive", { registration_id: reader.registration_id })).messages;
+    assert.deepEqual(mail.map(({ content }) => content), ["look"]);
+
+    // Mail to another mailbox is not relayed to this stream.
+    await s.call("send", {
+      registration_id: reader.registration_id, recipient_agent_id: "writer",
+      idempotency_key: "sse-2", content: "elsewhere",
+    });
+    await assert.rejects(next(600), /no event within 600 ms/);
+    controller.abort();
+
+    // A topic no mailbox has, or none at all, is refused.
+    const unknown = await fetch(`${s.endpoint.sseUrl}?topic=${"0".repeat(32)}`);
+    assert.equal(unknown.status, 404);
+    await unknown.text();
+    assert.equal((await fetch(s.endpoint.sseUrl)).status, 404);
+    // The listener carries no framed RPC, so it cannot reach the methods.
+    const rpc = await fetch(new URL("/_ducknng", s.endpoint.sseUrl), {
+      method: "POST",
+      headers: { "content-type": "application/vnd.ducknng.frame" },
+      body: new Uint8Array([1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]),
+    });
+    assert.equal(rpc.status, 403);
+    await rpc.text();
   } finally {
     await s.endpoint.close();
     await rm(work, { recursive: true, force: true });

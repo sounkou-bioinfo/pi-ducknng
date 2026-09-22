@@ -17,8 +17,6 @@ import {
 
 const execFileAsync = promisify(execFile);
 export const PACKAGE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
-const DUCKNNG_WIRE_VERSION = 1;
-const DUCKNNG_RPC_CALL = 1;
 const DUCKNNG_RPC_FLAG_PAYLOAD_JSON = 4;
 const DUCKNNG_RPC_FLAG_PAYLOAD_ARROW_STREAM = 8;
 const DEFAULT_CALL_TIMEOUT_MS = 30_000;
@@ -28,12 +26,13 @@ const MANIFEST_SQL = `
   FROM ducknng_decode_frame(
     ducknng_get_rpc_manifest_raw($url, $tls_config_id::UBIGINT)
   )`;
+// ducknng builds the call frame; this client never assembles envelope bytes.
 const RPC_CALL_SQL = `
   SELECT type_name, name, flags, error AS error_text, payload
   FROM ducknng_decode_frame(
     ducknng_request_raw(
       $url,
-      from_hex($frame_hex),
+      ducknng_encode_rpc_call($method, $payload),
       $timeout,
       $tls_config_id::UBIGINT
     )
@@ -434,23 +433,6 @@ function parseManifest(payload: string): EndpointManifest {
   };
 }
 
-function buildRpcCallFrame(
-  method: string,
-  args: Record<string, unknown>,
-): Uint8Array {
-  const name = Buffer.from(method, "utf8");
-  const payload = Buffer.from(JSON.stringify(args), "utf8");
-  if (name.length === 0) throw new Error("ducknng RPC method is empty");
-  const header = Buffer.alloc(22);
-  header.writeUInt8(DUCKNNG_WIRE_VERSION, 0);
-  header.writeUInt8(DUCKNNG_RPC_CALL, 1);
-  header.writeUInt32LE(DUCKNNG_RPC_FLAG_PAYLOAD_JSON, 2);
-  header.writeUInt32LE(name.length, 6);
-  header.writeUInt32LE(0, 10);
-  header.writeBigUInt64LE(BigInt(payload.length), 14);
-  return Buffer.concat([header, name, payload]);
-}
-
 async function manifestThroughDucknng(
   extensionPath: string,
   url: string,
@@ -481,12 +463,13 @@ async function rpcCallThroughDucknng(
   args: Record<string, unknown>,
   timeoutMs = 5000,
 ): Promise<unknown> {
-  const frameHex = Buffer.from(buildRpcCallFrame(method, args)).toString("hex");
+  if (!method) throw new Error("ducknng RPC method is empty");
   const { instance, connection } = await openDucknngConnection(extensionPath);
   try {
     const reader = await connection.runAndReadAll(RPC_CALL_SQL, {
       url,
-      frame_hex: frameHex,
+      method,
+      payload: JSON.stringify(args),
       timeout: timeoutMs,
       tls_config_id: await clientTlsConfigId(connection, url),
     });

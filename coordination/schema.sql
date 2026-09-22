@@ -12,11 +12,16 @@ CREATE TABLE IF NOT EXISTS coordination_meta (
   -- mailbox topics unguessable without a registration.
   event_socket_id UBIGINT,
   event_url VARCHAR,
-  event_salt VARCHAR NOT NULL
+  event_salt VARCHAR NOT NULL,
+  -- Server-Sent Events for HTTP clients: the in-process PUB socket and URL the
+  -- event route's relays subscribe to, and the public /events URL.
+  event_relay_socket_id UBIGINT,
+  event_relay_url VARCHAR,
+  event_sse_url VARCHAR
 );
 
 INSERT INTO coordination_meta
-  VALUES (TRUE, 1, NULL, 0, 2592000000, 10000, NULL, NULL, uuid()::VARCHAR)
+  VALUES (TRUE, 1, NULL, 0, 2592000000, 10000, NULL, NULL, uuid()::VARCHAR, NULL, NULL, NULL)
   ON CONFLICT (singleton) DO NOTHING;
 
 -- A verified peer identity may act only as the (project, agent) pairs granted
@@ -236,8 +241,13 @@ CREATE OR REPLACE MACRO coord_topic(project, agent) AS (
 );
 
 CREATE OR REPLACE MACRO coord_events(project, agent) AS (
-  SELECT CASE WHEN event_url IS NOT NULL THEN
-    struct_pack(url := event_url, topic := coord_topic(project, agent))
+  SELECT CASE WHEN event_url IS NOT NULL OR event_sse_url IS NOT NULL THEN
+    struct_pack(
+      url := event_url,
+      topic := coord_topic(project, agent),
+      sse_url := CASE WHEN event_sse_url IS NOT NULL
+        THEN event_sse_url || '?topic=' || coord_topic(project, agent) END
+    )
   END
   FROM coordination_meta
 );

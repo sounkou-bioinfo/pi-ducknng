@@ -114,11 +114,14 @@ SELECT
 FROM (SELECT unnest(getvariable('coord_targets'), recursive := true)) AS t,
   (SELECT unnest(getvariable('coord_args'))) AS a;
 -- Wake-up hints carry only an opaque mailbox topic; a missed hint costs
--- latency, never mail.
+-- latency, never mail. They go to the hint socket and, when Server-Sent
+-- Events are served, to the in-process socket their relays subscribe to.
 SELECT count(ducknng_send_socket_raw(
-  m.event_socket_id, encode(coord_topic(getvariable('coord_reg').project_id, t.recipient)), 100))
-FROM (SELECT unnest(getvariable('coord_targets'), recursive := true)) AS t, coordination_meta m
-WHERE m.event_socket_id IS NOT NULL;
+  s.socket_id, encode(coord_topic(getvariable('coord_reg').project_id, t.recipient)), 100))
+FROM (SELECT unnest(getvariable('coord_targets'), recursive := true)) AS t,
+  (SELECT event_socket_id AS socket_id FROM coordination_meta WHERE event_socket_id IS NOT NULL
+   UNION ALL
+   SELECT event_relay_socket_id FROM coordination_meta WHERE event_relay_socket_id IS NOT NULL) AS s;
 SET VARIABLE coord_sent = (
   SELECT list(struct_pack(
     recipient_agent_id := m.recipient_agent_id,

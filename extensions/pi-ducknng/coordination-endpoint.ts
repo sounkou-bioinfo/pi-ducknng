@@ -1,9 +1,18 @@
+import { randomUUID } from "node:crypto";
 import { readFile, rename, writeFile } from "node:fs/promises";
 import { basename, dirname, extname, resolve } from "node:path";
 import { DuckDBInstance, type DuckDBConnection } from "@duckdb/node-api";
 import { PACKAGE_ROOT, ensureDucknngExtension } from "./index.ts";
 
 const SERVICE = "pi_coordination";
+const SSE_SERVICE = "pi_coordination_sse";
+// The SSE listener is an HTTP service, and every HTTP service also mounts
+// framed RPC. Refusing everything but routes keeps the coordination methods
+// off this listener; they stay behind the endpoint's own URL.
+const SSE_AUTHORIZER_SQL = `
+  SELECT phase = 'http_route' AS allow, 403 AS status,
+    'this listener serves only /events' AS reason
+  FROM ducknng_auth_context()`;
 const COORDINATION_ROOT = resolve(PACKAGE_ROOT, "coordination");
 
 export type CoordinationGrant = {
@@ -34,6 +43,13 @@ export type CoordinationEndpointOptions = {
    * publish hints across hosts, or false to disable hints.
    */
   events?: false | { listen: string };
+  /**
+   * Server-Sent Events listener for plain HTTP clients, such as
+   * http://127.0.0.1:0. Each mailbox's hints stream from /events?topic=, with
+   * the topic register returns. With tls it must be https:// and requires the
+   * same client certificates as the endpoint. It does not need NNG hints.
+   */
+  sse?: { listen: string };
   /** Peer identities allowed to register as each (project, agent). */
   grants?: CoordinationGrant[];
   retentionMs?: number;
@@ -44,6 +60,8 @@ export type CoordinationEndpoint = {
   url: string;
   /** Wake-up hint URL, when hints are enabled. */
   eventsUrl?: string;
+  /** Server-Sent Events base URL, when an SSE listener is enabled. */
+  sseUrl?: string;
   /** The host connection, for administration on the same database. */
   connection: DuckDBConnection;
   close(): Promise<void>;
@@ -137,17 +155,25 @@ export async function startCoordinationEndpoint(
   });
   const connection = await instance.connect();
   let serving = false;
+  let sseServing = false;
   let eventSocket: unknown;
+  let relaySocket: unknown;
   const shutdown = async () => {
     try {
+      if (sseServing) await connection.run(`SELECT ducknng_stop_server('${SSE_SERVICE}')`);
       if (serving) await connection.run(`SELECT ducknng_stop_server('${SERVICE}')`);
       if (eventSocket !== undefined) {
         await connection.run(
-          "UPDATE coordination_meta SET event_socket_id = NULL, event_url = NULL");
+          "UPDATE coordination_meta SET event_socket_id = NULL, event_url = NULL, " +
+          "event_relay_socket_id = NULL, event_relay_url = NULL, event_sse_url = NULL");
         await connection.run("SELECT ducknng_close_socket($id::UBIGINT)", { id: eventSocket } as never);
+      }
+      if (relaySocket !== undefined) {
+        await connection.run("SELECT ducknng_close_socket($id::UBIGINT)", { id: relaySocket } as never);
       }
     } finally {
       serving = false;
+      sseServing = false;
       connection.closeSync();
       instance.closeSync();
     }
@@ -188,7 +214,9 @@ export async function startCoordinationEndpoint(
     }
     const tlsConfig = options.tls ? await tlsConfigId(connection, options.tls) : 0;
     let eventsUrl: string | undefined;
-    await connection.run("UPDATE coordination_meta SET event_socket_id = NULL, event_url = NULL");
+    await connection.run(
+      "UPDATE coordination_meta SET event_socket_id = NULL, event_url = NULL, " +
+      "event_relay_socket_id = NULL, event_relay_url = NULL, event_sse_url = NULL");
     if (eventsListen) {
       const opened = await socketCall(connection, "ducknng_open_socket('pub')", {});
       eventSocket = opened.socket_id;
@@ -199,6 +227,40 @@ export async function startCoordinationEndpoint(
       await connection.run(
         "UPDATE coordination_meta SET event_socket_id = $id::UBIGINT, event_url = $url",
         { id: eventSocket, url: eventsUrl } as never,
+      );
+    }
+    let sseUrl: string | undefined;
+    if (options.sse) {
+      const base = new URL(options.sse.listen);
+      if (base.protocol !== (options.tls ? "https:" : "http:")) {
+        throw new Error(options.tls
+          ? "a mutual-TLS endpoint serves Server-Sent Events only over https://"
+          : "Server-Sent Events over https:// need the endpoint's TLS material");
+      }
+      // Relays subscribe to a second, in-process PUB socket that send also
+      // publishes on, so they need neither TLS material nor a file. A ducknng
+      // socket has one listener, so the hint socket cannot also serve inproc.
+      const relayUrl = `inproc://pi-coordination-events-${randomUUID()}`;
+      relaySocket = (await socketCall(connection, "ducknng_open_socket('pub')", {})).socket_id;
+      await socketCall(connection,
+        "ducknng_listen_socket($id::UBIGINT, $url, 1048576, 0::UBIGINT)",
+        { id: relaySocket, url: relayUrl });
+      await connection.run(
+        `SELECT ducknng_start_server('${SSE_SERVICE}', $listen, 1, 1048576, 300000, $tls::UBIGINT)`,
+        { listen: new URL("/_ducknng", base).href, tls: tlsConfig },
+      );
+      sseServing = true;
+      await connection.run(`SELECT ducknng_set_service_authorizer('${SSE_SERVICE}', $sql)`,
+        { sql: SSE_AUTHORIZER_SQL });
+      await connection.run(`SELECT ducknng_add_event_route('${SSE_SERVICE}', '/events', $sql)`,
+        { sql: await readFile(resolve(COORDINATION_ROOT, "events.sql"), "utf8") });
+      const mount = String(await scalar(connection,
+        `SELECT listen FROM ducknng_list_servers() WHERE name = '${SSE_SERVICE}'`));
+      sseUrl = new URL("/events", mount).href;
+      await connection.run(
+        "UPDATE coordination_meta SET event_relay_socket_id = $socket::UBIGINT, " +
+        "event_relay_url = $relay, event_sse_url = $sse",
+        { socket: relaySocket, relay: relayUrl, sse: sseUrl } as never,
       );
     }
     await connection.run(
@@ -213,7 +275,7 @@ export async function startCoordinationEndpoint(
       await writeFile(staged, `${url}\n`, { mode: 0o600 });
       await rename(staged, options.locator);
     }
-    return { url, eventsUrl, connection, close: shutdown };
+    return { url, eventsUrl, sseUrl, connection, close: shutdown };
   } catch (error) {
     await shutdown();
     throw error;
