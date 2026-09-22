@@ -73,6 +73,7 @@ test("model tools discover and call the ducknng manifest", async () => {
       "persistent_r_start",
       "ducknng_describe",
       "ducknng_call",
+      "duckdb_sql",
       "coordination_send",
       "coordination_inbox",
       "coordination_agents",
@@ -345,5 +346,48 @@ test("R endpoint outlives idle polls and exits with its parent", async () => {
     parent.kill();
     endpoint.kill("SIGKILL");
     await rm(work, { recursive: true, force: true });
+  }
+});
+
+test("duckdb_sql keeps tables in the project workspace and reads R values into them", async () => {
+  const cwd = await mkdtemp(resolve(tmpdir(), "pi-ducknng-workspace-test-"));
+  const signal = new AbortController().signal;
+  const session = () => {
+    const loaded = loadTools();
+    const sql = async (text, options = {}) => (await loaded.tools.get("duckdb_sql").execute(
+      "sql", { sql: text, ...options }, signal, undefined, { cwd })).details;
+    return { ...loaded, sql };
+  };
+  const first = session();
+  try {
+    await assert.rejects(first.sql("FROM r_eval('1')"), /call persistent_r_start first/);
+    const bounded = await first.sql("FROM range(10)", { max_rows: 3 });
+    assert.deepEqual(bounded.columns, [{ name: "range", type: "BIGINT" }]);
+    assert.equal(bounded.rows.length, 3);
+    assert.equal(bounded.truncated, true);
+    assert.equal(bounded.database, ".pi/ducknng/workspace.duckdb");
+
+    await first.tools.get("persistent_r_start").execute("start", {}, signal);
+    const saved = await first.sql([
+      "CREATE TABLE mpg_by_cyl AS",
+      "FROM r_eval('aggregate(mpg ~ cyl, data = datasets::mtcars, FUN = mean)')",
+      "; SELECT count(*) AS groups FROM mpg_by_cyl",
+    ].join(" "));
+    assert.deepEqual(saved.rows, [{ groups: "3" }]);
+    await first.sql("FROM r_eval('marker <- TRUE; 1', scope := 'kept')");
+    assert.deepEqual((await first.sql("FROM r_eval('exists(\"marker\")')")).rows, [{ value: false }]);
+    await assert.rejects(first.sql("FROM r_eval('stop(\"boom\")')"), /r_error: job \d+: boom/);
+  } finally {
+    await first.shutdown();
+  }
+
+  const second = session();
+  try {
+    const reopened = await second.sql("SELECT cyl, round(mpg, 2) AS mpg FROM mpg_by_cyl ORDER BY cyl");
+    assert.deepEqual(reopened.rows.map(({ cyl }) => cyl), [4, 6, 8]);
+    await readFile(resolve(cwd, ".pi/ducknng/workspace.duckdb"));
+  } finally {
+    await second.shutdown();
+    await rm(cwd, { recursive: true, force: true });
   }
 });

@@ -7,9 +7,7 @@ vignette: >
   %\VignetteEncoding{UTF-8}
 ---
 
-```{r setup, include = FALSE}
-source("tools/guides/setup.R")
-```
+
 
 You started a slow computation in R and want an agent to watch it, stop it
 once it has done enough, and hand the partial result on, without losing the
@@ -24,7 +22,8 @@ This time the guide starts the endpoint and submits the work itself. Pi's
 `persistent_r_start` starts the same endpoint, and it writes the URL to the
 file named in `PI_DUCKNNG_R_LOCATOR` so that another client can attach.
 
-```{bash}
+
+``` bash
 Rscript --vanilla tools/pi-r-endpoint.R "$STATE/r.url" > "$STATE/r.log" 2>&1 &
 until [ -s "$STATE/r.url" ]; do sleep 0.1; done
 ```
@@ -32,7 +31,8 @@ until [ -s "$STATE/r.url" ]; do sleep 0.1; done
 The job is a slow bootstrap of mean `mpg` that reports progress every 20
 resamples and would take four minutes to finish:
 
-```{r}
+
+``` r
 url <- readLines(file.path(guide_state, "r.url"))
 started <- rpc_call(url, "submit", list(code = paste(
   "set.seed(42); resamples <- numeric(0)",
@@ -44,11 +44,13 @@ started <- rpc_call(url, "submit", list(code = paste(
   sep = "\n"
 )))
 show(started)
+#> {
+#>   "job_id": 1,
+#>   "state": "queued"
+#> }
 ```
 
-```{r, include = FALSE}
-Sys.setenv(R_SESSION_URL = url)
-```
+
 
 ## An agent attaches, follows, and interrupts
 
@@ -56,15 +58,13 @@ A live Pi session is given only the URL, in the `R_SESSION_URL` environment
 variable, and reaches the session through its generic `ducknng_describe` and
 `ducknng_call` tools:
 
-```{r, echo = FALSE, results = "asis"}
-agent_task("
-  An R session I started is running a slow bootstrap of mean `mpg`; its
-  ducknng URL is in the `R_SESSION_URL` environment variable. Do not start
-  another R session. Watch the bootstrap's progress until it has done at least
-  100 resamples, then stop it without closing the session, and tell me how
-  many resamples the session kept and what their mean is.
-")
-```
+**Task**
+
+> An R session I started is running a slow bootstrap of mean `mpg`; its ducknng URL is in the `R_SESSION_URL` environment variable. Do not start another R session. Watch the bootstrap's progress until it has done at least 100 resamples, then stop it without closing the session, and tell me how many resamples the session kept and what their mean is.
+
+**The agent answered**
+
+> Stopped the bootstrap after observing 100 resamples. The session kept **124 resamples**, with mean **20.13919 mpg**. The R session remains open.
 
 ## A DuckDB session reads the result
 
@@ -72,9 +72,26 @@ The objects the job created are still in the session. A plain DuckDB SQL
 session reads them over the same URL, with `ducknng_encode_rpc_call` building
 the call and `ducknng_parse_body` decoding the Arrow reply:
 
-```{bash}
+
+``` bash
 cat tools/guides/r-attach.sql
 node tools/ducknng-sql.ts tools/guides/r-attach.sql r_url="$(cat "$STATE/r.url")"
+#> -- A DuckDB session attaches to the running R session through ducknng and
+#> -- reads a data frame from it as Arrow.
+#> SET VARIABLE reply = ducknng_request_raw(
+#>   getvariable('r_url'),
+#>   ducknng_encode_rpc_call('eval',
+#>     '{"code":"data.frame(draw = seq_along(resamples), mean_mpg = resamples)"}'),
+#>   30000, 0::UBIGINT);
+#> SELECT count(*) AS draws,
+#>        round(avg(mean_mpg), 2) AS mean_of_means,
+#>        round(quantile_cont(mean_mpg, 0.025), 2) AS low_2_5,
+#>        round(quantile_cont(mean_mpg, 0.975), 2) AS high_97_5
+#> FROM ducknng_parse_body(ducknng_frame_payload(getvariable('reply')),
+#>   'application/vnd.apache.arrow.stream');
+#> draws  mean_of_means  low_2_5  high_97_5
+#> -----  -------------  -------  ---------
+#> 124    20.14          18.27    22.15
 ```
 
 ## What the job recorded
@@ -82,15 +99,35 @@ node tools/ducknng-sql.ts tools/guides/r-attach.sql r_url="$(cat "$STATE/r.url")
 The endpoint keeps each job's output, so any client can replay it from
 offset zero:
 
-```{r}
+
+``` r
 jobs <- rpc_call(url, "jobs")$jobs
 knitr::kable(data.frame(
   job_id = vapply(jobs, `[[`, 0, "job_id"),
   method = vapply(jobs, `[[`, "", "method"),
   state = vapply(jobs, `[[`, "", "state")
 ))
+```
+
+
+
+| job_id|method |state       |
+|------:|:------|:-----------|
+|      1|submit |interrupted |
+|      2|eval   |succeeded   |
+|      3|eval   |succeeded   |
+
+
+
+``` r
 followed <- rpc_call(url, "job", list(job_id = started$job_id))
 cat(followed$output)
+#> 20 resamples, mean 20.34
+#> 40 resamples, mean 20.33
+#> 60 resamples, mean 20.15
+#> 80 resamples, mean 20.14
+#> 100 resamples, mean 20.12
+#> 120 resamples, mean 20.12
 ```
 
 ## Conditions and errors
@@ -99,7 +136,8 @@ Warnings and messages are recorded as they are signalled. A client follows a
 job by passing back the offsets from each reply, so it never sees the same
 output or condition twice:
 
-```{r}
+
+``` r
 follow <- function(url, job_id) {
   output <- ""
   conditions <- list()
@@ -126,35 +164,40 @@ checked <- rpc_call(url, "submit", list(code = paste(
 )))
 report <- follow(url, checked$job_id)
 report$state
+#> [1] "succeeded"
 knitr::kable(data.frame(
   type = vapply(report$conditions, `[[`, "", "type"),
   message = trimws(vapply(report$conditions, `[[`, "", "message"))
 ))
+```
+
+
+
+|type    |message                    |
+|:-------|:--------------------------|
+|message |checking the fit           |
+|warning |heavier cars use more fuel |
+
+
+
+``` r
 cat(report$output)
+#> checking the fit
+#> (Intercept)          wt
+#>      37.285      -5.344
 ```
 
 An error ends its job, and `eval` reports the message, the call, and the
 condition's classes:
 
-```{r}
+
+``` r
 sub("^.*?(r_error)", "\\1", failure(rpc_call(url, "eval", list(
   code = "fit_model <- function(data) stop('the model did not converge'); fit_model(mtcars)"
 ))))
+#> [1] "r_error: job 5: the model did not converge in fit_model(mtcars) (class simpleError, error, condition)"
 ```
 
-```{r, include = FALSE}
-final <- rpc_call(url, "job", list(job_id = started$job_id))
-draws <- rpc_call(url, "jobs")$jobs
-invisible(rpc_call(url, "close"))
-stopifnot(
-  identical(final$state, "interrupted"),
-  grepl("100 resamples", final$output),
-  !grepl("960 resamples", final$output),
-  identical(report$state, "succeeded"),
-  length(report$conditions) == 2L
-)
-```
 
-```{r, echo = FALSE, results = "asis"}
-cat("> GUIDE_R_JOBS_VERIFIED: an attached agent followed and interrupted a job, and the session kept its state\n")
-```
+
+> GUIDE_R_JOBS_VERIFIED: an attached agent followed and interrupted a job, and the session kept its state

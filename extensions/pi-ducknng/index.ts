@@ -14,6 +14,12 @@ import {
   registerCoordinationAdapter,
 } from "./coordination.ts";
 import { resolveDucknngExtension } from "./ducknng-binary.ts";
+import {
+  MAX_SQL_ROWS,
+  type SqlWorkspace,
+  WORKSPACE_FILE,
+  openSqlWorkspace,
+} from "./workspace.ts";
 
 export const PACKAGE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const DUCKNNG_RPC_FLAG_PAYLOAD_JSON = 4;
@@ -51,8 +57,9 @@ export function closeDucknngConnection(
 
 export async function openDucknngConnection(
   extensionPath: string,
+  database = ":memory:",
 ): Promise<{ instance: DuckDBInstance; connection: DuckDBConnection }> {
-  const instance = await DuckDBInstance.create(":memory:", {
+  const instance = await DuckDBInstance.create(database, {
     allow_unsigned_extensions: "true",
   });
   let connection: DuckDBConnection | undefined;
@@ -466,6 +473,17 @@ async function rpcCallThroughDucknng(
 }
 
 const StartParameters = Type.Object({}, { additionalProperties: false });
+const SqlParameters = Type.Object(
+  {
+    sql: Type.String({ description: "DuckDB SQL; several statements may be separated by semicolons" }),
+    max_rows: Type.Optional(Type.Integer({
+      minimum: 1,
+      maximum: MAX_SQL_ROWS,
+      description: "Most rows of the last statement to return, 100 by default",
+    })),
+  },
+  { additionalProperties: false },
+);
 const DescribeParameters = Type.Object(
   {
     url: Type.String({ description: "NNG endpoint URL" }),
@@ -696,6 +714,30 @@ async function disposeLocalEndpoint(): Promise<void> {
   }
 }
 
+let sqlWorkspace: Promise<SqlWorkspace> | undefined;
+
+// The workspace opens on first use in the session's working directory.
+function workspaceFor(cwd: string): Promise<SqlWorkspace> {
+  if (!sqlWorkspace) {
+    const opening = openSqlWorkspace(cwd, async (database) => {
+      const extensionPath = await resolveDucknngExtension(PACKAGE_ROOT);
+      const { instance, connection } = await openDucknngConnection(extensionPath, database);
+      return { connection, close: () => closeDucknngConnection(instance, connection) };
+    });
+    sqlWorkspace = opening;
+    opening.catch(() => {
+      if (sqlWorkspace === opening) sqlWorkspace = undefined;
+    });
+  }
+  return sqlWorkspace;
+}
+
+async function closeSqlWorkspace(): Promise<void> {
+  const opening = sqlWorkspace;
+  sqlWorkspace = undefined;
+  (await opening?.catch(() => undefined))?.close();
+}
+
 // The complete reply is parsed first; only the model-facing serialization is
 // capped. BIGINT values from DuckDB become decimal strings.
 function toolResult(value: unknown) {
@@ -840,6 +882,26 @@ export default function piDucknngExtension(pi: ExtensionAPI): void {
     },
   });
 
+  pi.registerTool({
+    name: "duckdb_sql",
+    label: "DuckDB SQL workspace",
+    description:
+      `Run DuckDB SQL in this project's persistent workspace, ${WORKSPACE_FILE}, with ducknng loaded, and return the last statement's first rows. Tables persist across sessions: keep results that matter in tables and read back only what you need. After persistent_r_start, FROM r_eval('<R code>', scope := 'main') returns an R value as rows, so CREATE TABLE name AS FROM r_eval(...) saves it.`,
+    parameters: SqlParameters,
+    execute: async (_toolCallId, params, signal, _onUpdate, ctx) => {
+      signal?.throwIfAborted();
+      if (!params.sql) throw new Error("sql is required");
+      const workspace = await workspaceFor(ctx.cwd);
+      const endpoint = localEndpoint && !hasExited(localEndpoint) ? localEndpoint : undefined;
+      const reply = await workspace.query(params.sql, {
+        maxRows: params.max_rows,
+        rUrl: endpoint?.url,
+        signal,
+      });
+      return toolResult({ database: WORKSPACE_FILE, ...reply });
+    },
+  });
+
   registerCoordinationAdapter(pi, {
     describe: describeEndpoint,
     call: callCoordinationEndpoint,
@@ -849,6 +911,7 @@ export default function piDucknngExtension(pi: ExtensionAPI): void {
   });
 
   pi.on("session_shutdown", async () => {
+    await closeSqlWorkspace();
     await disposeLocalEndpoint();
   });
 }

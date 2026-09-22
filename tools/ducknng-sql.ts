@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { parseArgs } from "node:util";
 import { StatementType } from "@duckdb/node-api";
 import {
   PACKAGE_ROOT,
@@ -7,10 +8,11 @@ import {
   openDucknngConnection,
 } from "../extensions/pi-ducknng/index.ts";
 
-// Runs a SQL file in an in-memory DuckDB with the pinned ducknng loaded and
-// prints each SELECT result as a table. NAME=value arguments become SQL variables,
-// read with getvariable('NAME'), and are bound rather than spliced into SQL.
-const USAGE = "usage: node tools/ducknng-sql.ts FILE.sql [NAME=value ...]";
+// Runs a SQL file with the pinned ducknng loaded, in memory or in the database
+// named by --database, and prints each SELECT result as a table. NAME=value
+// arguments become SQL variables, read with getvariable('NAME'), and are bound
+// rather than spliced into SQL.
+const USAGE = "usage: node tools/ducknng-sql.ts [--database FILE] FILE.sql [NAME=value ...]";
 
 function cell(value: unknown): string {
   if (value === null || value === undefined) return "NULL";
@@ -30,10 +32,15 @@ function table(columns: string[], rows: unknown[][]): string {
 }
 
 async function main(): Promise<void> {
-  const [file, ...assignments] = process.argv.slice(2);
+  const { values, positionals } = parseArgs({
+    allowPositionals: true,
+    options: { database: { type: "string" } },
+  });
+  const [file, ...assignments] = positionals;
   if (!file) throw new Error(USAGE);
   const { instance, connection } = await openDucknngConnection(
     await resolveDucknngExtension(PACKAGE_ROOT),
+    values.database,
   );
   try {
     for (const assignment of assignments) {

@@ -12,15 +12,13 @@ readme:
 	@$(MAKE) --no-print-directory check-readme
 
 check-readme:
-	@grep -q 'extension="./extensions/pi-ducknng/index.ts"' README.qmd
-	@grep -q '^> AGENT_DUCKNNG_MANIFEST_CALL_OK' README.md
-	@grep -q '^> AGENT_FANOUT_SENT' README.md
-	@for worker in w-cyl w-gear w-am; do \
-		grep -Eq "^ *AGENT_WORKER_REPLIED $$worker" README.md || \
-		{ echo "missing receipt for $$worker"; exit 1; }; \
-	done
+	@grep -q '^> README_WORKSPACE_VERIFIED' README.md
+	@test "$$(grep -c '^\*\*Agent `lead` answered\*\*' README.md)" -eq 2
 	@grep -Eq '^ *COORDINATION_FANIN_VERIFIED$$' README.md
-	@grep -q '^> AGENT_FANIN_DONE' README.md
+	@for worker in w-cyl w-gear w-am; do \
+		grep -Eq "^ *$$worker: " README.md || \
+		{ echo "missing reply from $$worker"; exit 1; }; \
+	done
 	@grep -Eq '"agent_id":"reviewer","events.url":"wss://' README.md
 	@grep -q 'unauthorized: tls:cn:intruder has no grant' README.md
 	@! grep -qF '$(CURDIR)' README.md

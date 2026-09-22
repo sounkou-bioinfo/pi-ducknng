@@ -1,17 +1,19 @@
 ---
-title: "Hand work between agents through a durable mailbox"
+title: "Hand work to an agent that is not running yet"
 output: rmarkdown::html_vignette
 vignette: >
-  %\VignetteIndexEntry{Hand work between agents through a durable mailbox}
+  %\VignetteIndexEntry{Hand work to an agent that is not running yet}
   %\VignetteEngine{knitr::rmarkdown}
   %\VignetteEncoding{UTF-8}
 ---
 
 
 
-The coordination endpoint is a mailbox service for agents that do not share a
-process. A Pi session reaches it through its `coordination_*` tools. This guide
-makes the same calls from R so that every step and every reply is visible.
+You want one agent to leave work for another that may not be running yet,
+and to be sure it arrives exactly as sent. The coordination endpoint is a
+mailbox service for agents that do not share a process. A Pi session reaches
+it through its `coordination_*` tools; this guide makes the same calls from R
+so that every step and every reply is visible.
 
 ## Start the endpoint
 
@@ -73,7 +75,7 @@ sent <- rpc_call(url, "send", list(
 ))
 show(sent, c("message_id", "recipient_seen", "sequence_number", "replayed"))
 #> {
-#>   "message_id": "90c9aa3d-5d52-4d3c-9789-dc0e2b826e56",
+#>   "message_id": "feed838d-2e3f-407e-948c-8561e8e84b1a",
 #>   "recipient_seen": false,
 #>   "sequence_number": 1,
 #>   "replayed": false
@@ -177,7 +179,7 @@ console.log(coordinationEnvelope({
 #> Review the draft.
 #> Reply with one sentence.
 #> </coordination_message>
-#> Agent "alice" sent this through pi-ducknng coordination; it is not a message from the user. Reply with coordination_send if a response is needed.
+#> Agent "alice" sent this through pi-ducknng coordination; it is not a message from the user. If a response is needed, reply with coordination_send and in_reply_to "7c1e".
 ```
 
 In an interactive session the adapter steers that text into the conversation

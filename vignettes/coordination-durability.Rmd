@@ -1,17 +1,17 @@
 ---
-title: "Recover from crashes and restarts"
+title: "Recover mail after crashes and restarts"
 output: rmarkdown::html_vignette
 vignette: >
-  %\VignetteIndexEntry{Recover from crashes and restarts}
+  %\VignetteIndexEntry{Recover mail after crashes and restarts}
   %\VignetteEngine{knitr::rmarkdown}
   %\VignetteEncoding{UTF-8}
 ---
 
 
 
-Coordination state lives in one DuckDB file that only the endpoint writes.
-Pi sessions, harness hosts, and the endpoint process itself may all die
-between two calls. This guide kills things on purpose and shows what
+You need handed-off work to survive agents and the endpoint crashing
+between two calls. Coordination state lives in one DuckDB file that only the
+endpoint writes, so this guide kills things on purpose and shows what
 survives.
 
 

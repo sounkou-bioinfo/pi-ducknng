@@ -1,50 +1,60 @@
 ---
-title: "An OpenAI Codex agent calls persistent R through ducknng"
+title: "Answer a question in R and keep the result in SQL"
 output: rmarkdown::html_vignette
 vignette: >
-  %\VignetteIndexEntry{An OpenAI Codex agent calls persistent R through ducknng}
+  %\VignetteIndexEntry{Answer a question in R and keep the result in SQL}
   %\VignetteEngine{knitr::rmarkdown}
   %\VignetteEncoding{UTF-8}
 ---
 
-This is the authored source for a precomputed vignette. The agent starts the
-local R adapter, receives its NNG URL, discovers methods from the endpoint's
-ducknng RPC manifest, and invokes those methods through fresh DuckDB clients.
-The committed `.Rmd` preserves the result for package and pkgdown builds.
 
-``` sh
-pi --model gpt-5.4 -e ./extensions/pi-ducknng/index.ts -p \
-  "Using the package tools, start the R adapter and follow " \
-  "its ducknng manifest. Evaluate and persist `mpg_by_cyl " \
-  "<- aggregate(mpg ~ cyl, data = datasets::mtcars, FUN = " \
-  "mean)`, returning the table. In a fresh call, use " \
-  "`mpg_by_cyl` to return `transform(mpg_by_cyl, " \
-  "delta_from_4cyl = mpg - mpg[cyl == 4])`. Close the " \
-  "endpoint. Report the manifested methods, endpoint " \
-  "process identity, and decoded rows, beginning with " \
-  "`AGENT_VERIFIED_MTCARS_PERSISTENCE` only when both calls " \
-  "and close succeed."
+
+You want an agent to analyse a dataset and leave the result somewhere it can
+be found later, by you or by another agent. The agent computes in its R
+session and keeps what matters as a table in the project's SQL workspace,
+`.pi/ducknng/workspace.duckdb`. The R session ends with the conversation; the
+table does not.
+
+## The analysis
+
+**Task**
+
+> Using `datasets::airquality`, find which month had the highest mean ozone level, ignoring missing readings. Compute it in R and keep the monthly means in the SQL workspace as a table `ozone_by_month` with columns `month` and `mean_ozone`. Answer in two sentences.
+
+**The agent answered**
+
+> August had the highest mean ozone level at **59.96 ppb**, computed in R with missing readings ignored. Monthly means are saved in the SQL workspace as `ozone_by_month`, with columns `month` and `mean_ozone`.
+
+## The table outlives the agent
+
+The agent has exited. Any DuckDB client can open the workspace file and read
+the table it left:
+
+
+``` r
+workspace_sql("SELECT month, round(mean_ozone, 1) AS mean_ozone FROM ozone_by_month ORDER BY month")
+#>   month mean_ozone
+#> 1     5       23.6
+#> 2     6       29.4
+#> 3     7       59.1
+#> 4     8       60.0
+#> 5     9       31.4
 ```
 
-> AGENT_VERIFIED_MTCARS_PERSISTENCE
->
-> - Endpoint URL: `tcp://127.0.0.1:41205`
-> - Endpoint process: `PID 63619`
-> - Manifested methods:
->   - `eval`: persistent-process R eval, JSON request → Arrow response
->   - `close`: persistent-process shutdown, JSON request → JSON response
->
-> First `eval` decoded rows (`mpg_by_cyl`):
-> - `4, 26.663636363636364`
-> - `6, 19.742857142857144`
-> - `8, 15.1`
->
-> Second fresh `eval` decoded rows (`transform(...)`):
-> - `4, 26.663636363636364, 0`
-> - `6, 19.742857142857144, -6.92077922077922`
-> - `8, 15.1, -11.563636363636364`
->
-> Close result:
-> - `closed: true`
->
-> This verified that `mpg_by_cyl` persisted across fresh RPC calls to the same endpoint process.
+## A later session builds on it
+
+A new Pi session in the same project starts with an empty R process, but the
+workspace still holds the table. This agent is asked a follow-up question and
+told nothing about how the first one worked:
+
+**Task**
+
+> The SQL workspace has a table `ozone_by_month` from an earlier analysis of `datasets::airquality`. By how much did the worst month's mean ozone exceed the best month's? Answer from that table in one sentence.
+
+**The agent answered**
+
+> According to `ozone_by_month`, August’s mean ozone exceeded May’s by approximately 36.35 ppb.
+
+
+
+> GUIDE_WORKSPACE_VERIFIED: the monthly means match R's own and persist after the agent exits

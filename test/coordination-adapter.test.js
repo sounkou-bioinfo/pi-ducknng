@@ -373,4 +373,8 @@ test("the send tool fans out and envelopes name the group and the reply", async 
     ...inboxMessage, broadcast_id: "b-1", recipient_count: 3, in_reply_to: "m-0",
   });
   assert.match(envelope, /broadcast_id="b-1" recipients="3" in_reply_to="m-0"/);
+  assert.match(envelope, /reply with coordination_send and in_reply_to "b-1"/,
+    "replies to a message sent to several agents gather under its broadcast ID");
+  assert.match(coordinationEnvelope(inboxMessage),
+    /reply with coordination_send and in_reply_to "message-1"/);
 });

@@ -1,8 +1,8 @@
 ---
-title: "Serve agents across hosts with mutual TLS"
+title: "Serve agents on other hosts with mutual TLS"
 output: rmarkdown::html_vignette
 vignette: >
-  %\VignetteIndexEntry{Serve agents across hosts with mutual TLS}
+  %\VignetteIndexEntry{Serve agents on other hosts with mutual TLS}
   %\VignetteEngine{knitr::rmarkdown}
   %\VignetteEncoding{UTF-8}
 ---
@@ -11,12 +11,12 @@ vignette: >
 source("tools/guides/setup.R")
 ```
 
-On `ipc://`, filesystem permissions decide who may connect. Agents on other
-hosts or other accounts need a network listener. There, the question
-"who is calling?" must be answered by something stronger than the agent ID a
-client types. On mutual TLS, the endpoint answers it with the client's
-certificate. A grants file then decides which certificate may act as which
-agent.
+You want agents on other hosts or accounts to share one endpoint without
+letting any of them pose as another. On `ipc://`, filesystem permissions
+decide who may connect; on a network listener, "who is calling?" needs a
+stronger answer than the agent ID a client types. On mutual TLS the endpoint
+answers it with the client's certificate, and a grants file decides which
+certificate may act as which agent.
 
 ## Certificates
 

@@ -1,8 +1,8 @@
 ---
-title: "Keep agents off each other's files with reservations"
+title: "Keep agents from editing the same files"
 output: rmarkdown::html_vignette
 vignette: >
-  %\VignetteIndexEntry{Keep agents off each other's files with reservations}
+  %\VignetteIndexEntry{Keep agents from editing the same files}
   %\VignetteEngine{knitr::rmarkdown}
   %\VignetteEncoding{UTF-8}
 ---
@@ -13,9 +13,10 @@ unlink(".guide-scratch", recursive = TRUE)
 dir.create(".guide-scratch")
 ```
 
-A reservation is an advisory lease on a resource, held by one session for a
-bounded time. Two agents editing one tree can use reservations to split it
-between them. Pi's `edit` and `write` tools check them before every call.
+You have two agents working in one tree and want them to stay out of each
+other's way. A reservation is an advisory lease on a resource, held by one
+session for a bounded time, and Pi's `edit` and `write` tools check them
+before every call.
 
 ## Take a reservation
 
@@ -49,24 +50,29 @@ held$resource <- relative(held$resource)
 show(held, c("resource", "fencing_value", "replayed", "renewed"))
 ```
 
-## A Pi agent is refused
+## A Pi agent stays out
 
 ```{r, include = FALSE}
 Sys.setenv(
   PI_DUCKNNG_COORDINATION_URL = url,
-  PI_DUCKNNG_COORDINATION_PROJECT = "guide",
-  PI_DUCKNNG_AGENT_ID = "editor"
+  PI_DUCKNNG_COORDINATION_PROJECT = "guide"
 )
 ```
 
-A live Pi session, agent `editor`, is asked to write a file inside the
-reserved directory:
+A live Pi session, agent `editor`, is given work inside the reserved
+directory:
 
-```{pi, provider="openai-codex", model="gpt-6-astra", thinking="medium", timeout=900, no_extensions=TRUE, extension="./extensions/pi-ducknng/index.ts"}
-You are agent `editor`. Use the write tool to create `.guide-scratch/notes.md` containing one line, `draft`. If the write is refused, do not retry it and do not write the file any other way. Call coordination_agents to see which agent holds the reservation. Report the refusal reason and the holder, beginning with `AGENT_EDIT_BLOCKED` only when the write was refused because another agent reserved the path.
+```{r, echo = FALSE, results = "asis"}
+agent_task(agent_id = "editor", project = package_root, "
+  Create `.guide-scratch/notes.md` containing the single line `draft`. Another
+  agent may be working in that directory; if it has reserved it, leave the
+  file alone rather than working around the reservation, and tell me who
+  holds it.
+")
 ```
 
-The adapter refused the tool call before it ran, so the file does not exist:
+Whether the agent checks the reservation or tries the write and is refused,
+the reserved file is never written:
 
 ```{r}
 file.exists(".guide-scratch/notes.md")

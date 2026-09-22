@@ -1,17 +1,65 @@
 ---
-title: "An OpenAI Codex agent calls persistent R through ducknng"
+title: "Answer a question in R and keep the result in SQL"
 output: rmarkdown::html_vignette
 vignette: >
-  %\VignetteIndexEntry{An OpenAI Codex agent calls persistent R through ducknng}
+  %\VignetteIndexEntry{Answer a question in R and keep the result in SQL}
   %\VignetteEngine{knitr::rmarkdown}
   %\VignetteEncoding{UTF-8}
 ---
 
-This is the authored source for a precomputed vignette. The agent starts the
-local R adapter, receives its NNG URL, discovers methods from the endpoint's
-ducknng RPC manifest, and invokes those methods through fresh DuckDB clients.
-The committed `.Rmd` preserves the result for package and pkgdown builds.
+```{r setup, include = FALSE}
+source("tools/guides/setup.R")
+```
 
-```{pi, provider="openai-codex", model="gpt-5.4", thinking="medium", timeout=900, extension="./extensions/pi-ducknng/index.ts"}
-Using the package tools, start the R adapter and follow its ducknng manifest. Evaluate and persist `mpg_by_cyl <- aggregate(mpg ~ cyl, data = datasets::mtcars, FUN = mean)`, returning the table. In a fresh call, use `mpg_by_cyl` to return `transform(mpg_by_cyl, delta_from_4cyl = mpg - mpg[cyl == 4])`. Close the endpoint. Report the manifested methods, endpoint process identity, and decoded rows, beginning with `AGENT_VERIFIED_MTCARS_PERSISTENCE` only when both calls and close succeed.
+You want an agent to analyse a dataset and leave the result somewhere it can
+be found later, by you or by another agent. The agent computes in its R
+session and keeps what matters as a table in the project's SQL workspace,
+`.pi/ducknng/workspace.duckdb`. The R session ends with the conversation; the
+table does not.
+
+## The analysis
+
+```{r, echo = FALSE, results = "asis"}
+agent_task("
+  Using `datasets::airquality`, find which month had the highest mean ozone
+  level, ignoring missing readings. Compute it in R and keep the monthly means
+  in the SQL workspace as a table `ozone_by_month` with columns `month` and
+  `mean_ozone`. Answer in two sentences.
+")
+```
+
+## The table outlives the agent
+
+The agent has exited. Any DuckDB client can open the workspace file and read
+the table it left:
+
+```{r}
+workspace_sql("SELECT month, round(mean_ozone, 1) AS mean_ozone FROM ozone_by_month ORDER BY month")
+```
+
+## A later session builds on it
+
+A new Pi session in the same project starts with an empty R process, but the
+workspace still holds the table. This agent is asked a follow-up question and
+told nothing about how the first one worked:
+
+```{r, echo = FALSE, results = "asis"}
+agent_task("
+  The SQL workspace has a table `ozone_by_month` from an earlier analysis of
+  `datasets::airquality`. By how much did the worst month's mean ozone exceed
+  the best month's? Answer from that table in one sentence.
+")
+```
+
+```{r, include = FALSE}
+months <- workspace_sql("SELECT month, mean_ozone FROM ozone_by_month")
+expected <- aggregate(Ozone ~ Month, data = datasets::airquality, FUN = mean)
+stopifnot(
+  nrow(months) == 5L,
+  isTRUE(all.equal(sort(months$mean_ozone), sort(expected$Ozone), tolerance = 1e-6))
+)
+```
+
+```{r, echo = FALSE, results = "asis"}
+cat("> GUIDE_WORKSPACE_VERIFIED: the monthly means match R's own and persist after the agent exits\n")
 ```

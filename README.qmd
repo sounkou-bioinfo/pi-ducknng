@@ -7,11 +7,9 @@ format: gfm
 
 ```{r}
 #| include: false
-piknit::register_engines()
-knitr::opts_chunk$set(comment = "")
-state <- tempfile("pi-ducknng-readme-")
-dir.create(state, mode = "0700")
-Sys.setenv(STATE = state, PI_DUCKNNG_COORDINATION_PROJECT = "readme")
+source("tools/guides/setup.R")
+knitr::opts_chunk$set(comment = "", collapse = FALSE)
+Sys.setenv(ROOT = package_root, PI_DUCKNNG_COORDINATION_PROJECT = "readme")
 ```
 
 # pi-ducknng
@@ -19,11 +17,11 @@ Sys.setenv(STATE = state, PI_DUCKNNG_COORDINATION_PROJECT = "readme")
 <a href="https://lifecycle.r-lib.org/articles/stages.html#experimental"><img src="https://img.shields.io/badge/lifecycle-experimental-orange.svg" alt="Lifecycle: experimental" /></a>
 <a href="https://github.com/sounkou-bioinfo/pi-ducknng/actions/workflows/pkgdown.yaml"><img src="https://github.com/sounkou-bioinfo/pi-ducknng/actions/workflows/pkgdown.yaml/badge.svg" alt="Documentation" /></a>
 
-pi-ducknng gives [Pi](https://github.com/earendil-works/pi) agents two
-services over [ducknng](https://github.com/RGenomicsETL/ducknng): a persistent
-R session to compute in, and a durable mailbox that lets independently started
-agents hand each other work, fan one question out to many of them, and gather
-the answers.
+pi-ducknng lets [Pi](https://github.com/earendil-works/pi) agents do data
+work that lasts. An agent keeps its results in a DuckDB database that
+outlives the conversation, computes in a persistent R session, and hands work
+to other agents through a durable mailbox. All three run over
+[ducknng](https://github.com/RGenomicsETL/ducknng), DuckDB's NNG extension.
 
 The package is experimental and has no users outside itself. Its tools, SQL
 schema and wire contract change without deprecation cycles or migrations, in
@@ -38,90 +36,120 @@ pi install git:github.com/sounkou-bioinfo/pi-ducknng
 The first call downloads the pinned ducknng release for Linux or macOS and
 checks its SHA-256 against [`DEPENDENCIES`](DEPENDENCIES). In a source checkout,
 `make ducknng-extension` builds it instead, and `DUCKNNG_EXTENSION_PATH` names
-any other build. The persistent R endpoint needs `Rscript` on `PATH` and the
-packages under `Imports` in [`DESCRIPTION`](DESCRIPTION).
+any other build. R work needs `Rscript` on `PATH` and the packages under
+`Imports` in [`DESCRIPTION`](DESCRIPTION).
 
-## Persistent R
+## Answer a question and keep the result
 
-An agent starts the R endpoint, reads its manifest, and keeps working in the
-same R process across calls:
+Give an agent a question about a dataset. It computes in R and saves what it
+found as a table:
 
-```{pi, provider="openai-codex", model="gpt-6-astra", thinking="medium", timeout=900, no_extensions=TRUE, extension="./extensions/pi-ducknng/index.ts"}
-Using the package tools, start the R adapter and follow its ducknng manifest. In one eval call, create and return `mpg_by_cyl <- aggregate(mpg ~ cyl, data = datasets::mtcars, FUN = mean)`. In a separate eval call, use the persisted `mpg_by_cyl` to return `transform(mpg_by_cyl, delta_from_4cyl = mpg - mpg[cyl == 4])`. Close the endpoint. Report the manifested methods and decoded rows, beginning with `AGENT_DUCKNNG_MANIFEST_CALL_OK` only when both calls used the same endpoint process and succeeded.
+```{r}
+#| echo: false
+#| results: asis
+agent_task("
+  Which grouping of `datasets::mtcars`, by `cyl`, `gear` or `am`, separates
+  mean `mpg` the most? Compute the group means in R and keep them in the SQL
+  workspace as a table `mpg_groups` with columns `grouping`, `level` and
+  `mean_mpg`. Answer in two sentences.
+")
 ```
 
-Code runs in named scopes, `main` unless another is given. Each scope keeps its
-objects until `reset` or until `close` or the exit of the Pi process that
-started the endpoint, and `scopes` lists them. Results come back as Arrow IPC.
+The agent has exited, and its table has not. Any DuckDB client can read the
+workspace file, `.pi/ducknng/workspace.duckdb` in the project:
 
-Every evaluation is a job. An `eval` that outlives its `wait_ms` keeps running
-as a job, and `submit`, `job`, `result` and `interrupt` follow its output as it
-prints, fetch its value, and stop it without losing the session. Aborting a Pi
-tool call interrupts the job it was waiting on. The endpoint listens on an
-`ipc://` socket in a directory only its user can enter. When
-`PI_DUCKNNG_R_LOCATOR` names a file, Pi writes the URL there, and another
-client, such as a DuckDB SQL session, can attach to the same session.
+```{r}
+workspace_sql("
+  SELECT grouping, count(*) AS levels,
+         round(max(mean_mpg) - min(mean_mpg), 2) AS spread
+  FROM mpg_groups GROUP BY grouping ORDER BY spread DESC
+")
+```
 
-## Parallel research
+```{r}
+#| echo: false
+#| results: asis
+groups <- workspace_sql("SELECT grouping, count(*) AS levels FROM mpg_groups GROUP BY grouping")
+stopifnot(nrow(groups) == 3L, sum(groups$levels) == 8L)
+cat("> README_WORKSPACE_VERIFIED: the agent's table has three groupings and eight group means\n")
+```
 
-The coordination endpoint is a DuckDB database whose methods are
+The agent works through these tools:
+
+- `duckdb_sql` runs SQL in the project's workspace with ducknng loaded and
+  returns the first rows. Tables persist across sessions, so results that
+  matter are kept there rather than in the conversation.
+- `persistent_r_start` starts an R process that keeps its objects between
+  calls. Inside SQL, `FROM r_eval('<R code>')` returns an R value as rows, so
+  `CREATE TABLE t AS FROM r_eval(...)` saves it.
+- `ducknng_describe` and `ducknng_call` reach every method the R endpoint
+  declares: `eval`; `submit`, `job`, `result` and `interrupt` to follow a long
+  computation as it prints and stop it; `scopes` and `reset` to keep separate
+  analyses in named environments.
+
+Aborting a Pi tool call interrupts the R job it was waiting on, and the R
+session keeps its state. When `PI_DUCKNNG_R_LOCATOR` names a file, Pi writes
+the R session's URL there so another client can attach to it.
+
+## Split a study across agents
+
+Agents started independently of each other can pass work through a
+coordination endpoint: a DuckDB database whose methods are
 [SQL files](coordination/methods) served by ducknng. Start it outside any Pi
-session, in a private directory:
+session:
 
 ```{bash}
-install -d -m 700 "$STATE"
 node tools/pi-coordination-endpoint.ts \
   "$STATE/coordination.url" "$STATE/coordination.duckdb" > "$STATE/endpoint.log" 2>&1 &
 echo $! > "$STATE/endpoint.pid"
 until [ -s "$STATE/coordination.url" ]; do sleep 0.1; done
-echo "coordination endpoint ready"
 ```
 
 ```{r}
 #| include: false
-Sys.setenv(
-  PI_DUCKNNG_COORDINATION_URL = readLines(file.path(state, "coordination.url")),
-  PI_DUCKNNG_AGENT_ID = "lead"
-)
+Sys.setenv(PI_DUCKNNG_COORDINATION_URL = guide_url())
 ```
 
 A Pi session joins when `PI_DUCKNNG_COORDINATION_URL`,
-`PI_DUCKNNG_COORDINATION_PROJECT` and `PI_DUCKNNG_AGENT_ID` are set. It then
-has `coordination_send`, `coordination_inbox`, `coordination_agents`,
-`coordination_reserve` and `coordination_release`. A lead agent fans one
-question out to three workers that have not started yet:
+`PI_DUCKNNG_COORDINATION_PROJECT` and `PI_DUCKNNG_AGENT_ID` are set, and gains
+tools to send, receive, list agents, and reserve files. A lead hands out a
+question before any worker exists:
 
-```{pi, provider="openai-codex", model="gpt-6-astra", thinking="medium", timeout=900, no_extensions=TRUE, extension="./extensions/pi-ducknng/index.ts"}
-You are agent `lead`. Make one coordination_send call to recipients `w-cyl`, `w-gear`, and `w-am` with this content: `Which grouping of datasets::mtcars separates mean mpg the most? Your agent ID names your grouping. Reply in_reply_to this broadcast with the spread of your group means.` Report the broadcast ID and the recipients, beginning with `AGENT_FANOUT_SENT` only when the send was stored.
+```{r}
+#| echo: false
+#| results: asis
+agent_task(agent_id = "lead", "
+  You lead a small study of `datasets::mtcars`. Three agents, `w-cyl`, `w-gear`
+  and `w-am`, will each study the grouping their ID names; none has started
+  yet. Send a single message addressed to all three at once, asking how far
+  apart the mean `mpg` of their groups are and to reply to it. Then stop.
+")
 ```
 
-Each worker is its own `pi -p` process with this prompt:
+The three workers start together, each in its own directory, with the same
+task:
 
 ```{bash}
 cat tools/readme/worker-prompt.md
 ```
 
-The three run at the same time. Each pulls its copy, computes in its own
-persistent R session, and replies:
-
 ```{bash}
 for worker in w-cyl w-gear w-am; do
-  PI_DUCKNNG_AGENT_ID="$worker" timeout 900 pi --provider openai-codex \
-    --model gpt-6-astra --thinking medium --no-extensions \
-    -e ./extensions/pi-ducknng/index.ts --no-session \
-    -p "$(cat tools/readme/worker-prompt.md)" > "$STATE/$worker.out" 2>&1 &
+  mkdir -p "$STATE/$worker"
+  (cd "$STATE/$worker" && PI_DUCKNNG_AGENT_ID="$worker" timeout 900 pi \
+    --provider openai-codex --model gpt-6-astra --thinking medium \
+    --no-extensions -e "$ROOT/extensions/pi-ducknng/index.ts" --no-session \
+    -p "$(cat "$ROOT/tools/readme/worker-prompt.md")" > "$STATE/$worker.out" 2>&1) &
 done
 wait
-grep -h -A1 '^AGENT_WORKER_REPLIED' "$STATE"/w-*.out
 ```
 
-The endpoint, not the agents, confirms the fan-in. This check leases the
-replies for one second without acknowledging them, so the lead still receives
-them afterwards:
+The endpoint, not the agents, confirms that three replies came back to the
+same message. This check holds the replies for one second without
+acknowledging them, so the lead still receives them:
 
 ```{r}
-source("tools/ducknng-rpc.R")
-url <- Sys.getenv("PI_DUCKNNG_COORDINATION_URL")
+url <- guide_url()
 peek <- rpc_call(url, "register", list(
   project_id = "readme", agent_id = "lead",
   instance_id = "verifier", operation_key = "verify"
@@ -135,13 +163,23 @@ invisible(rpc_call(url, "unregister", list(registration_id = peek$registration_i
 cat("COORDINATION_FANIN_VERIFIED",
   vapply(replies, function(m) paste0(m$sender_agent_id, ": ", m$content), ""),
   sep = "\n")
+```
+
+```{r}
+#| include: false
 Sys.sleep(1.5)
 ```
 
 The lead gathers the answers:
 
-```{pi, provider="openai-codex", model="gpt-6-astra", thinking="medium", timeout=900, no_extensions=TRUE, extension="./extensions/pi-ducknng/index.ts"}
-You are agent `lead`. Call coordination_inbox with wait_ms 20000 and limit 8 to gather the replies to your broadcast. List each worker's reply line, then name the grouping with the largest spread, beginning with `AGENT_FANIN_DONE` only when three replies arrived with the same in_reply_to.
+```{r}
+#| echo: false
+#| results: asis
+agent_task(agent_id = "lead", "
+  Collect the replies to your study question from your coordination inbox,
+  waiting up to 20 seconds, and say in two sentences which grouping of
+  `datasets::mtcars` separates mean `mpg` the most.
+")
 ```
 
 ```{bash}
@@ -153,26 +191,28 @@ kill "$(cat "$STATE/endpoint.pid")"
 
 ```mermaid
 flowchart LR
+  Agent["Pi agent"] -->|"duckdb_sql"| WS[("workspace.duckdb")]
+  Agent -->|"eval, jobs"| R["persistent R"]
+  WS -->|"r_eval"| R
   Lead["Pi agent (lead)"] -->|"send to many"| Host
   Worker["Pi agents (workers)"] -->|"inbox, reply"| Host
   Host -. "wake-up hint" .-> Worker
-  Worker -->|"eval"| R["persistent R endpoint"]
   subgraph Host["coordination host"]
-    SQL["ducknng SQL methods"] --> DB[("DuckDB file")]
+    SQL["ducknng SQL methods"] --> DB[("coordination.duckdb")]
   end
 ```
 
+- The workspace belongs to the project. Each Pi session opens it on first
+  use, so one session at a time writes to it.
+- The R process belongs to the Pi session that started it and exits with it.
+  Its objects are scratch; tables are what lasts.
 - The coordination host is a Node process that loads ducknng into DuckDB and
-  serves the SQL methods. It owns the database file; agents reach it only
-  through those methods.
-- `send` stores one copy per recipient before it replies, then publishes an
-  opaque wake-up hint per mailbox. Subscribed agents receive at once, and
-  polling repairs any hint that was lost.
+  serves the SQL methods. It owns its database file, and agents reach it only
+  through those methods. `send` stores one copy per recipient before it
+  replies, then publishes an opaque wake-up hint per mailbox.
 - Pi owns the conversation. The adapter keeps the registration out of model
   context and frames every delivered message with its sender, so another
   agent's text never reads as the user's.
-- Clients without an NNG binding follow the same wake-ups as Server-Sent
-  Events when the host is started with `--sse`.
 
 ## Guarantees
 
@@ -184,14 +224,15 @@ flowchart LR
   `edit` and `write` refuse to touch it. Writes made through `bash` are not
   guarded.
 - **Hints are only hints.** A wake-up carries no mail, and correctness never
-  depends on it arriving.
+  depends on it arriving. Clients without an NNG binding can follow the same
+  wake-ups as Server-Sent Events when the host is started with `--sse`.
 
 ## Across hosts
 
 Over `ipc://`, filesystem permissions decide who may connect. To serve agents
 on other hosts, run the endpoint on mutual TLS with a grants file that says
 which certificate may act as which agent. Each party's certificate and key sit
-in one PEM file. A throwaway CA signs the certificates here:
+in one PEM file; a throwaway CA signs them here.
 
 ```{bash}
 #| include: false
@@ -225,9 +266,10 @@ echo $! > "$STATE/mtls.pid"
 until [ -s "$STATE/mtls.url" ]; do sleep 0.1; done
 ```
 
-Pi sessions name their CA and their own certificate file in
-`PI_DUCKNNG_TLS_CA_FILE` and `PI_DUCKNNG_TLS_CERT_KEY_FILE`.
-`tools/coordination-call.ts` reads the same variables:
+A Pi session names its CA and its own certificate in `PI_DUCKNNG_TLS_CA_FILE`
+and `PI_DUCKNNG_TLS_CERT_KEY_FILE`, and so does `tools/coordination-call.ts`.
+The granted certificate registers and learns its `wss://` hint listener; the
+other is refused before any state changes:
 
 ```{bash}
 register_as() {
@@ -246,9 +288,7 @@ register_as intruder || true
 kill "$(cat "$STATE/mtls.pid")"
 ```
 
-The granted certificate registers and learns its `wss://` hint listener. The
-other is refused before any state changes. A registration ID is also useless
-to any certificate but the one that created it.
+A registration ID is useless to any certificate but the one that created it.
 
 ## Embedding
 
@@ -262,42 +302,27 @@ it against a real harness.
 
 ## Guides
 
-Every guide is executed. Its outputs, including what the live agents said,
-are recorded when the guide is built.
+Each guide gives live agents real tasks and then checks what they left
+behind. Its outputs are recorded when the guide is built.
 
-**Persistent R**
+**Data work**
 
-- [An agent calls persistent R](https://sounkou-bioinfo.github.io/pi-ducknng/articles/agent-product-path.html):
-  state that survives across calls.
-- [An active binding in a named scope](https://sounkou-bioinfo.github.io/pi-ducknng/articles/agent-active-binding.html):
-  scopes that keep separate objects, and listing them without forcing a binding.
-- [Follow, interrupt, and share a long R computation](https://sounkou-bioinfo.github.io/pi-ducknng/articles/r-jobs.html):
-  an agent attaches to a running session, follows a job's output, and
-  interrupts it, and a DuckDB SQL session reads the result.
+- [Answer a question in R and keep the result in SQL](https://sounkou-bioinfo.github.io/pi-ducknng/articles/agent-product-path.html)
+- [Keep two analyses apart in named R scopes](https://sounkou-bioinfo.github.io/pi-ducknng/articles/agent-active-binding.html)
+- [Follow, interrupt and share a long R computation](https://sounkou-bioinfo.github.io/pi-ducknng/articles/r-jobs.html)
 
-**Coordination**
+**Working together**
 
-- [Hand work between agents through a durable mailbox](https://sounkou-bioinfo.github.io/pi-ducknng/articles/coordination-mailbox.html):
-  offline mail, idempotent sends, leases, acknowledgement, and the envelope
-  an agent sees.
-- [Fan a question out and gather the answers](https://sounkou-bioinfo.github.io/pi-ducknng/articles/coordination-fanout.html):
-  recipient lists, a live broadcast to two workers, and replies threaded by
-  `in_reply_to`.
-- [Keep agents off each other's files with reservations](https://sounkou-bioinfo.github.io/pi-ducknng/articles/coordination-reservations.html):
-  a live agent refused by the edit gate, path-tree conflicts, renewal, and
-  fencing values.
-- [Recover from crashes and restarts](https://sounkou-bioinfo.github.io/pi-ducknng/articles/coordination-durability.html):
-  an endpoint killed mid-lease, redelivery after restart, and dead letters.
-- [Follow a mailbox from any HTTP client](https://sounkou-bioinfo.github.io/pi-ducknng/articles/coordination-sse.html):
-  `curl -N` reads one mailbox's wake-ups as Server-Sent Events.
+- [Hand work to an agent that is not running yet](https://sounkou-bioinfo.github.io/pi-ducknng/articles/coordination-mailbox.html)
+- [Fan a question out and gather the answers](https://sounkou-bioinfo.github.io/pi-ducknng/articles/coordination-fanout.html)
+- [Keep agents from editing the same files](https://sounkou-bioinfo.github.io/pi-ducknng/articles/coordination-reservations.html)
+- [Recover mail after crashes and restarts](https://sounkou-bioinfo.github.io/pi-ducknng/articles/coordination-durability.html)
+- [Follow a mailbox from any HTTP client](https://sounkou-bioinfo.github.io/pi-ducknng/articles/coordination-sse.html)
 
 **Deployment**
 
-- [Serve agents across hosts with mutual TLS](https://sounkou-bioinfo.github.io/pi-ducknng/articles/coordination-mtls.html):
-  PEM files, grants, refused impersonation, and hints over `wss://`.
-- [Embed coordination in an AgentHarness host](https://sounkou-bioinfo.github.io/pi-ducknng/articles/coordination-harness.html):
-  a mailbox delivered into a harness lane, with one lane entry per message
-  even when an acknowledgement is lost.
+- [Serve agents on other hosts with mutual TLS](https://sounkou-bioinfo.github.io/pi-ducknng/articles/coordination-mtls.html)
+- [Deliver mail into an AgentHarness lane](https://sounkou-bioinfo.github.io/pi-ducknng/articles/coordination-harness.html)
 
 [`THESIS.md`](THESIS.md) lists the contracts, owners and invariants, and the
 tests that prove them.

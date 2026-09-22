@@ -5,14 +5,33 @@
 `pi-ducknng` projects manifested ducknng RPC endpoints into Pi without adding a
 Node NNG binding, a second wire protocol, or an endpoint-specific Pi tool for
 every method. Endpoint placement is separate from discovery and invocation.
-The package places a persistent R endpoint on demand. A separately started
-coordination endpoint, whose methods are SQL served by ducknng itself, gives
-Pi sessions durable mail and advisory reservations. The generic tools accept
-any compatible URL.
+DuckDB is the durable authority: a project's SQL workspace keeps the tables
+an agent's work produces, and R is scratch computation behind it. The package
+places a persistent R endpoint on demand. A separately started coordination
+endpoint, whose methods are SQL served by ducknng itself, gives Pi sessions
+durable mail and advisory reservations. The generic tools accept any
+compatible URL.
+
+## SQL workspace
+
+`duckdb_sql(sql, max_rows)` runs SQL in the project's workspace,
+`.pi/ducknng/workspace.duckdb` under the session's working directory, with
+ducknng loaded. The session opens the file on first use, holds one
+connection, and runs one statement batch at a time; an abort interrupts it.
+DuckDB's file lock makes the session the only writer while it holds the file.
+The reply carries the column names and types, the last statement's first
+`max_rows` rows, 100 by default and at most 1000, and whether more existed.
+
+The connection defines a temporary table macro, `r_eval(code, scope, wait_ms)`.
+It sends `eval` to the R endpoint this session placed and returns the value
+as rows, so `CREATE TABLE t AS FROM r_eval(...)` moves an R result into the
+workspace. The reply is bound once, so the request is sent once, and an R
+error is raised with its own text. Without an R endpoint the macro fails and
+names `persistent_r_start`.
 
 ## Generic Pi tools
 
-The Pi package exposes three generic model tools:
+The Pi package also exposes three generic tools for any ducknng endpoint:
 
 - `persistent_r_start()` starts the local R endpoint and returns its NNG URL;
 - `ducknng_describe(url)` returns an endpoint's ducknng version-1 manifest;
@@ -308,26 +327,35 @@ codec implementations.
 - A stale reservation lease cannot release a newer coordinator lease.
 - A registration is usable only by the peer identity that created it.
 - Coordination state belongs to the independent endpoint, not a Pi session.
+- Workspace tables belong to the project and outlive every session; an R
+  scope's objects end with the R process.
 
 ## Executable evidence
 
-`README.qmd` executes every command it shows. An OpenAI Codex agent discovers
-the R manifest and persists an `mtcars` aggregate across fresh DuckDB
-clients. The README then starts a coordination endpoint from the shell, and a
-lead agent fans one question out to three workers. The three workers run as
-concurrent `pi -p` processes, each computing in its own persistent R session
-and replying with `in_reply_to`. The endpoint's own methods confirm the three
-replies before the lead gathers them. Finally the README starts a mutual-TLS
-endpoint with PEM files and a grants file, registers the granted
+The README and the guides give live agents tasks in plain language, then
+check what the agents left behind with their own code rather than trusting
+the agents' reports. `README.qmd` executes every command it shows. An agent
+answers a question about `mtcars` and saves its group means as a workspace
+table, which the README reads back from the file after the agent exits. The
+README then starts a coordination endpoint, and a lead agent hands a question
+to three workers that have not started. The workers run as concurrent
+`pi -p` processes, and the endpoint's own methods confirm three replies to the
+same message before the lead gathers them. Finally the README starts a
+mutual-TLS endpoint with PEM files and a grants file, registers the granted
 certificate, and shows the ungranted one refused. `make readme` rejects output
-that lacks any receipt or that contains a machine-local path.
+that lacks any check or that contains a machine-local path.
 
-Nine precomputed pkgdown guides carry the rest of the executable evidence,
-and `make vignettes` rejects any that lacks its receipts or contains the
+Ten precomputed pkgdown guides carry the rest of the executable evidence,
+and `make vignettes` rejects any that lacks its check or contains the
 checkout path:
 
-- `agent-product-path` and `agent-active-binding`: live agents persist R
-  state and evaluate an active binding in a named scope;
+- `agent-product-path`: an agent saves monthly ozone means as a table that
+  matches R's own, and a later session answers from that table;
+- `agent-active-binding`: an agent keeps two analyses in separate scopes and
+  records the listing, in which an active binding is reported unrun;
+- `r-jobs`: an agent attached by URL follows a running job and interrupts it,
+  a DuckDB SQL session reads the result, and conditions and errors are
+  followed by offset;
 - `coordination-mailbox`: the manifest, offline mail, idempotent send, lease
   redelivery, acknowledgement, the envelope, and error codes;
 - `coordination-fanout`: recipient lists with unseen recipients, a live
@@ -335,7 +363,7 @@ checkout path:
   confirms share one `in_reply_to`;
 - `coordination-reservations`: a live agent's `write` refused by the edit
   gate, path-tree and `resource:` conflicts, renewal, replay, idempotent
-  release, increasing fencing values, and expiry;
+  release, increasing fencing values, release on unregister, and expiry;
 - `coordination-durability`: an endpoint killed with `SIGKILL` while a lease
   is outstanding, redelivery after a restart on the same address, and a dead
   letter;
@@ -358,7 +386,10 @@ checkout path:
   bindings, reset, and row limits;
 - Arrow IPC and request serialization;
 - stale-process handling and cleanup;
-- an R endpoint that outlives idle polls and exits after its parent.
+- an R endpoint that outlives idle polls and exits after its parent;
+- the SQL workspace: bounded rows with column types, an R value saved as a
+  table through `r_eval`, R errors and a missing R endpoint named in the
+  failure, scopes reached from SQL, and tables that a later session reopens.
 
 `test/pi-extension-tls.test.js` issues a throwaway CA, server certificate, and
 client certificate. It checks that the generic tools reach a mutual-TLS

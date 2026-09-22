@@ -1,29 +1,46 @@
 ---
-title: "An agent evaluates an R active binding in a selected environment"
+title: "Keep two analyses apart in named R scopes"
 output: rmarkdown::html_vignette
 vignette: >
-  %\VignetteIndexEntry{An agent evaluates an R active binding in a selected environment}
+  %\VignetteIndexEntry{Keep two analyses apart in named R scopes}
   %\VignetteEngine{knitr::rmarkdown}
   %\VignetteEncoding{UTF-8}
 ---
 
-This precomputed case exercises the `envir` and `enclos` controls declared by
-the endpoint's `eval` method. Returned scalars travel as Arrow IPC and are
-decoded by ducknng inside the fresh DuckDB client.
 
-``` sh
-pi --model gpt-5.4 -e ./extensions/pi-ducknng/index.ts -p \
-  "Using the package tools, start the R adapter and follow " \
-  "its ducknng manifest. Evaluate code that creates " \
-  "`analysis <- new.env(parent = baseenv())`, installs a " \
-  "read-only active binding `mean_mpg` whose getter returns " \
-  "`mean(datasets::mtcars$mpg)`, and returns " \
-  "`identical(parent.env(analysis), baseenv())`. In a fresh " \
-  "call, evaluate `mean_mpg` with `envir = "analysis"`. " \
-  "Close the endpoint. Report the parent check, endpoint " \
-  "process identity, and decoded mean, beginning with " \
-  "`AGENT_VERIFIED_ACTIVE_BINDING` only when all calls " \
-  "succeed."
+
+You want an agent to work on two unrelated analyses in one R session without
+their objects colliding. The R endpoint keeps a separate persistent
+environment for each named scope. `scopes` lists what each holds, reporting an
+active binding without running it, and `reset` discards one scope while the
+others keep theirs.
+
+## Two analyses side by side
+
+**Task**
+
+> Keep two analyses apart in separate R scopes. In scope `cars`, fit `mpg ~ wt` on `datasets::mtcars` and add a read-only active binding `slope` that returns the fitted slope. In scope `flowers`, summarise mean `Petal.Length` by `Species` in `datasets::iris`. Record what each scope holds, as the endpoint lists it, in the SQL workspace table `scope_contents` with columns `scope`, `object` and `class`. Then discard the `flowers` scope and confirm that `cars` still gives the slope. Answer in three sentences.
+
+**The agent answered**
+
+> In `cars`, fitted `mpg ~ wt` and created the read-only active binding `slope`; in `flowers`, mean petal lengths were setosa 1.462, versicolor 4.260, and virginica 5.552.
+> Saved the endpoint-listed objects and classes in `scope_contents(scope, object, class)`, including `slope` as `active_binding`.
+> Discarded `flowers` and confirmed `cars$slope` still returns −5.344471573 and rejects assignment.
+
+## What the agent recorded
+
+The listing the agent saved shows each scope's objects. `slope` is reported as
+an active binding, because listing a scope never runs its bindings:
+
+
+``` r
+workspace_sql("SELECT scope, object, class FROM scope_contents ORDER BY scope, object")
+#>     scope      object          class
+#> 1    cars         fit             lm
+#> 2    cars       slope active_binding
+#> 3 flowers petal_means     data.frame
 ```
 
-> AGENT_VERIFIED_ACTIVE_BINDING parent_check=true endpoint_process=64342 mean_mpg=20.090625
+
+
+> GUIDE_SCOPES_VERIFIED: both scopes were listed separately and the active binding was reported without being run

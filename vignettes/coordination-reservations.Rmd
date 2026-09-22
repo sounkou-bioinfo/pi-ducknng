@@ -1,17 +1,18 @@
 ---
-title: "Keep agents off each other's files with reservations"
+title: "Keep agents from editing the same files"
 output: rmarkdown::html_vignette
 vignette: >
-  %\VignetteIndexEntry{Keep agents off each other's files with reservations}
+  %\VignetteIndexEntry{Keep agents from editing the same files}
   %\VignetteEngine{knitr::rmarkdown}
   %\VignetteEncoding{UTF-8}
 ---
 
 
 
-A reservation is an advisory lease on a resource, held by one session for a
-bounded time. Two agents editing one tree can use reservations to split it
-between them. Pi's `edit` and `write` tools check them before every call.
+You have two agents working in one tree and want them to stay out of each
+other's way. A reservation is an advisory lease on a resource, held by one
+session for a bounded time, and Pi's `edit` and `write` tools check them
+before every call.
 
 ## Take a reservation
 
@@ -53,29 +54,23 @@ show(held, c("resource", "fencing_value", "replayed", "renewed"))
 #> }
 ```
 
-## A Pi agent is refused
+## A Pi agent stays out
 
 
 
-A live Pi session, agent `editor`, is asked to write a file inside the
-reserved directory:
+A live Pi session, agent `editor`, is given work inside the reserved
+directory:
 
-``` sh
-'pi' --provider 'openai-codex' --model 'gpt-6-astra' --no-extensions --thinking 'medium' -e './extensions/pi-ducknng/index.ts' --no-session -p \
-  "$(printf %s \
-    'You are agent `editor`. Use the write tool to create ' \
-    '`.guide-scratch/notes.md` containing one line, `draft`. ' \
-    'If the write is refused, do not retry it and do not ' \
-    'write the file any other way. Call coordination_agents ' \
-    'to see which agent holds the reservation. Report the ' \
-    'refusal reason and the holder, beginning with ' \
-    '`AGENT_EDIT_BLOCKED` only when the write was refused ' \
-    'because another agent reserved the path.')"
-```
+**Task**
 
-> AGENT_EDIT_BLOCKED: Write refused because `.guide-scratch/notes.md` is covered by the `.guide-scratch` reservation held by `docs-writer`. No retry or alternative write attempted.
+> Create `.guide-scratch/notes.md` containing the single line `draft`. Another agent may be working in that directory; if it has reserved it, leave the file alone rather than working around the reservation, and tell me who holds it.
 
-The adapter refused the tool call before it ran, so the file does not exist:
+**Agent `editor` answered**
+
+> Left `.guide-scratch/notes.md` untouched: `.guide-scratch` is reserved by `docs-writer`.
+
+Whether the agent checks the reservation or tries the write and is refused,
+the reserved file is never written:
 
 
 ``` r
@@ -119,8 +114,8 @@ knitr::kable(data.frame(
 
 |resource                    |result                                                                           |
 |:---------------------------|:--------------------------------------------------------------------------------|
-|.guide-scratch/data/raw.csv |resource_conflict: .guide-scratch is reserved by docs-writer until 1790027378680 |
-|.                           |resource_conflict: .guide-scratch is reserved by docs-writer until 1790027378680 |
+|.guide-scratch/data/raw.csv |resource_conflict: .guide-scratch is reserved by docs-writer until 1790116327796 |
+|.                           |resource_conflict: .guide-scratch is reserved by docs-writer until 1790116327796 |
 |.guide-scratchpad           |reserved                                                                         |
 
 
@@ -149,7 +144,7 @@ knitr::kable(data.frame(
 |caller      |resource               |result                                                                              |
 |:-----------|:----------------------|:-----------------------------------------------------------------------------------|
 |tester      |resource:db/migrations |reserved                                                                            |
-|docs-writer |resource:db/migrations |resource_conflict: resource:db/migrations is reserved by tester until 1790027120969 |
+|docs-writer |resource:db/migrations |resource_conflict: resource:db/migrations is reserved by tester until 1790116066433 |
 |docs-writer |resource:db            |reserved                                                                            |
 
 
@@ -228,28 +223,43 @@ Fencing values increase across the whole project. A store that remembers the
 largest value it has accepted can refuse a write from a holder whose lease
 already passed to someone else, even one that paused through its whole TTL.
 
-## Expiry
+## When a holder leaves
 
-A lease ends at its TTL even if its holder never releases it. Unregistering
-does not end it early, so a holder that leaves without releasing blocks the
-resource until then. The shortest TTL is five seconds:
+Unregistering ends every lease the instance holds. The Pi adapter
+unregisters when its session shuts down:
 
 
 ``` r
-deployer <- register("deployer")
+leaving <- register("leaving")
+invisible(rpc_call(url, "reserve", list(
+  registration_id = leaving$registration_id, resource = "resource:release-notes",
+  operation_key = "notes", ttl_ms = 300000
+)))
+left <- rpc_call(url, "unregister", list(registration_id = leaving$registration_id))
+c(released_reservations = left$released_reservations,
+  next_holder = try_reserve(writer, "resource:release-notes"))
+#> released_reservations           next_holder
+#>                   "1"            "reserved"
+```
+
+A holder that stops without unregistering, such as a crashed process, keeps
+its leases until their TTL runs out. The shortest TTL is five seconds:
+
+
+``` r
+crashed <- register("crashed")
 brief <- rpc_call(url, "reserve", list(
-  registration_id = deployer$registration_id, resource = "resource:deploy",
+  registration_id = crashed$registration_id, resource = "resource:deploy",
   operation_key = "deploy", ttl_ms = 5000
 ))
-invisible(rpc_call(url, "unregister", list(registration_id = deployer$registration_id)))
 before <- try_reserve(writer, "resource:deploy", "deploy-now")
 Sys.sleep(5.5)
 after <- try_reserve(writer, "resource:deploy", "deploy-later")
 c(before = before, after = after)
-#>                                                                           before
-#> "resource_conflict: resource:deploy is reserved by deployer until 1790027096242"
-#>                                                                            after
-#>                                                                       "reserved"
+#>                                                                          before
+#> "resource_conflict: resource:deploy is reserved by crashed until 1790116041782"
+#>                                                                           after
+#>                                                                      "reserved"
 ```
 
 What each agent holds is one call away:
@@ -273,7 +283,8 @@ knitr::kable(data.frame(
 |.guide-scratchpad      |tester      |             2|FALSE |
 |resource:db            |docs-writer |             4|TRUE  |
 |resource:db/migrations |tester      |             3|FALSE |
-|resource:deploy        |docs-writer |             7|TRUE  |
+|resource:deploy        |docs-writer |             9|TRUE  |
+|resource:release-notes |docs-writer |             7|TRUE  |
 
 
 

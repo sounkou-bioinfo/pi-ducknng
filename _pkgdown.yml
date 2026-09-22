@@ -24,8 +24,8 @@ development:
   mode: unreleased
 
 home:
-  title: Persistent R and durable coordination for Pi agents
-  description: Give Pi agents a persistent R session and a durable mailbox for handing each other work, fanning questions out, and gathering answers over ducknng.
+  title: Data work that lasts, for Pi agents
+  description: Give Pi agents a DuckDB workspace that outlives the conversation, a persistent R session behind it, and a durable mailbox for handing each other work, all over ducknng.
 
 navbar:
   structure:
@@ -40,13 +40,14 @@ navbar:
       href: https://github.com/sounkou-bioinfo/pi-ducknng/blob/main/THESIS.md
 
 articles:
-  - title: Persistent R
-    navbar: Persistent R
+  - title: Data work
+    navbar: Data work
     contents:
       - agent-product-path
       - agent-active-binding
-  - title: Coordination
-    navbar: Coordination
+      - r-jobs
+  - title: Working together
+    navbar: Working together
     contents:
       - coordination-mailbox
       - coordination-fanout

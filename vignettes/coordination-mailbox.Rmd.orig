@@ -1,8 +1,8 @@
 ---
-title: "Hand work between agents through a durable mailbox"
+title: "Hand work to an agent that is not running yet"
 output: rmarkdown::html_vignette
 vignette: >
-  %\VignetteIndexEntry{Hand work between agents through a durable mailbox}
+  %\VignetteIndexEntry{Hand work to an agent that is not running yet}
   %\VignetteEngine{knitr::rmarkdown}
   %\VignetteEncoding{UTF-8}
 ---
@@ -11,9 +11,11 @@ vignette: >
 source("tools/guides/setup.R")
 ```
 
-The coordination endpoint is a mailbox service for agents that do not share a
-process. A Pi session reaches it through its `coordination_*` tools. This guide
-makes the same calls from R so that every step and every reply is visible.
+You want one agent to leave work for another that may not be running yet,
+and to be sure it arrives exactly as sent. The coordination endpoint is a
+mailbox service for agents that do not share a process. A Pi session reaches
+it through its `coordination_*` tools; this guide makes the same calls from R
+so that every step and every reply is visible.
 
 ## Start the endpoint
 

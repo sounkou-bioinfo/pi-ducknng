@@ -9,12 +9,17 @@ specs <- list(
   list(
     source = "agent-product-path.Rmd.orig",
     output = "agent-product-path.Rmd",
-    receipt = "AGENT_VERIFIED_MTCARS_PERSISTENCE"
+    receipt = "GUIDE_WORKSPACE_VERIFIED"
   ),
   list(
     source = "agent-active-binding.Rmd.orig",
     output = "agent-active-binding.Rmd",
-    receipt = "AGENT_VERIFIED_ACTIVE_BINDING"
+    receipt = "GUIDE_SCOPES_VERIFIED"
+  ),
+  list(
+    source = "r-jobs.Rmd.orig",
+    output = "r-jobs.Rmd",
+    receipt = "GUIDE_R_JOBS_VERIFIED"
   ),
   list(
     source = "coordination-mailbox.Rmd.orig",
@@ -24,13 +29,12 @@ specs <- list(
   list(
     source = "coordination-fanout.Rmd.orig",
     output = "coordination-fanout.Rmd",
-    receipt = c("AGENT_WORKER_REPLIED w-mean", "AGENT_WORKER_REPLIED w-median",
-                "AGENT_BROADCAST_SENT", "GUIDE_FANOUT_VERIFIED")
+    receipt = "GUIDE_FANOUT_VERIFIED"
   ),
   list(
     source = "coordination-reservations.Rmd.orig",
     output = "coordination-reservations.Rmd",
-    receipt = c("AGENT_EDIT_BLOCKED", "GUIDE_RESERVATIONS_VERIFIED")
+    receipt = "GUIDE_RESERVATIONS_VERIFIED"
   ),
   list(
     source = "coordination-durability.Rmd.orig",
@@ -119,12 +123,6 @@ if (length(missing) > 0L) {
 }
 
 dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
-old_options <- options(
-  piknit.model = "gpt-5.4",
-  piknit.provider = "openai-codex"
-)
-on.exit(options(old_options), add = TRUE)
-piknit::register_engines()
 knitr::opts_knit$set(root.dir = root)
 
 staged <- character(length(specs))

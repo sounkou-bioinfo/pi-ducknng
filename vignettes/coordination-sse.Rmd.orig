@@ -11,10 +11,10 @@ vignette: >
 source("tools/guides/setup.R")
 ```
 
-Pi sessions and harness lanes wake on mail through an NNG subscription. A
-client without an NNG binding, such as a browser `EventSource`, a dashboard,
-or `curl`, can follow the same wake-ups as Server-Sent Events. The endpoint
-serves them when `--sse` names an HTTP listener.
+You want a dashboard, a browser `EventSource` or `curl` to notice new mail
+without an NNG binding. Pi sessions and harness lanes wake on mail through an
+NNG subscription; the endpoint serves the same wake-ups as Server-Sent Events
+when `--sse` names an HTTP listener.
 
 ```{bash}
 node tools/pi-coordination-endpoint.ts "$STATE/coordination.url" "$STATE/coordination.duckdb" \

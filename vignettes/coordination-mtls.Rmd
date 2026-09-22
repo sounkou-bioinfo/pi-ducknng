@@ -1,20 +1,20 @@
 ---
-title: "Serve agents across hosts with mutual TLS"
+title: "Serve agents on other hosts with mutual TLS"
 output: rmarkdown::html_vignette
 vignette: >
-  %\VignetteIndexEntry{Serve agents across hosts with mutual TLS}
+  %\VignetteIndexEntry{Serve agents on other hosts with mutual TLS}
   %\VignetteEngine{knitr::rmarkdown}
   %\VignetteEncoding{UTF-8}
 ---
 
 
 
-On `ipc://`, filesystem permissions decide who may connect. Agents on other
-hosts or other accounts need a network listener. There, the question
-"who is calling?" must be answered by something stronger than the agent ID a
-client types. On mutual TLS, the endpoint answers it with the client's
-certificate. A grants file then decides which certificate may act as which
-agent.
+You want agents on other hosts or accounts to share one endpoint without
+letting any of them pose as another. On `ipc://`, filesystem permissions
+decide who may connect; on a network listener, "who is calling?" needs a
+stronger answer than the agent ID a client types. On mutual TLS the endpoint
+answers it with the client's certificate, and a grants file decides which
+certificate may act as which agent.
 
 ## Certificates
 
@@ -32,14 +32,15 @@ issue() {
   printf '%b\n' "$3" > "$1.ext"
   openssl x509 -req -in "$1.csr" -CA ca.pem -CAkey ca.key -CAcreateserial \
     -out "$1.crt" -days 1 -extfile "$1.ext" 2> /dev/null
+  cat "$1.crt" "$1.key" > "$1.pem"
 }
 issue server 127.0.0.1 'subjectAltName=IP:127.0.0.1\nextendedKeyUsage=serverAuth'
 for client in lead reviewer intruder; do issue "$client" "$client" 'extendedKeyUsage=clientAuth'; done
-ls *.crt
-#> intruder.crt
-#> lead.crt
-#> reviewer.crt
-#> server.crt
+ls server.pem lead.pem reviewer.pem intruder.pem
+#> intruder.pem
+#> lead.pem
+#> reviewer.pem
+#> server.pem
 ```
 
 ## Grants and the listener
@@ -56,19 +57,17 @@ cat > "$STATE/grants.json" <<'JSON'
 JSON
 ```
 
-ducknng holds TLS material in memory, so the endpoint reads PEM text straight
-from its environment. The same certificate secures the wake-up hint
-listener, which here uses `wss://`:
+The endpoint takes its certificate and key, the client CA, and the grants file
+as options. The same certificate secures the wake-up hint listener, which here
+uses `wss://`:
 
 
 ``` bash
-PI_DUCKNNG_COORDINATION_TLS_CERT_PEM="$(cat "$STATE/tls/server.crt")" \
-PI_DUCKNNG_COORDINATION_TLS_KEY_PEM="$(cat "$STATE/tls/server.key")" \
-PI_DUCKNNG_COORDINATION_TLS_CA_PEM="$(cat "$STATE/tls/ca.pem")" \
-PI_DUCKNNG_COORDINATION_GRANTS_FILE="$STATE/grants.json" \
-PI_DUCKNNG_COORDINATION_EVENTS_URL="wss://127.0.0.1:0/events" \
-  node tools/pi-coordination-endpoint.ts "$STATE/mtls.url" "$STATE/mtls.duckdb" \
-  tls+tcp://127.0.0.1:0 > "$STATE/mtls.log" 2>&1 &
+node tools/pi-coordination-endpoint.ts "$STATE/mtls.url" "$STATE/mtls.duckdb" \
+  tls+tcp://127.0.0.1:0 \
+  --tls-cert-key "$STATE/tls/server.pem" --tls-ca "$STATE/tls/ca.pem" \
+  --grants "$STATE/grants.json" --events wss://127.0.0.1:0/events \
+  > "$STATE/mtls.log" 2>&1 &
 echo $! > "$STATE/mtls.pid"
 until [ -s "$STATE/mtls.url" ]; do sleep 0.1; done
 cat "$STATE/mtls.url" | sed 's/:[0-9]*$/:<port>/'
@@ -77,19 +76,18 @@ cat "$STATE/mtls.url" | sed 's/:[0-9]*$/:<port>/'
 
 ## Calling as a certificate
 
-A Pi session presents its certificate through `PI_DUCKNNG_TLS_CA_PEM`,
-`PI_DUCKNNG_TLS_CERT_PEM` and `PI_DUCKNNG_TLS_KEY_PEM`, or the matching
-`*_FILE` variables. `tools/coordination-call.ts` reads the same variables, so
-a small shell helper can call any method as any of the three identities:
+A Pi session names its CA and its own certificate file in
+`PI_DUCKNNG_TLS_CA_FILE` and `PI_DUCKNNG_TLS_CERT_KEY_FILE`.
+`tools/coordination-call.ts` reads the same variables, so a small shell helper
+can call any method as any of the three identities:
 
 
 ``` bash
 cat > "$STATE/as.sh" <<'SH'
 as() {
   identity="$1"; shift
-  PI_DUCKNNG_TLS_CA_PEM="$(cat "$STATE/tls/ca.pem")" \
-  PI_DUCKNNG_TLS_CERT_PEM="$(cat "$STATE/tls/$identity.crt")" \
-  PI_DUCKNNG_TLS_KEY_PEM="$(cat "$STATE/tls/$identity.key")" \
+  PI_DUCKNNG_TLS_CA_FILE="$STATE/tls/ca.pem" \
+  PI_DUCKNNG_TLS_CERT_KEY_FILE="$STATE/tls/$identity.pem" \
     node tools/coordination-call.ts "$(cat "$STATE/mtls.url")" "$@" 2>&1
 }
 register() {
@@ -146,9 +144,8 @@ mailbox. A subscriber presenting a certificate wakes as soon as mail lands:
 
 
 ``` bash
-PI_DUCKNNG_TLS_CA_PEM="$(cat "$STATE/tls/ca.pem")" \
-PI_DUCKNNG_TLS_CERT_PEM="$(cat "$STATE/tls/lead.crt")" \
-PI_DUCKNNG_TLS_KEY_PEM="$(cat "$STATE/tls/lead.key")" \
+PI_DUCKNNG_TLS_CA_FILE="$STATE/tls/ca.pem" \
+PI_DUCKNNG_TLS_CERT_KEY_FILE="$STATE/tls/lead.pem" \
 URL="$(cat "$STATE/mtls.url")" node --input-type=module -e '
 const { ducknngCoordinationClient: client, subscribeCoordinationEvents } =
   await import("./extensions/pi-ducknng/index.ts");

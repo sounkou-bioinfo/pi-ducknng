@@ -9,15 +9,15 @@ vignette: >
 
 
 
-Pi sessions and harness lanes wake on mail through an NNG subscription. A
-client without an NNG binding, such as a browser `EventSource`, a dashboard,
-or `curl`, can follow the same wake-ups as Server-Sent Events. The endpoint
-serves them when `PI_DUCKNNG_COORDINATION_SSE_URL` names an HTTP listener.
+You want a dashboard, a browser `EventSource` or `curl` to notice new mail
+without an NNG binding. Pi sessions and harness lanes wake on mail through an
+NNG subscription; the endpoint serves the same wake-ups as Server-Sent Events
+when `--sse` names an HTTP listener.
 
 
 ``` bash
-PI_DUCKNNG_COORDINATION_SSE_URL=http://127.0.0.1:0 node tools/pi-coordination-endpoint.ts \
-  "$STATE/coordination.url" "$STATE/coordination.duckdb" > "$STATE/endpoint.log" 2>&1 &
+node tools/pi-coordination-endpoint.ts "$STATE/coordination.url" "$STATE/coordination.duckdb" \
+  --sse http://127.0.0.1:0 > "$STATE/endpoint.log" 2>&1 &
 echo $! > "$STATE/endpoint.pid"
 until [ -s "$STATE/coordination.url" ]; do sleep 0.1; done
 ```
@@ -36,7 +36,7 @@ writer <- register("writer")
 sse <- reader$events$sse_url
 writeLines(sse, file.path(guide_state, "sse.url"))
 sub("^http://127\\.0\\.0\\.1:[0-9]+", "http://127.0.0.1:<port>", sse)
-#> [1] "http://127.0.0.1:<port>/events?topic=dbd9d89ced30aca6c83880597ebc274b"
+#> [1] "http://127.0.0.1:<port>/events?topic=1f07c2824368c75ccabb9fa083754136"
 ```
 
 `curl -N` follows the stream in the background, and `writer` sends two
@@ -69,10 +69,10 @@ cat "$STATE/sse.txt"
 #> : ready
 #>
 #> event: mail
-#> data: dbd9d89ced30aca6c83880597ebc274b
+#> data: 1f07c2824368c75ccabb9fa083754136
 #>
 #> event: mail
-#> data: dbd9d89ced30aca6c83880597ebc274b
+#> data: 1f07c2824368c75ccabb9fa083754136
 ```
 
 A wake-up is a prompt to call `receive`, which is where the mail is:

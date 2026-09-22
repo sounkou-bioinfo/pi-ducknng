@@ -1,17 +1,18 @@
 ---
-title: "Embed coordination in an AgentHarness host"
+title: "Deliver mail into an AgentHarness lane"
 output: rmarkdown::html_vignette
 vignette: >
-  %\VignetteIndexEntry{Embed coordination in an AgentHarness host}
+  %\VignetteIndexEntry{Deliver mail into an AgentHarness lane}
   %\VignetteEngine{knitr::rmarkdown}
   %\VignetteEncoding{UTF-8}
 ---
 
 
 
-An interactive Pi session acknowledges a message once Pi's public API accepts
-it. A host process that owns a `pi-agent-core` `AgentHarness` can do better:
-it commits the message to a lane of a durable session before it
+You run your own `pi-agent-core` `AgentHarness` host and want its lanes to
+receive mail without ever losing or doubling a message. An interactive Pi
+session acknowledges a message once Pi's public API accepts it; a harness host
+can do better and commit the message to a lane of a durable session before it
 acknowledges. `attachCoordinationLane` does that for one mailbox and one lane.
 
 Three rules make it safe to crash anywhere:

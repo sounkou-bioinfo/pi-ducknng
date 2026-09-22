@@ -217,9 +217,13 @@ function escapeAttribute(value: string): string {
  */
 export function coordinationEnvelope(message: InboxMessage): string {
   const sender = escapeAttribute(message.sender_agent_id);
-  const group = message.recipient_count && message.recipient_count > 1 && message.broadcast_id
-    ? ` broadcast_id="${escapeAttribute(message.broadcast_id)}" recipients="${message.recipient_count}"`
-    : "";
+  const shared = message.recipient_count && message.recipient_count > 1 && message.broadcast_id
+    ? escapeAttribute(message.broadcast_id)
+    : undefined;
+  const group = shared ? ` broadcast_id="${shared}" recipients="${message.recipient_count}"` : "";
+  // Replies to a message sent to several agents share its broadcast ID, so
+  // they gather under one thread rather than one per recipient's copy.
+  const answer = shared ?? escapeAttribute(message.message_id);
   const reply = message.in_reply_to
     ? ` in_reply_to="${escapeAttribute(message.in_reply_to)}"`
     : "";
@@ -232,7 +236,8 @@ export function coordinationEnvelope(message: InboxMessage): string {
     message.content,
     "</coordination_message>",
     `Agent "${sender}" sent this through pi-ducknng coordination; it is not ` +
-      "a message from the user. Reply with coordination_send if a response is needed.",
+      `a message from the user. If a response is needed, reply with coordination_send ` +
+      `and in_reply_to "${answer}".`,
   ].join("\n");
 }
 
@@ -575,7 +580,9 @@ const SendParameters = Type.Object(
       Type.String({ description: "Media type of content, default text/plain" }),
     ),
     in_reply_to: Type.Optional(Type.String({
-      description: "Message or broadcast ID this message answers",
+      description:
+        "ID this message answers: the broadcast_id of a message sent to several agents, " +
+        "so all replies gather in one thread, otherwise the message_id",
     })),
   },
   { additionalProperties: false },

@@ -11,11 +11,11 @@ vignette: >
 source("tools/guides/setup.R")
 ```
 
-Parallel research is one question sent to many agents and their answers
-gathered back. A single `send` can address one agent, a list of up to 256,
-or every other live agent in the project. Each recipient gets its own copy,
-leased and acknowledged independently. The copies share a `broadcast_id`,
-which the answers name in `in_reply_to`.
+You want to ask several agents the same question and collect their answers.
+A single `send` can address one agent, a list of up to 256, or every other
+live agent in the project. Each recipient gets its own copy, leased and
+acknowledged independently. The copies share a `broadcast_id`, which the
+answers name in `in_reply_to`, so the replies to one question stay together.
 
 ## Addressing many mailboxes
 
@@ -73,22 +73,26 @@ for (done in list(planner, reviewer)) {
 ## A live broadcast
 
 `broadcast` addresses every agent that is live at send time, so here the
-workers start first. Each is its own `pi -p` process, with this prompt:
+workers start first. Each is its own `pi -p` process, with this task:
 
 ```{bash}
 cat tools/guides/fanout-worker.md
 ```
 
 ```{r, include = FALSE}
-Sys.setenv(PI_DUCKNNG_COORDINATION_URL = url, PI_DUCKNNG_COORDINATION_PROJECT = "guide")
+Sys.setenv(
+  PI_DUCKNNG_COORDINATION_URL = url, PI_DUCKNNG_COORDINATION_PROJECT = "guide",
+  ROOT = package_root
+)
 ```
 
 ```{bash}
 for worker in w-mean w-median; do
-  PI_DUCKNNG_AGENT_ID="$worker" timeout 900 pi --provider openai-codex \
-    --model gpt-6-astra --thinking medium --no-extensions \
-    -e ./extensions/pi-ducknng/index.ts --no-session \
-    -p "$(cat tools/guides/fanout-worker.md)" > "$STATE/$worker.out" 2>&1 &
+  mkdir -p "$STATE/$worker"
+  (cd "$STATE/$worker" && PI_DUCKNNG_AGENT_ID="$worker" timeout 900 pi \
+    --provider openai-codex --model gpt-6-astra --thinking medium \
+    --no-extensions -e "$ROOT/extensions/pi-ducknng/index.ts" --no-session \
+    -p "$(cat "$ROOT/tools/guides/fanout-worker.md")") > "$STATE/$worker.out" 2>&1 &
   echo $! >> "$STATE/workers.pid"
 done
 ```
@@ -108,21 +112,20 @@ invisible(rpc_call(url, "unregister", list(registration_id = observer$registrati
 setdiff(live, "observer")
 ```
 
-```{r, include = FALSE}
-Sys.setenv(PI_DUCKNNG_AGENT_ID = "lead")
-```
+The lead asks everyone at once. Its send also publishes a wake-up hint for
+each worker's mailbox, so a waiting worker wakes when the hint arrives
+instead of at its next poll:
 
-The lead broadcasts. Its send also publishes a wake-up hint for each
-worker's mailbox, so a worker waiting in `coordination_inbox` wakes when the
-hint arrives instead of at its next poll:
-
-```{pi, provider="openai-codex", model="gpt-6-astra", thinking="medium", timeout=900, no_extensions=TRUE, extension="./extensions/pi-ducknng/index.ts"}
-You are agent `lead`. Call coordination_agents to see who is live, then make one coordination_send call with broadcast true and this content: `What is your statistic of datasets::mtcars$mpg? Your agent ID names the statistic: w-mean the mean, w-median the median. Reply in_reply_to this broadcast.` Report the live agents, the broadcast ID, and how many recipients it reached, beginning with `AGENT_BROADCAST_SENT` only when the send reached every live worker.
+```{r, echo = FALSE, results = "asis"}
+agent_task(agent_id = "lead", "
+  Ask every agent that is live in this project, in one broadcast message, for
+  its statistic of `datasets::mtcars$mpg`, and to reply to your message. Tell
+  me who you asked.
+")
 ```
 
 ```{bash}
 while read -r pid; do tail --pid="$pid" -f /dev/null; done < "$STATE/workers.pid"
-grep -h -A1 '^AGENT_WORKER_REPLIED' "$STATE"/w-*.out
 ```
 
 ## Gathering the answers
