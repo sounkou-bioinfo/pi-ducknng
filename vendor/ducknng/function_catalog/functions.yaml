@@ -1088,17 +1088,38 @@
       ]
     },
     {
+      "name": "ducknng_add_event_route",
+      "kind": "scalar",
+      "category": "HTTP Routes",
+      "signature": "ducknng_add_event_route(service_name, path, handler_sql[, heartbeat_ms])",
+      "returns": "BOOLEAN",
+      "since": "0.1.3",
+      "implemented": true,
+      "description": "Register a GET route that relays one NNG PUB/SUB subscription to the HTTP client as Server-Sent Events.",
+      "notes": [
+        "handler_sql runs once per request, with the usual route accessors such as ducknng_http_query_param(), and returns at most one row: url (VARCHAR, the PUB listener to dial), and optionally topic (BLOB or VARCHAR subscription prefix; all messages when absent), event (VARCHAR SSE event name), and tls_config_id (UBIGINT for dialing a TLS listener).",
+        "No row answers 404, a handler error answers 500, and a subscription that cannot be dialed answers 503. The request slot is released once the handler has run; the stream itself holds no DuckDB connection.",
+        "The response starts with a ': ready' comment once the subscription is connected. Each message becomes one event whose data lines are the message text split at CR, LF, or CRLF. A message that is not UTF-8 text is replaced by a comment saying it was skipped.",
+        "heartbeat_ms, 15000 by default and between 100 and 300000, is the longest silence: a ': keepalive' comment is written after it, which also detects a client that has gone away.",
+        "Each open stream runs on its own relay thread. Stopping the server closes every relay's subscription and joins the threads; open streams end instead of delaying the stop."
+      ],
+      "examples": [
+        "SELECT ducknng_add_event_route('api', '/events', 'SELECT ''ipc:///tmp/ducknng_events.ipc'' AS url, ducknng_http_query_param(''topic'') AS topic');"
+      ]
+    },
+    {
       "name": "ducknng_list_http_routes",
       "kind": "table",
       "category": "HTTP Routes",
       "signature": "ducknng_list_http_routes()",
-      "returns": "TABLE(service_id UBIGINT, route_id UBIGINT, request_max_bytes UBIGINT, service_name VARCHAR, method VARCHAR, match_kind VARCHAR, path VARCHAR, handler_sql VARCHAR, auth_require_identity BOOLEAN, static_dir_path VARCHAR, auth_allow_identities_json VARCHAR)",
+      "returns": "TABLE(service_id UBIGINT, route_id UBIGINT, request_max_bytes UBIGINT, service_name VARCHAR, method VARCHAR, match_kind VARCHAR, path VARCHAR, handler_sql VARCHAR, auth_require_identity BOOLEAN, static_dir_path VARCHAR, auth_allow_identities_json VARCHAR, is_stream BOOLEAN, stream_content_type VARCHAR, is_event_route BOOLEAN, event_heartbeat_ms UINTEGER)",
       "since": "0.1.0",
       "implemented": true,
       "description": "List the currently registered HTTP routes across running services, including their match kind and stored path pattern.",
       "notes": [
         "Rows are service-local route configuration, not manifest-derived RPC methods.",
-        "This helper is rejected inside SQL authorizer callbacks and inside active request handlers so the shared execution lane is not re-entered recursively."
+        "This helper is rejected inside SQL authorizer callbacks and inside active request handlers so the shared execution lane is not re-entered recursively.",
+        "is_event_route marks routes registered with ducknng_add_event_route(), whose heartbeat is event_heartbeat_ms; it is NULL for other routes."
       ],
       "examples": [
         "SELECT service_name, method, match_kind, path FROM ducknng_list_http_routes() ORDER BY service_name, match_kind, path;"
@@ -2219,6 +2240,24 @@
       ],
       "examples": [
         "SELECT ok, version, type_name, name, payload_text FROM ducknng_decode_frame(ducknng_request_raw('ipc:///tmp/ducknng_sql0.ipc', from_hex('01000000000000000000000000000000000000000000'), 1000, 0::UBIGINT));"
+      ]
+    },
+    {
+      "name": "ducknng_encode_rpc_call",
+      "kind": "scalar",
+      "category": "Primitive Transport",
+      "signature": "ducknng_encode_rpc_call(method, payload)",
+      "returns": "BLOB",
+      "since": "0.1.3",
+      "implemented": true,
+      "description": "Build the version-1 call frame for one manifest-declared JSON method, the encoding counterpart of ducknng_decode_frame().",
+      "notes": [
+        "The frame carries the method name and the payload as JSON text with the JSON payload flag; send it with ducknng_request_raw(), ducknng_request_socket_raw(), or ducknng_request_raw_aio().",
+        "method must be 1 to 128 bytes. The payload is not parsed here; the server validates it against the method's request schema.",
+        "Returns NULL when method or payload is NULL."
+      ],
+      "examples": [
+        "SELECT payload_text FROM ducknng_decode_frame(ducknng_request_raw('ipc:///tmp/ducknng_sql0.ipc', ducknng_encode_rpc_call('echo', '{\"x\":1}'), 5000, 0::UBIGINT));"
       ]
     },
     {

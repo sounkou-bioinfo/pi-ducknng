@@ -3,20 +3,44 @@
 
 require ducknng
 
-# Little-endian hex helpers for building JSON call frames by hand.
+# ducknng_encode_rpc_call() builds the call frame these tests send. One
+# frame built by hand from the protocol layout checks it byte for byte.
 statement ok
 CREATE MACRO sm_le_hex(n, width) AS array_to_string(
   list_transform(range(width), lambda i: lpad(to_hex((n::UBIGINT >> (8 * i)::UBIGINT) & 255::UBIGINT), 2, '0')),
   ''
 )
 
-statement ok
-CREATE MACRO sm_call(method, payload) AS from_hex(
+query I
+SELECT ducknng_encode_rpc_call('echo', '{"x":[1,2]}') = from_hex(
   '0101' || '04000000' ||
-  sm_le_hex(octet_length(encode(method)), 4) || '00000000' ||
-  sm_le_hex(octet_length(encode(payload)), 8) ||
-  hex(encode(method)) || hex(encode(payload))
+  sm_le_hex(octet_length(encode('echo')), 4) || '00000000' ||
+  sm_le_hex(octet_length(encode('{"x":[1,2]}')), 8) ||
+  hex(encode('echo')) || hex(encode('{"x":[1,2]}'))
 )
+----
+true
+
+query IIII
+SELECT type_name, name, flags, payload_text
+FROM ducknng_decode_frame(ducknng_encode_rpc_call('bump', '{"name":"é"}'))
+----
+call	bump	4	{"name":"é"}
+
+query I
+SELECT ducknng_encode_rpc_call(NULL, '{}') IS NULL AND ducknng_encode_rpc_call('echo', NULL) IS NULL
+----
+true
+
+statement error
+SELECT ducknng_encode_rpc_call('', '{}')
+----
+method name must be 1 to 128 bytes
+
+statement error
+SELECT ducknng_encode_rpc_call(repeat('m', 129), '{}')
+----
+method name must be 1 to 128 bytes
 
 statement ok
 CREATE TABLE sm_counters (name VARCHAR PRIMARY KEY, n INTEGER NOT NULL)
@@ -108,28 +132,28 @@ true	true
 query TTT
 SELECT ducknng_frame_type_name(f), ducknng_frame_name(f), ducknng_frame_payload_text(f)
 FROM (SELECT ducknng_request_raw(
-  'inproc://ducknng_sql_methods', sm_call('echo', '{"x":[1,2]}'), 2000, 0::UBIGINT) AS f)
+  'inproc://ducknng_sql_methods', ducknng_encode_rpc_call('echo', '{"x":[1,2]}'), 2000, 0::UBIGINT) AS f)
 ----
 result	echo	{"x":[1,2]}
 
 query T
 SELECT ducknng_frame_payload_text(f)
 FROM (SELECT ducknng_request_raw(
-  'inproc://ducknng_sql_methods', sm_call('bump', '{"name":"a"}'), 2000, 0::UBIGINT) AS f)
+  'inproc://ducknng_sql_methods', ducknng_encode_rpc_call('bump', '{"name":"a"}'), 2000, 0::UBIGINT) AS f)
 ----
 {"name":"a","n":1}
 
 query T
 SELECT ducknng_frame_payload_text(f)
 FROM (SELECT ducknng_request_raw(
-  'inproc://ducknng_sql_methods', sm_call('bump', '{"name":"a"}'), 2000, 0::UBIGINT) AS f)
+  'inproc://ducknng_sql_methods', ducknng_encode_rpc_call('bump', '{"name":"a"}'), 2000, 0::UBIGINT) AS f)
 ----
 {"name":"a","n":2}
 
 query TT
 SELECT ducknng_frame_type_name(f), position('boom' IN ducknng_frame_error_text(f)) > 0
 FROM (SELECT ducknng_request_raw(
-  'inproc://ducknng_sql_methods', sm_call('fail_after_insert', '{}'), 2000, 0::UBIGINT) AS f)
+  'inproc://ducknng_sql_methods', ducknng_encode_rpc_call('fail_after_insert', '{}'), 2000, 0::UBIGINT) AS f)
 ----
 error	true
 
@@ -141,28 +165,28 @@ SELECT count(*) FROM sm_counters WHERE name = 'ghost'
 query T
 SELECT ducknng_frame_payload_text(f)
 FROM (SELECT ducknng_request_raw(
-  'inproc://ducknng_sql_methods', sm_call('hello', ''), 2000, 0::UBIGINT) AS f)
+  'inproc://ducknng_sql_methods', ducknng_encode_rpc_call('hello', ''), 2000, 0::UBIGINT) AS f)
 ----
 "hi \"there\""
 
 query T
 SELECT ducknng_frame_payload_text(f)
 FROM (SELECT ducknng_request_raw(
-  'inproc://ducknng_sql_methods', sm_call('nothing', '{}'), 2000, 0::UBIGINT) AS f)
+  'inproc://ducknng_sql_methods', ducknng_encode_rpc_call('nothing', '{}'), 2000, 0::UBIGINT) AS f)
 ----
 null
 
 query TT
 SELECT ducknng_frame_type_name(f), position('must be a UTF-8 JSON object' IN ducknng_frame_error_text(f)) > 0
 FROM (SELECT ducknng_request_raw(
-  'inproc://ducknng_sql_methods', sm_call('echo', '[1]'), 2000, 0::UBIGINT) AS f)
+  'inproc://ducknng_sql_methods', ducknng_encode_rpc_call('echo', '[1]'), 2000, 0::UBIGINT) AS f)
 ----
 error	true
 
 query T
 SELECT ducknng_frame_payload_text(f)
 FROM (SELECT ducknng_request_raw(
-  'inproc://ducknng_sql_methods', sm_call('who', '{}'), 2000, 0::UBIGINT) AS f)
+  'inproc://ducknng_sql_methods', ducknng_encode_rpc_call('who', '{}'), 2000, 0::UBIGINT) AS f)
 ----
 {"peer_identity":null,"principal":null,"subject":null,"claims_json":null,"authenticated":false}
 
@@ -181,7 +205,7 @@ true
 query T
 SELECT ducknng_frame_payload_text(f)
 FROM (SELECT ducknng_request_raw(
-  'inproc://ducknng_sql_methods', sm_call('echo', '{}'), 2000, 0::UBIGINT) AS f)
+  'inproc://ducknng_sql_methods', ducknng_encode_rpc_call('echo', '{}'), 2000, 0::UBIGINT) AS f)
 ----
 "replaced"
 
@@ -193,7 +217,7 @@ true
 query T
 SELECT ducknng_frame_type_name(f)
 FROM (SELECT ducknng_request_raw(
-  'inproc://ducknng_sql_methods', sm_call('hello', '{}'), 2000, 0::UBIGINT) AS f)
+  'inproc://ducknng_sql_methods', ducknng_encode_rpc_call('hello', '{}'), 2000, 0::UBIGINT) AS f)
 ----
 error
 
@@ -205,7 +229,7 @@ true
 query TT
 SELECT ducknng_frame_type_name(f), position('requires verified peer identity' IN ducknng_frame_error_text(f)) > 0
 FROM (SELECT ducknng_request_raw(
-  'inproc://ducknng_sql_methods', sm_call('secret', '{}'), 2000, 0::UBIGINT) AS f)
+  'inproc://ducknng_sql_methods', ducknng_encode_rpc_call('secret', '{}'), 2000, 0::UBIGINT) AS f)
 ----
 error	true
 
@@ -237,14 +261,14 @@ SELECT ducknng_frame_type_name(f),
        json_extract_string(ducknng_frame_payload_text(f), '$.peer_identity') IS NOT NULL,
        json_extract(ducknng_frame_payload_text(f), '$.authenticated')::BOOLEAN
 FROM (SELECT ducknng_request_raw(
-  getvariable('sm_tls_url')::VARCHAR, sm_call('secret', '{}'), 2000,
+  getvariable('sm_tls_url')::VARCHAR, ducknng_encode_rpc_call('secret', '{}'), 2000,
   getvariable('sm_tls')::UBIGINT) AS f)
 UNION ALL
 SELECT ducknng_frame_type_name(f),
        json_extract_string(ducknng_frame_payload_text(f), '$.peer_identity') IS NOT NULL,
        json_extract(ducknng_frame_payload_text(f), '$.authenticated')::BOOLEAN
 FROM (SELECT ducknng_request_raw(
-  getvariable('sm_tls_url')::VARCHAR, sm_call('who', '{}'), 2000,
+  getvariable('sm_tls_url')::VARCHAR, ducknng_encode_rpc_call('who', '{}'), 2000,
   getvariable('sm_tls')::UBIGINT) AS f)
 ----
 result	false	NULL

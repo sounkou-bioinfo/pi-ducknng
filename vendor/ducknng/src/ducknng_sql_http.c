@@ -20,6 +20,7 @@ typedef struct {
     char *auth_allow_identities_json;
     uint8_t response_mode;
     char *stream_content_type;
+    uint32_t event_heartbeat_ms;
 } ducknng_http_route_row;
 
 typedef struct {
@@ -696,6 +697,54 @@ static void ducknng_register_http_route_scalar(duckdb_function_info info, duckdb
     }
 }
 
+/* ducknng_add_event_route(service_name, path, handler_sql [, heartbeat_ms])
+ * registers a GET route whose handler SQL names a SUB subscription; the
+ * response is that subscription's messages as Server-Sent Events. */
+static void ducknng_add_event_route_scalar(duckdb_function_info info, duckdb_data_chunk input,
+    duckdb_vector output) {
+    idx_t count = duckdb_data_chunk_get_size(input);
+    idx_t ncols = duckdb_data_chunk_get_column_count(input);
+    idx_t row;
+    ducknng_sql_context *ctx = (ducknng_sql_context *)duckdb_scalar_function_get_extra_info(info);
+    bool *out = (bool *)duckdb_vector_get_data(output);
+    if (ducknng_reject_scalar_inside_authorizer(info, ctx)) return;
+    if (ducknng_http_sql_reject_inside_request_handler(info, ctx,
+            "ducknng: cannot register HTTP routes from a request handler")) return;
+    for (row = 0; row < count; row++) {
+        char *service_name = arg_varchar_dup(duckdb_data_chunk_get_vector(input, 0), row);
+        char *path = arg_varchar_dup(duckdb_data_chunk_get_vector(input, 1), row);
+        char *handler_sql = arg_varchar_dup(duckdb_data_chunk_get_vector(input, 2), row);
+        int32_t heartbeat_ms = ncols > 3 ?
+            arg_int32(duckdb_data_chunk_get_vector(input, 3), row,
+                (int32_t)DUCKNNG_HTTP_EVENT_HEARTBEAT_DEFAULT_MS) :
+            (int32_t)DUCKNNG_HTTP_EVENT_HEARTBEAT_DEFAULT_MS;
+        ducknng_service *svc;
+        char *errmsg = NULL;
+        int rc;
+        if (!ctx || !ctx->rt || !service_name || !path || !handler_sql) {
+            if (service_name) duckdb_free(service_name);
+            if (path) duckdb_free(path);
+            if (handler_sql) duckdb_free(handler_sql);
+            duckdb_scalar_function_set_error(info, "ducknng: service_name, path, and handler_sql are required");
+            return;
+        }
+        svc = ducknng_runtime_find_service(ctx->rt, service_name);
+        rc = svc && heartbeat_ms > 0 ? ducknng_service_register_http_event_route(svc, path,
+            handler_sql, (uint32_t)heartbeat_ms, &errmsg) : -1;
+        duckdb_free(service_name);
+        duckdb_free(path);
+        duckdb_free(handler_sql);
+        if (rc != 0) {
+            duckdb_scalar_function_set_error(info, errmsg ? errmsg :
+                (svc ? "ducknng: event route heartbeat_ms must be between 100 and 300000" :
+                       "ducknng: service not found"));
+            if (errmsg) duckdb_free(errmsg);
+            return;
+        }
+        out[row] = true;
+    }
+}
+
 static void ducknng_add_stream_route_scalar(duckdb_function_info info, duckdb_data_chunk input,
     duckdb_vector output) {
     idx_t count = duckdb_data_chunk_get_size(input);
@@ -947,6 +996,7 @@ static void ducknng_list_http_routes_bind(duckdb_bind_info info) {
             bind->rows[row].auth_allow_identities_json = routes[j].auth_allow_identities_json ? ducknng_strdup(routes[j].auth_allow_identities_json) : NULL;
             bind->rows[row].response_mode = routes[j].response_mode;
             bind->rows[row].stream_content_type = routes[j].stream_content_type ? ducknng_strdup(routes[j].stream_content_type) : NULL;
+            bind->rows[row].event_heartbeat_ms = routes[j].event_heartbeat_ms;
             if ((svc->name && !bind->rows[row].service_name) ||
                 (routes[j].method && !bind->rows[row].method) ||
                 !bind->rows[row].match_kind ||
@@ -988,6 +1038,12 @@ static void ducknng_list_http_routes_bind(duckdb_bind_info info) {
      duckdb_destroy_logical_type(&type);
      type = duckdb_create_logical_type(DUCKDB_TYPE_VARCHAR);
      duckdb_bind_add_result_column(info, "stream_content_type", type);
+     duckdb_destroy_logical_type(&type);
+     type = duckdb_create_logical_type(DUCKDB_TYPE_BOOLEAN);
+     duckdb_bind_add_result_column(info, "is_event_route", type);
+     duckdb_destroy_logical_type(&type);
+     type = duckdb_create_logical_type(DUCKDB_TYPE_UINTEGER);
+     duckdb_bind_add_result_column(info, "event_heartbeat_ms", type);
      duckdb_destroy_logical_type(&type);
      duckdb_bind_set_bind_data(info, bind, destroy_http_routes_bind_data);
     duckdb_bind_set_cardinality(info, bind->row_count, true);
@@ -1052,6 +1108,12 @@ static void ducknng_list_http_routes_scan(duckdb_function_info info, duckdb_data
             (bool)(row->response_mode == DUCKNNG_HTTP_ROUTE_RESPONSE_STREAM);
         if (row->stream_content_type) duckdb_unsafe_vector_assign_string_element_len(duckdb_data_chunk_get_vector(output, 12), i, row->stream_content_type, (idx_t)strlen(row->stream_content_type));
         else set_null(duckdb_data_chunk_get_vector(output, 12), i);
+        ((bool *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 13)))[i] =
+            (bool)(row->response_mode == DUCKNNG_HTTP_ROUTE_RESPONSE_EVENTS);
+        if (row->response_mode == DUCKNNG_HTTP_ROUTE_RESPONSE_EVENTS)
+            ((uint32_t *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 14)))[i] =
+                row->event_heartbeat_ms;
+        else set_null(duckdb_data_chunk_get_vector(output, 14), i);
     }
     init->offset += chunk_size;
     duckdb_data_chunk_set_size(output, chunk_size);
@@ -1675,6 +1737,13 @@ int ducknng_register_sql_http(duckdb_connection con, ducknng_sql_context *ctx) {
     if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_unregister_http_route_pattern", 4,
             ducknng_unregister_http_route_pattern_scalar, ctx, unregister_pattern_types, DUCKDB_TYPE_BOOLEAN)) return 0;
     {
+        /* ducknng_add_event_route(service, path, sql [, heartbeat_ms]) */
+        duckdb_type event_route_types3[3] = {DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_VARCHAR};
+        duckdb_type event_route_types4[4] = {DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_INTEGER};
+        if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_add_event_route", 3,
+                ducknng_add_event_route_scalar, ctx, event_route_types3, DUCKDB_TYPE_BOOLEAN)) return 0;
+        if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_add_event_route", 4,
+                ducknng_add_event_route_scalar, ctx, event_route_types4, DUCKDB_TYPE_BOOLEAN)) return 0;
         /* ducknng_add_stream_route(service, method, path, sql [, content_type]) */
         duckdb_type stream_route_types4[4] = {DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_VARCHAR};
         duckdb_type stream_route_types5[5] = {DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_VARCHAR};

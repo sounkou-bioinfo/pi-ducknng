@@ -154,6 +154,10 @@ Register prefix or template-matched route. match_kind: 'prefix' or 'template'. {
 
 Register a chunked-streaming route. Handler SQL must return 'chunk' column. Each row written as HTTP chunk. Default content-type: text/event-stream.
 
+#### `ducknng_add_event_route(service_name, path, handler_sql, heartbeat_ms)`
+
+Register a GET route that relays one NNG PUB/SUB subscription as Server-Sent Events. Handler SQL returns url and optionally topic, event, and tls_config_id.
+
 #### `ducknng_register_http_static(service_name, url_prefix, directory_path)`
 
 Serve static files from a directory under a URL prefix.
@@ -399,6 +403,10 @@ Unregister all methods in a family. Returns count of unregistered methods.
 #### `ducknng_decode_frame(data)`
 
 Decode a ducknng protocol frame into type, name, payload_text, error_text, and raw payload.
+
+#### `ducknng_encode_rpc_call(method, payload)`
+
+Build the call frame for one manifest-declared JSON method; send it with ducknng_request_raw().
 
 #### `ducknng_frame_payload(data)`
 

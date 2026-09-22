@@ -83,7 +83,8 @@ enum {
 
 enum {
     DUCKNNG_HTTP_ROUTE_RESPONSE_ONESHOT = 0,  /* buffer full body then send (default) */
-    DUCKNNG_HTTP_ROUTE_RESPONSE_STREAM = 1    /* hijack conn, write chunked rows */
+    DUCKNNG_HTTP_ROUTE_RESPONSE_STREAM = 1,   /* hijack conn, write chunked rows */
+    DUCKNNG_HTTP_ROUTE_RESPONSE_EVENTS = 2    /* hijack conn, relay a SUB socket as SSE */
 };
 
 enum {
@@ -102,6 +103,7 @@ typedef struct ducknng_http_route {
     uint64_t request_max_bytes;
     char *static_dir_path;           /* non-NULL: serve files from this directory */
     char *stream_content_type;       /* non-NULL when response_mode==STREAM */
+    uint32_t event_heartbeat_ms;     /* keep-alive interval when response_mode==EVENTS */
     int auth_require_identity;       /* 1: require non-empty caller_identity */
     char *auth_allow_identities_json; /* JSON array of allowed identities; NULL = any */
 } ducknng_http_route;
@@ -146,6 +148,20 @@ typedef struct ducknng_http_request_context {
     const nng_sockaddr *remote_addr;
     ducknng_http_route route;
 } ducknng_http_request_context;
+
+/* What an event route's handler SQL resolved for one request. The relay dials
+ * url with a SUB socket, subscribes to the topic prefix, and forwards each
+ * message as one Server-Sent Event, named event when event is non-NULL. */
+typedef struct ducknng_http_event_subscription {
+    char *url;
+    uint8_t *topic;
+    size_t topic_len;
+    char *event;
+    ducknng_tls_opts tls_opts;
+    int has_tls;
+} ducknng_http_event_subscription;
+
+void ducknng_http_event_subscription_reset(ducknng_http_event_subscription *sub);
 
 typedef struct ducknng_http_route_reply {
     int status;
@@ -369,6 +385,18 @@ const char *ducknng_service_resolved_listen(const ducknng_service *svc);
 int ducknng_service_register_http_stream_route(ducknng_service *svc, const char *method,
     const char *path, const char *handler_sql, const char *content_type,
     uint64_t request_max_bytes, char **errmsg);
+/* Event routes answer GET only. heartbeat_ms bounds how long a relay stays
+ * silent; each keep-alive comment also detects a client that went away. */
+#define DUCKNNG_HTTP_EVENT_HEARTBEAT_DEFAULT_MS 15000u
+#define DUCKNNG_HTTP_EVENT_HEARTBEAT_MIN_MS 100u
+#define DUCKNNG_HTTP_EVENT_HEARTBEAT_MAX_MS 300000u
+int ducknng_service_register_http_event_route(ducknng_service *svc, const char *path,
+    const char *handler_sql, uint32_t heartbeat_ms, char **errmsg);
+/* Runs the route's handler SQL for one request. Returns 1 with *out filled,
+ * 0 when the handler returned no row, and -1 on error. */
+int ducknng_service_resolve_event_route(ducknng_service *svc,
+    const ducknng_http_request_context *request_ctx,
+    ducknng_http_event_subscription *out, char **errmsg);
 int ducknng_service_execute_stream_route(ducknng_service *svc,
     const ducknng_http_request_context *request_ctx,
     int (*on_chunk)(const void *data, size_t len, void *user_data),

@@ -366,6 +366,15 @@
       "examples": []
     },
     {
+      "name": "ducknng_add_event_route",
+      "kind": "scalar",
+      "category": "HTTP Routes",
+      "signature": "add_event_route(service_name, path, handler_sql, heartbeat_ms)",
+      "returns": "BOOLEAN",
+      "description": "Register a GET route that relays one NNG PUB/SUB subscription as Server-Sent Events. Handler SQL returns url and optionally topic, event, and tls_config_id.",
+      "examples": []
+    },
+    {
       "name": "ducknng_register_http_static",
       "kind": "scalar",
       "category": "HTTP Routes",
@@ -867,6 +876,15 @@
       "signature": "decode_frame(data)",
       "returns": "table",
       "description": "Decode a ducknng protocol frame into type, name, payload_text, error_text, and raw payload.",
+      "examples": []
+    },
+    {
+      "name": "ducknng_encode_rpc_call",
+      "kind": "scalar",
+      "category": "Frame Helpers",
+      "signature": "encode_rpc_call(method, payload)",
+      "returns": "BLOB",
+      "description": "Build the call frame for one manifest-declared JSON method; send it with ducknng_request_raw().",
       "examples": []
     },
     {
